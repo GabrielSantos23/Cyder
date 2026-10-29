@@ -235,6 +235,11 @@ impl Cyder {
 
     /// Toca a lista a partir de `index`. Álbuns e playlists vão com a URI, para o Spotify saber o contexto.
     fn play_from(&mut self, source: &TrackSource, index: usize) {
+        self.play_list(source, index, false);
+    }
+
+    /// `shuffle_start`: veio do botão Aleatório; o Spotify sorteia a primeira (`index` só adianta a tela).
+    fn play_list(&mut self, source: &TrackSource, index: usize, shuffle_start: bool) {
         let tracks = self.source_tracks(source).to_vec();
         let (context, label) = match source {
             TrackSource::Liked => (None, "Músicas curtidas".to_string()),
@@ -246,14 +251,14 @@ impl Cyder {
         };
         self.queue_label = label.clone();
         self.queue_context = context.clone();
-        self.send(Cmd::Play { tracks, index, context, label });
+        self.send(Cmd::Play { tracks, index, context, label, shuffle_start });
     }
 
     fn shuffle_from(&mut self, source: &TrackSource) {
         self.shuffle = true;
         self.send(Cmd::SetShuffle(true));
         let index = random_index(self.source_tracks(source).len());
-        self.play_from(source, index);
+        self.play_list(source, index, true);
     }
 
     /// Marca da lista que está tocando (sidebar e cartões): o ícone da faixa tocando, pulsando enquanto toca
@@ -1653,7 +1658,7 @@ impl Cyder {
     pub(super) fn play_context(&mut self, card: &Card) {
         self.queue_label = card.title.clone();
         self.queue_context = Some(card.uri.clone());
-        self.send(Cmd::Play { tracks: Vec::new(), index: 0, context: Some(card.uri.clone()), label: card.title.clone() });
+        self.send(Cmd::Play { tracks: Vec::new(), index: 0, context: Some(card.uri.clone()), label: card.title.clone(), shuffle_start: false });
     }
 
     /// Fundo do painel: cor fixa; nas páginas de álbum e playlist, a capa borrada, com troca suave.
@@ -1998,10 +2003,8 @@ impl Cyder {
                 Self::chip("toggle-sidebar", if self.sidebar_open { "Esconder a barra lateral" } else { "Mostrar a barra lateral" }, "panel-left", false, true)
                     .on_click(cx.listener(|t, _, _, cx| { t.sidebar_open = !t.sidebar_open; cx.notify(); })),
             )
-            .child(
-                div().flex_1().h_full().pl_2().flex().items_center().window_control_area(WindowControlArea::Drag)
-                    .child(div().text_xs().text_color(rgba(theme::ink_3())).child("Conteúdo fornecido pelo Spotify")),
-            )
+            // Espaço livre do cabeçalho: arrasta a janela.
+            .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
             // Versão nova: à esquerda do mini player.
             .children(self.update_button(cx))
             .child(
@@ -2231,7 +2234,7 @@ impl Cyder {
                 .aria_label(SharedString::from(format!("Tocar {}", t.name)))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let (tracks, context, label) = (this.tracks.clone(), this.queue_context.clone(), this.queue_label.clone());
-                    this.send(Cmd::Play { tracks, index: i, context, label });
+                    this.send(Cmd::Play { tracks, index: i, context, label, shuffle_start: false });
                     cx.notify();
                 }))
                 .into_any_element(),

@@ -29,7 +29,8 @@ pub enum PlayerCmd {
     Load { queue: Vec<Track>, index: usize, context: Option<String>, position_ms: u32 },
     /// Toca já. Com `context` (álbum, playlist), o Spirc carrega pela URI; `queue` pode vir vazia.
     /// `start_ms`: começa daí (episódio que ficou pela metade).
-    Play { queue: Vec<Track>, index: usize, context: Option<String>, start_ms: u32 },
+    /// `shuffle_start`: começar o aleatório sem faixa escolhida, para o Spirc sortear (ver `start`).
+    Play { queue: Vec<Track>, index: usize, context: Option<String>, start_ms: u32, shuffle_start: bool },
     Toggle,
     Next,
     Prev,
@@ -72,6 +73,8 @@ struct State {
     context: Option<String>,
     /// Onde começar no primeiro play depois de abrir o app.
     start_ms: u32,
+    /// O próximo `start` vem do botão Aleatório: sem faixa escolhida.
+    shuffle_start: bool,
     /// O Spirc ainda não recebeu a fila: o app só está mostrando a primeira faixa.
     loaded: bool,
     playing: bool,
@@ -163,7 +166,9 @@ impl State {
                 repeat_track: self.repeat == Repeat::One,
             })),
             // Pela URI: o contexto do Spotify pode ter faixas que a nossa lista não tem.
-            playing_track: playing.map(PlayingTrack::Uri),
+            // No Aleatório, nenhuma: o Spirc procura a faixa pedida só na parte da playlist que já carregou e, sem
+            // achar, começava pela primeira. Sem faixa pedida, ele sorteia ali mesmo e embaralha o resto.
+            playing_track: if std::mem::take(&mut self.shuffle_start) { None } else { playing.map(PlayingTrack::Uri) },
         };
         let request = match &self.context {
             Some(uri) => LoadRequest::from_context_uri(uri.clone(), options),
@@ -195,11 +200,12 @@ impl State {
                 self.start_ms = position_ms;
                 self.browse(index);
             }
-            PlayerCmd::Play { queue, index, context, start_ms } => {
+            PlayerCmd::Play { queue, index, context, start_ms, shuffle_start } => {
                 self.queue = queue;
                 self.index = index;
                 self.context = context;
                 self.start_ms = start_ms;
+                self.shuffle_start = shuffle_start;
                 self.start(true);
             }
             PlayerCmd::Toggle if !self.loaded => self.start(true),
@@ -376,7 +382,7 @@ pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials,
     let _ = out.send(PlayerOut::Connected(session));
     let mut events = player.get_player_event_channel();
     let mut _player = player;
-    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, out };
+    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, out };
     state.send_modes();
     let started = Instant::now();
     let mut fade_tick = tokio::time::interval(std::time::Duration::from_millis(100));

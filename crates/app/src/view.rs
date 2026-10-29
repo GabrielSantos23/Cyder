@@ -1162,8 +1162,7 @@ impl Cyder {
                     .items_center()
                     .gap_2()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Cyder"))
-                    .child(div().text_xs().text_color(rgba(theme::ink_3())).child("Conteúdo fornecido pelo Spotify")),
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Cyder")),
             )
             .child(control("win-min", "Minimizar", "minus", WindowControlArea::Min, theme::hover()))
             .child(control("win-max", "Maximizar", "square", WindowControlArea::Max, theme::hover()))

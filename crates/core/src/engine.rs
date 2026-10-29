@@ -28,7 +28,8 @@ pub enum Cmd {
     /// Toca `tracks` a partir de `index`. `context` é a URI do álbum ou da playlist, quando houver:
     /// o Spotify passa a saber de onde a música veio, e playlists sem lista de faixas também tocam.
     /// `label` é de onde a fila veio ("Músicas curtidas", nome do álbum), para mostrar e salvar.
-    Play { tracks: Vec<Track>, index: usize, context: Option<String>, label: String },
+    /// `shuffle_start`: o botão Aleatório; quem sorteia a primeira é o Spotify (`index` é só o que a tela mostra).
+    Play { tracks: Vec<Track>, index: usize, context: Option<String>, label: String, shuffle_start: bool },
     /// Abre a página de um álbum, artista ou playlist.
     Open(Card),
     /// Lista os aparelhos Connect.
@@ -1104,7 +1105,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     ctx.send(AppEvent::Queue(tracks.clone()));
                     ctx.send(AppEvent::TrackChanged(0));
                     let _ = pcmd_tx.send(if st.playing {
-                        PlayerCmd::Play { queue: tracks.clone(), index: 0, context: None, start_ms: target }
+                        PlayerCmd::Play { queue: tracks.clone(), index: 0, context: None, start_ms: target, shuffle_start: false }
                     } else {
                         PlayerCmd::Load { queue: tracks.clone(), index: 0, context: None, position_ms: target }
                     });
@@ -1240,7 +1241,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                     Cmd::SetRepeat(r) => PlayerCmd::SetRepeat(r),
                     Cmd::SetVolume(v) => PlayerCmd::SetVolume(v),
-                    Cmd::Play { tracks: queue, index: i, context: c, label: l } => {
+                    Cmd::Play { tracks: queue, index: i, context: c, label: l, shuffle_start } => {
                         // O Spotify não registra o que toca pelo Cyder (doc 07): guardamos aqui.
                         if let Some(uri) = &c {
                             let mut history: HashMap<String, u64> = cache::load("history").unwrap_or_default();
@@ -1256,8 +1257,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         if shuffle {
                             up_next(&ctx, 2000);
                         }
-                        let start_ms = queue.get(i).and_then(|t| episodes.get(&t.uri)).copied().unwrap_or(0);
-                        PlayerCmd::Play { queue, index: i, context: c, start_ms }
+                        // No Aleatório a faixa `i` é só um palpite da tela: não continua episódio nenhum.
+                        let start_ms = queue.get(i).filter(|_| !shuffle_start).and_then(|t| episodes.get(&t.uri)).copied().unwrap_or(0);
+                        PlayerCmd::Play { queue, index: i, context: c, start_ms, shuffle_start }
                     }
                     Cmd::Open(card) => {
                         tokio::spawn(ctx.clone().open(card));
