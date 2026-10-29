@@ -1,0 +1,11 @@
+﻿[package]
+name = "gpui-sonora-spike"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui = { git = "https://github.com/sonorahq/gpui", branch = "master" }
+gpui_platform = { git = "https://github.com/sonorahq/gpui", branch = "master" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+serde_json = "1"
+ureq = "3"

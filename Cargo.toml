@@ -1,0 +1,30 @@
+[workspace]
+members = ["crates/core", "crates/app"]
+exclude = ["spikes"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+# Releases do GitHub: de onde o app baixa as atualizações (core/src/update.rs) e onde o workflow publica.
+repository = "https://github.com/GabrielSantos23/cyder-spotify"
+
+[workspace.dependencies]
+# Fork com backdrop blur (doc 03). Commit fixo: atualizar só de propósito.
+gpui = { git = "https://github.com/sonorahq/gpui", rev = "5fc4ef6cd82dc1e5bfe8cb756d81a1cb3c6ca8ef" }
+gpui_platform = { git = "https://github.com/sonorahq/gpui", rev = "5fc4ef6cd82dc1e5bfe8cb756d81a1cb3c6ca8ef" }
+librespot = { version = "0.8", default-features = false, features = ["rodio-backend", "native-tls"] }
+librespot-oauth = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "query", "form", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
+dirs = "6"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+strip = true

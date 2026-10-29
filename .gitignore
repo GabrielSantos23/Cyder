@@ -1,0 +1,7 @@
+target/
+spikes/**/target/
+spikes/**/node_modules/
+spikes/**/dist/
+
+# Documentação de trabalho: fica só neste computador.
+docs/

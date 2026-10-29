@@ -1,0 +1,28 @@
+[package]
+name = "cyder-core"
+edition.workspace = true
+version.workspace = true
+repository.workspace = true
+
+[dependencies]
+librespot.workspace = true
+librespot-oauth.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+keyring.workspace = true
+dirs.workspace = true
+log.workspace = true
+# Mesmas versões que o librespot usa: protobuf para ler as respostas internas, http para o Method do spclient.
+protobuf = "3.7.2"
+http = "1.5"
+# Mesma versão e features do librespot: a saída de áudio própria (sink.rs) não compila nada novo.
+rodio = { version = "0.21", features = ["playback"] }
+futures-util = "0.3"
+base64 = "0.22"
+# Assinatura dos pedidos do Last.fm; já vem com o librespot.
+md-5 = "0.10"
+# Conferir o executável baixado de uma atualização (update.rs).
+sha2 = "0.10"

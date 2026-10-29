@@ -1,0 +1,45 @@
+# Publica uma versão nova: ao enviar uma tag "v1.2.3" (igual ao `version` do Cargo.toml), compila o Cyder
+# no Windows e cria a Release do GitHub com o cyder.exe e o SHA-256 dele. O app confere a Release mais nova
+# a cada abertura (crates/core/src/update.rs) e baixa o .exe por aqui.
+#
+# Para lançar:  1) mudar `version` em Cargo.toml   2) git commit   3) git tag v1.2.3   4) git push --tags
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A tag bate com a versão do Cargo.toml
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Cargo.toml diz $version, mas a tag é $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      # O rustup do runner lê o rust-toolchain.toml (versão exigida pelo fork do GPUI) na primeira chamada do cargo.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar
+        run: cargo build --release -p cyder
+
+      - name: SHA-256 do executável
+        shell: pwsh
+        run: (Get-FileHash target/release/cyder.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline target/release/cyder.exe.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/cyder.exe
+            target/release/cyder.exe.sha256
+          generate_release_notes: true

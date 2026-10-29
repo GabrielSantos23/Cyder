@@ -1,0 +1,4 @@
+[toolchain]
+# Exigido pelo fork sonorahq/gpui.
+channel = "1.98.1"
+profile = "minimal"

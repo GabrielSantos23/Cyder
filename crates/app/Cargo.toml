@@ -1,0 +1,29 @@
+[package]
+name = "cyder"
+edition.workspace = true
+version.workspace = true
+repository.workspace = true
+
+[dependencies]
+cyder-core = { path = "../core" }
+gpui.workspace = true
+gpui_platform.workspace = true
+tokio.workspace = true
+env_logger.workspace = true
+log.workspace = true
+anyhow = "1.0.104"
+souvlaki = "0.9"
+raw-window-handle = "0.6"
+serde_json.workspace = true
+# Canvas: ler o MP4 e decodificar o H.264 (o GPUI não toca vídeo). A mesma versão do `image` do GPUI.
+mp4 = "0.14"
+openh264 = "0.9"
+image.workspace = true
+
+[build-dependencies]
+# Ícone e nome no executável do Windows (build.rs).
+winresource = "0.1"
+
+[target."cfg(windows)".dependencies]
+tray-icon = { version = "0.26", default-features = false }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry"] }
