@@ -3,7 +3,7 @@ use std::{cell::Cell, collections::{HashMap, HashSet}, path::PathBuf, rc::Rc, sy
 
 use cyder_core::{AppEvent, Cmd, Device, Library, Page, SearchKind, SearchResults, Shelf, Track, config, images::Art, lyrics::{Line, Lyrics}, player::Repeat};
 use gpui::{
-    Animation, AnimationExt, AnyElement, Bounds, ClipboardItem, Context, FocusHandle, Font, FontWeight, IntoElement, MouseButton,
+    Animation, AnimationExt, AnyElement, Bounds, Context, FocusHandle, Font, FontWeight, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Render, SharedString,
     SpringAnimation, SpringConfig, Styled, TextRun, Window, WindowControlArea, actions, canvas, div, ease_out_quint,
     font, img, point, prelude::*, px, relative, rgba, svg,
@@ -19,6 +19,7 @@ mod loading;
 mod media;
 mod menus;
 mod mini;
+mod onboarding;
 #[cfg(windows)]
 mod tray;
 pub(crate) mod update;
@@ -40,6 +41,8 @@ pub(crate) enum Dialog {
     Help(Help),
     /// Versão nova instalada: reiniciar agora?
     Update(String),
+    /// Depois do primeiro login: o que dá para fazer e onde fica.
+    Welcome,
 }
 
 #[derive(Clone, Copy)]
@@ -359,6 +362,10 @@ pub struct Cyder {
     /// Pede foco no campo no próximo render (o foco precisa da janela).
     focus_client_id: bool,
     uri_copied: bool,
+    /// Passo da primeira abertura: boas-vindas, criar o app, colar o Client ID.
+    onboard_step: usize,
+    /// Salvou o Client ID pela primeira vez: no login, mostra o cartão "Tudo pronto".
+    welcome_pending: bool,
 }
 
 const REDIRECT_URI: &str = "http://127.0.0.1:5589/callback";
@@ -612,6 +619,8 @@ impl Cyder {
             client_id_focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focus_client_id: false,
             uri_copied: false,
+            onboard_step: 0,
+            welcome_pending: false,
         }
     }
 
@@ -620,6 +629,8 @@ impl Cyder {
             AppEvent::Status(s) => self.phase = Phase::Starting(s),
             AppEvent::NeedsSetup { problem } => {
                 self.phase = Phase::Setup;
+                // Client ID salvo mas recusado: volta direto ao campo, com o erro.
+                self.onboard_step = if problem.is_some() { onboarding::STEP_CLIENT_ID } else { 0 };
                 self.client_id_error = problem;
                 self.focus_client_id = true;
             }
@@ -636,6 +647,9 @@ impl Cyder {
                 self.queue_label = label;
                 self.queue_context = context;
                 self.phase = Phase::Ready;
+                if std::mem::take(&mut self.welcome_pending) {
+                    self.dialog = Some(Dialog::Welcome);
+                }
                 // Uma vez por abertura (o Ready volta ao entrar de novo na conta).
                 if !std::mem::replace(&mut self.update_checked, true) {
                     self.check_update(false);
@@ -1236,7 +1250,9 @@ impl Cyder {
                 self.client_id_error = None;
                 self.phase = Phase::Starting("Salvando…".into());
                 // Vindo das configurações, o engine está rodando: refaz só o login da Web API com o app novo.
-                let cmd = if std::mem::take(&mut self.setup_return) { Cmd::Relogin } else { Cmd::Retry };
+                let from_settings = std::mem::take(&mut self.setup_return);
+                self.welcome_pending = !from_settings;
+                let cmd = if from_settings { Cmd::Relogin } else { Cmd::Retry };
                 self.send(cmd);
             }
             Err(e) => self.client_id_error = Some(e),
@@ -1296,7 +1312,7 @@ impl Cyder {
         let field = field.on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.client_id_key(e, window, cx)));
         if self.client_id.is_empty() {
             // O cursor fica antes do exemplo, como num campo vazio de verdade.
-            field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("2c38327a19a54c4f…")).into_any_element()
+            field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("7f3e91c2d84b4a06…")).into_any_element()
         } else {
             field.child(div().child(self.client_id.clone())).when(focused, |d| d.child(caret())).into_any_element()
         }
@@ -1311,56 +1327,7 @@ impl Cyder {
                 .child(div().text_color(rgba(theme::ink_2())).child(status.clone()))
                 .child(div().text_sm().text_color(rgba(theme::ink_3())).child("Na primeira vez, o navegador abre para você entrar na sua conta do Spotify."))
                 .into_any_element(),
-            Phase::Setup => {
-                if std::mem::take(&mut self.focus_client_id) {
-                    window.focus(&self.client_id_focus, cx);
-                }
-                let step = |n: &'static str, text: &'static str| {
-                    div().flex().gap_2().text_color(rgba(theme::ink_2()))
-                        .child(div().text_color(rgba(theme::ink_1())).font_weight(FontWeight::SEMIBOLD).child(n))
-                        .child(text)
-                };
-                // "Redirect URI" e "Client ID" ficam em inglês: são os rótulos exatos do painel do Spotify.
-                // O formulário do Spotify já obriga a escolher a API; basta o Redirect URI.
-                column
-                    .child(
-                        div().w(px(520.)).flex().flex_col().gap_3()
-                            .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Conecte sua biblioteca do Spotify"))
-                            .child(div().mb_3().text_color(rgba(theme::ink_3())).child("Só na primeira vez."))
-                            .child(step("1.", "Crie um app no painel do Spotify com este Redirect URI:"))
-                            .child(
-                                div().flex().items_center().gap_2()
-                                    .child(div().flex_1().px_3().py_2().rounded(px(8.)).bg(rgba(theme::wash(0x14))).font_family("Consolas").child(REDIRECT_URI))
-                                    .child(Self::secondary_button("copy-uri", if self.uri_copied { "Copiado" } else { "Copiar" })
-                                        .on_click(cx.listener(|t, _, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(REDIRECT_URI.into()));
-                                            t.uri_copied = true;
-                                            cx.notify();
-                                        })))
-                                    .child(Self::secondary_button("open-dashboard", "Abrir painel")
-                                        .on_click(|_, _, cx| cx.open_url("https://developer.spotify.com/dashboard"))),
-                            )
-                            .child(div().mt_3().child(step("2.", "Cole o Client ID do app:")))
-                            .child(self.client_id_field(window, cx))
-                            // Linha do erro sempre reservada: a tela não pula quando ele aparece.
-                            .child(div().h(px(20.)).text_sm().text_color(rgba((theme::DANGER << 8) | 0xff))
-                                .children(self.client_id_error.clone()))
-                            .child(
-                                div().flex().justify_end().gap_2()
-                                    .when(self.setup_return, |d| d.child(Self::secondary_button("cancel-client-id", "Cancelar")
-                                        .on_click(cx.listener(|t, _, window, cx| {
-                                            t.setup_return = false;
-                                            t.client_id_error = None;
-                                            t.phase = Phase::Ready;
-                                            window.focus(&t.focus, cx);
-                                            cx.notify();
-                                        }))))
-                                    .child(Self::primary_button("save-client-id", "Salvar e entrar")
-                                        .on_click(cx.listener(|t, _, window, cx| { t.submit_client_id(window, cx); cx.notify(); }))),
-                            ),
-                    )
-                    .into_any_element()
-            }
+            Phase::Setup => self.onboarding(window, cx),
             Phase::Failed(e) => column
                 .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Não deu para conectar"))
                 .child(div().max_w(px(640.)).text_color(rgba(theme::ink_2())).child(e.clone()))
@@ -1906,6 +1873,7 @@ impl Cyder {
                 .child(div().flex().justify_end().gap_2()
                     .child(Self::secondary_button("update-later", "Depois").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
                     .child(Self::primary_button("update-restart", "Reiniciar agora").on_click(cx.listener(|t, _, _, cx| t.restart_for_update(cx))))),
+            Dialog::Welcome => self.welcome_dialog(card, cx),
             Dialog::Logout => card
                 .child(div().text_lg().font_weight(FontWeight::BOLD).child("Sair da conta?"))
                 .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Para voltar, você entra de novo pelo navegador. A biblioteca guardada neste computador é apagada."))

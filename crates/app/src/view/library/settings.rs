@@ -126,6 +126,7 @@ impl Cyder {
                     t.client_id_error = None;
                     t.setup_return = true;
                     t.focus_client_id = true;
+                    t.onboard_step = crate::view::onboarding::STEP_CLIENT_ID;
                     t.phase = Phase::Setup;
                     cx.notify();
                 })),
