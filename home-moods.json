@@ -1,0 +1,69 @@
+{
+  "_comment": "Prateleiras da tela inicial do Cyder (crates/core/src/moods.rs). O app baixa este arquivo do GitHub uma vez por dia: mudar aqui muda a tela de todo mundo sem versão nova. Ids de playlists do Spotify; as chaves do momento (sextou…noite) são escolhidas pela hora no código.",
+  "moods": {
+    "sextou": {
+      "title": "Sextou!",
+      "playlists": ["37i9dQZF1DX5GJ0BQvLMjM", "37i9dQZF1DX8S9gwdi7dev", "37i9dQZF1DXc1j0125Pa5C", "37i9dQZF1DXb1oSegSL8id", "37i9dQZF1DX41UmHm2vtav", "37i9dQZF1DWWylYLMvjuRG", "37i9dQZF1DXdo6A3mWpdWx", "37i9dQZF1DX6xnkAwJX7tn", "37i9dQZF1DXaXB8fQg7xif", "37i9dQZF1DX1oTjVZnUYT3"]
+    },
+    "sabado": {
+      "title": "Sábado à noite",
+      "playlists": ["37i9dQZF1DX5GJ0BQvLMjM", "37i9dQZF1DX8S9gwdi7dev", "37i9dQZF1DXc1j0125Pa5C", "37i9dQZF1DXb1oSegSL8id", "37i9dQZF1DX41UmHm2vtav", "37i9dQZF1DWWylYLMvjuRG", "37i9dQZF1DXdo6A3mWpdWx", "37i9dQZF1DX6xnkAwJX7tn", "37i9dQZF1DXaXB8fQg7xif", "37i9dQZF1DX1oTjVZnUYT3"]
+    },
+    "dormir": {
+      "title": "Para dormir",
+      "playlists": ["37i9dQZF1DWWKap1fTevjS", "37i9dQZF1DXa1rZf8gLhyz", "37i9dQZF1DWYcDQ1hSjOpY", "37i9dQZF1DX8Sz1gsYZdwj", "37i9dQZF1DWZd79rJ6a7lp", "37i9dQZF1DX3WdioUzkg8I", "37i9dQZF1DWSiZVO2J6WeI", "37i9dQZF1DWT0d3wigiTss", "37i9dQZF1DWUZ5bk6qqDSy", "37i9dQZF1DX03b46zi3S82"]
+    },
+    "manha": {
+      "title": "Para começar o dia",
+      "playlists": ["37i9dQZF1DX7KNKjOK0o75", "37i9dQZF1DXdPec7aLTmlC", "37i9dQZF1DX9XIFQuFvzM4", "37i9dQZF1DX3rxVfibe1L0", "37i9dQZF1DX6ziVCJnEm59", "37i9dQZF1DWTr1aQUUVrXx", "37i9dQZF1DX9RwfGbeGQwP", "37i9dQZF1DWYBO1MoTDhZI", "37i9dQZF1DX0tnKPLNG9Ld", "37i9dQZF1DWWiuGVvOB4uo"]
+    },
+    "fim_de_semana": {
+      "title": "Fim de semana em casa",
+      "playlists": ["37i9dQZF1DX4sWSpwq3LiO", "37i9dQZF1DWWQRwui0ExPn", "37i9dQZF1DWY9crkqLGj4o", "37i9dQZF1DWZqd5JICZI0u", "37i9dQZF1DWVCpC5RyKiLg", "37i9dQZF1DXce9JMR6ngZx", "37i9dQZF1DXdg3JLYhYrif", "37i9dQZF1DXcq1sGjujDL0", "37i9dQZF1DWZFKJle6VhNB", "37i9dQZF1DX0eCPcrBkRSv"]
+    },
+    "foco": {
+      "title": "Para focar",
+      "playlists": ["37i9dQZF1DWZeKCadgRdKQ", "37i9dQZF1DWSluGMsH1R9r", "37i9dQZF1DXd5zUwdn6lPb", "37i9dQZF1DX8wWHvPMMfNA", "37i9dQZF1DWZZbwlv3Vmtr", "37i9dQZF1DWXHRfd4xP9nx", "37i9dQZF1DWWQRwui0ExPn", "37i9dQZF1DX8wtrGDH81Oa", "37i9dQZF1DWWb1L5n1gkOJ", "37i9dQZF1DX45qfzFXwcta"]
+    },
+    "noite": {
+      "title": "Para relaxar à noite",
+      "playlists": ["37i9dQZF1DX2DjEOgyULQF", "37i9dQZF1DWTo2LqahHGYj", "37i9dQZF1DX4sWSpwq3LiO", "37i9dQZF1DX9j444F9NCBa", "37i9dQZF1DWYt9VK2cyrQR", "37i9dQZF1DWXe9gFZP0gtP", "37i9dQZF1DX4WELsJtFZjZ", "37i9dQZF1DWV6hddfqLW3Z", "37i9dQZF1DWYoYGBbGKurt", "37i9dQZF1DX8NMUtC3b3gL"]
+    },
+    "em_alta": {
+      "title": "Em alta no Brasil",
+      "playlists": ["37i9dQZEVXbMXbN3EUUhlg", "37i9dQZEVXbMDoHDwVN2tF", "37i9dQZF1DWUSHGSJhLype", "37i9dQZF1DWXCnnYfnyiO7", "37i9dQZF1DX6c9yVebnzyY", "37i9dQZF1DX4PfwA6GHHNV", "37i9dQZF1DX6071zNfHxVt", "37i9dQZF1DXd2wJvXxyJb8", "37i9dQZF1DWSlRNWoWejBr", "37i9dQZF1DX34KNiFQJNVm"]
+    },
+    "treino": {
+      "title": "Para treinar",
+      "playlists": ["37i9dQZF1DXdVmhVVRZJ3I", "37i9dQZF1DX76Wlfdnj7AP", "37i9dQZF1DWSJHnPb1f0X3", "37i9dQZF1DX9uKNf5jGX6m", "37i9dQZF1DWVwfR6Tizy8P", "37i9dQZF1DX76t638V6CA8", "37i9dQZF1DXc0iyNwZI144", "37i9dQZF1DWTl4y3vgJOXW", "37i9dQZF1DX8mBRYewE6or", "37i9dQZF1DX9oh43oAzkyx"]
+    },
+    "carro": {
+      "title": "Para ouvir no carro",
+      "playlists": ["37i9dQZF1DWWMOmoXKqHTD", "37i9dQZF1DX9wC1KY45plY", "37i9dQZF1DWU13kKnk03AP", "37i9dQZF1DXdOEFt9ZX0dh", "37i9dQZF1DXdfhOsjRMISB", "37i9dQZF1DX2ogDiL6nZJr", "37i9dQZF1DWYs83FtTMQFw", "37i9dQZF1DWTkxQvqMy4WW"]
+    },
+    "decadas": {
+      "title": "Volta no tempo",
+      "playlists": ["37i9dQZF1DWZ2DWnNKZTXs", "37i9dQZF1DX4UtSsGT1Sbe", "37i9dQZF1DX2syo5w7a1cu", "37i9dQZF1DX5Ejj0EkURtP", "37i9dQZF1DWVRje2pMSCzM", "37i9dQZF1DX4o1oenSJRJd", "37i9dQZF1DX4WELsJtFZjZ", "37i9dQZF1DXbTxeAdrVG2l", "37i9dQZF1DX1uHCeFHcn8X", "37i9dQZF1DX1spT6G94GFC"]
+    },
+    "brasil": {
+      "title": "Feito no Brasil",
+      "playlists": ["37i9dQZF1DX0FOF1IUWK1W", "37i9dQZF1DXdSjVZQzv2tl", "37i9dQZF1DWTkIwO2HDifB", "37i9dQZF1DX5lAV5ZGu9ik", "37i9dQZF1DWVjNkaVEkL3X", "37i9dQZF1DX3iXpjyhBzel", "37i9dQZF1DXchBFvKSUooB", "37i9dQZF1DX1CXodF7H3OX", "37i9dQZF1DWVBWFXlHC6s7", "37i9dQZF1DXdOhsna07Pvz"]
+    },
+    "romantico": {
+      "title": "No clima romântico",
+      "playlists": ["37i9dQZF1DWTbzY5gOVvKd", "37i9dQZF1DWVf1Phr4ZVgO", "37i9dQZF1DWSUA8piie2LD", "37i9dQZF1DXebxttQCq0zA", "37i9dQZF1DWWMGLiuK4OqL", "37i9dQZF1DX6DLB6M8zkNk", "37i9dQZF1DX76YsWjvbz9I", "37i9dQZF1DX6ZiG5Dz8cUM", "37i9dQZF1DX4s3V2rTswzO", "37i9dQZF1DX7YVXCfBlE4D"]
+    },
+    "instrumental": {
+      "title": "Só instrumental",
+      "playlists": ["37i9dQZF1DWYoYGBbGKurt", "37i9dQZF1DX1s9knjP51Oa", "37i9dQZF1DXdzGIPNRTvyN", "37i9dQZF1DX5uFnRv5lZjw", "37i9dQZF1DX7HpYqrfrj7c", "37i9dQZF1DX4Oe8zprVH3z", "37i9dQZF1DWVFeEut75IAL", "37i9dQZF1DXcCnTAt8CfNe", "37i9dQZF1DX17GkScaAekA", "37i9dQZF1DX9j444F9NCBa"]
+    }
+  },
+  "extras": [
+    "treino",
+    "carro",
+    "decadas",
+    "brasil",
+    "romantico",
+    "instrumental"
+  ]
+}

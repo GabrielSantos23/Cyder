@@ -513,9 +513,9 @@ impl Cyder {
             .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
             .text_sm()
             .cursor_text()
-            .on_click(cx.listener(|t, _, window, cx| { window.focus(&t.device_focus, cx); cx.notify(); }))
+            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.device_focus, cx); cx.notify(); }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.device_key(e, window, cx)))
-            .child(SharedString::from(self.device_draft.clone()))
+            .child(self.field_text(self.device_draft.clone(), focused))
             .when(focused, |d| d.child(caret()))
             .into_any_element()
     }
@@ -534,7 +534,7 @@ impl Cyder {
                 self.device_draft = self.settings.device_name();
                 window.focus(&self.focus, cx);
             }
-            _ if super::super::type_into(&mut self.device_draft, k, cx) => self.device_draft = self.device_draft.chars().take(40).collect(),
+            _ if super::super::type_into(&mut self.device_draft, k, &mut self.text_selected, cx) => self.device_draft = self.device_draft.chars().take(40).collect(),
             _ => return,
         }
         cx.stop_propagation();

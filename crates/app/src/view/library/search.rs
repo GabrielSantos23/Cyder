@@ -68,7 +68,7 @@ impl Cyder {
         let text = if empty {
             text.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("Buscar"))
         } else {
-            text.child(self.search_query.clone()).when(focused, |d| d.child(caret()))
+            text.child(self.field_text(self.search_query.clone(), focused)).when(focused, |d| d.child(caret()))
         };
         div()
             .id("global-search")
@@ -90,7 +90,10 @@ impl Cyder {
             .cursor_text()
             .hover(|s| s.bg(rgba(theme::wash(0x17))))
             // No mouse down: o campo fica na faixa de arrastar a janela, que engole o clique.
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|t, _: &gpui::MouseDownEvent, window, cx| t.open_search(window, cx)))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|t, e: &gpui::MouseDownEvent, window, cx| {
+                t.text_selected = e.click_count >= 2;
+                t.open_search(window, cx);
+            }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.search_key(e, window, cx)))
             .child(icon("search", 14., theme::ink_3()))
             .child(text)
@@ -138,7 +141,7 @@ impl Cyder {
                 self.run_search();
                 self.remember_search();
             }
-            _ if super::super::type_into(&mut self.search_query, k, cx) => {
+            _ if super::super::type_into(&mut self.search_query, k, &mut self.text_selected, cx) => {
                 self.search_due = Some(Instant::now());
                 if !matches!(self.screen, Screen::Search) {
                     self.go(Screen::Search);

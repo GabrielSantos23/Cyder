@@ -43,7 +43,7 @@ pub fn newer(latest: &str, current: &str) -> bool {
 }
 
 /// "https://github.com/dono/repo" → "dono/repo".
-fn repo_path() -> &'static str {
+pub(crate) fn repo_path() -> &'static str {
     REPO.trim_end_matches('/').trim_start_matches("https://github.com/")
 }
 

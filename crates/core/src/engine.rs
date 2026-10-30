@@ -269,6 +269,33 @@ fn library_images(lib: &Library) -> Vec<String> {
     card_images(&lib.albums).chain(card_images(&lib.artists)).chain(card_images(&lib.playlists)).collect()
 }
 
+/// De quais artistas fazer rádios: os que mais aparecem no que você ouviu por último (o histórico da conta, que
+/// agora inclui o Cyder), depois os mais ouvidos neste computador no mês e, por fim, o top do Spotify, que muda
+/// devagar e puxa os de sempre. (URI, nome), sem repetir, até oito.
+fn radio_seeds(played: &[api::Played], top: &[Card]) -> Vec<(String, String)> {
+    let mut count: HashMap<&str, (usize, &str)> = HashMap::new();
+    for (id, name) in played.iter().filter_map(|p| p.track.artists.first()) {
+        count.entry(id.as_str()).or_insert((0, name.as_str())).0 += 1;
+    }
+    let mut recent: Vec<_> = count.into_iter().collect();
+    recent.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+    let month = crate::stats::compute(&crate::stats::load(), crate::stats::Range::Month, now_secs(), crate::local_offset_secs()).top_artists;
+    let mut seeds: Vec<(String, String)> = Vec::new();
+    let candidates = recent.into_iter().map(|(id, (_, name))| (id.to_string(), name.to_string()))
+        .chain(month.into_iter().map(|r| (r.id, r.name)))
+        .chain(top.iter().map(|c| (c.id.clone(), c.title.clone())));
+    for (id, name) in candidates {
+        let uri = format!("spotify:artist:{id}");
+        if id.len() == 22 && !seeds.iter().any(|(u, _)| *u == uri) {
+            seeds.push((uri, name));
+        }
+        if seeds.len() == 8 {
+            break;
+        }
+    }
+    seeds
+}
+
 fn shelf_images(shelves: &[Shelf]) -> Vec<String> {
     shelves.iter().flat_map(|s| card_images(&s.cards)).collect()
 }
@@ -435,8 +462,20 @@ impl Ctx {
     /// Prateleiras da tela inicial que vêm da Web API: tocadas recentemente e artistas mais ouvidos.
     /// As de playlists (do Spotify e suas) a UI monta com a biblioteca.
     async fn refresh_home(self) {
-        let mut shelves = Vec::new();
-        if let Ok(played) = self.api.recently_played().await {
+        let local = now_secs() as i64 + crate::local_offset_secs();
+        let moods = self.moods().await.for_now(local);
+        let top_artists = self.api.top_artists().await.unwrap_or_default();
+        let played = self.api.recently_played().await;
+        let radios = self.radios(&radio_seeds(played.as_deref().unwrap_or_default(), &top_artists)).await;
+        let editorial = self.editorial(moods.iter().flat_map(|m| m.playlists.iter().cloned()).chain(radios.iter().cloned()).collect()).await;
+        let shelf = |title: &str, ids: Vec<String>| Shelf { title: title.into(), cards: ids.iter().filter_map(|id| editorial.get(id).cloned()).collect() };
+        let mood_shelf = |m: &crate::moods::Mood| shelf(&m.title, crate::moods::of_day(&m.playlists, local));
+        // Tocadas recentemente abre a tela e a do momento vem logo depois (a UI põe as playlists da biblioteca em seguida).
+        let mut shelves: Vec<Shelf> = Vec::new();
+        let mut rest: Vec<Shelf> = moods.iter().take(2).map(mood_shelf).collect();
+        rest.push(shelf("Rádios dos seus artistas", radios));
+        rest.extend(moods.iter().skip(2).map(mood_shelf));
+        if let Ok(played) = played {
             // Guardada à parte para juntar de novo com o que toca por aqui sem pedir ao Spotify.
             let spotify: Vec<(Card, u64)> = played.iter().filter_map(|p| Some((p.album.clone()?, p.at))).collect();
             cache::save("recent-spotify", &spotify);
@@ -455,17 +494,100 @@ impl Ctx {
             cache::save("history", &history);
             self.send(AppEvent::Recent(history));
         }
-        if let Ok(artists) = self.api.top_artists().await {
-            if !artists.is_empty() {
-                shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: artists });
-            }
-        }
+        shelves.extend(rest);
+        shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: top_artists });
+        shelves.retain(|s| !s.cards.is_empty());
         if shelves.is_empty() {
             return self.send(AppEvent::Notice("Não deu para montar a tela inicial agora.".into()));
         }
         cache::save("home", &shelves);
         self.thumbs(shelf_images(&shelves));
         self.send(AppEvent::Home(shelves));
+    }
+
+    /// As prateleiras de `home-moods.json`: a do GitHub, baixada no máximo uma vez por dia, para dar para trocar
+    /// playlists sem versão nova; sem internet, a última baixada; nunca baixada, a que vem no executável.
+    async fn moods(&self) -> crate::moods::Moods {
+        const DAY: Duration = Duration::from_secs(86_400);
+        if cache::fresh("moods", DAY) {
+            if let Some(m) = cache::load("moods") {
+                return m;
+            }
+        }
+        let url = format!("https://raw.githubusercontent.com/{}/main/home-moods.json", crate::update::repo_path());
+        let fetched = async { self.http.get(&url).send().await?.error_for_status()?.json::<crate::moods::Moods>().await };
+        match fetched.await {
+            Ok(m) => {
+                cache::save("moods", &m);
+                m
+            }
+            Err(e) => {
+                log::warn!("home-moods.json do GitHub: {e}");
+                cache::load("moods").unwrap_or_else(crate::moods::Moods::bundled)
+            }
+        }
+    }
+
+    /// A rádio que o Spotify gera para cada artista (`radio_seeds`): muda com o que você ouve, sem lista fixa.
+    /// Guardadas por um dia, um pedido por artista.
+    async fn radios(&self, artists: &[(String, String)]) -> Vec<String> {
+        const DAY: u64 = 86_400;
+        let mut known: HashMap<String, (Option<String>, u64)> = cache::load("artist-radios").unwrap_or_default();
+        let now = now_secs();
+        let mut out = Vec::new();
+        for (uri, name) in artists {
+            let radio = match known.get(uri) {
+                Some((radio, at)) if now - at < DAY => radio.clone(),
+                _ => {
+                    let radio = internal::radio_for(&self.session, uri).await.inspect_err(|e| log::warn!("rádio de {name}: {e}")).ok();
+                    known.insert(uri.clone(), (radio.clone(), now));
+                    radio
+                }
+            };
+            out.extend(radio.map(|uri| uri.trim_start_matches("spotify:playlist:").to_string()));
+        }
+        cache::save("artist-radios", &known);
+        out
+    }
+
+    /// Capa, nome e descrição das playlists da tela inicial, pela sessão (a Web API não devolve as do Spotify).
+    /// Guardados por uma semana: mudam pouco, e assim a troca de hora não pede nada ao Spotify. A que o Spotify
+    /// apagou (404) fica marcada e some da tela até a semana seguinte, sem pedir de novo a cada vez.
+    async fn editorial(&self, mut wanted: Vec<String>) -> HashMap<String, Card> {
+        use futures_util::StreamExt;
+        const WEEK: u64 = 7 * 86_400;
+        let mut known: HashMap<String, (Option<Card>, u64)> = cache::load("editorial").unwrap_or_default();
+        let now = now_secs();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let missing: Vec<String> = wanted.iter().filter(|id| known.get(*id).is_none_or(|(_, at)| now - at > WEEK)).cloned().collect();
+        let fetched: Vec<(String, Result<Card, String>)> = futures_util::stream::iter(missing)
+            .map(|id| {
+                let session = self.session.clone();
+                async move {
+                    let card = internal::playlist_teaser(&session, &id).await;
+                    (id, card)
+                }
+            })
+            .buffer_unordered(6)
+            .collect()
+            .await;
+        for (id, card) in fetched {
+            match card {
+                Ok(card) if !card.title.is_empty() => {
+                    known.insert(id, (Some(card), now));
+                }
+                Err(e) if e.contains("404") || e.to_lowercase().contains("not found") => {
+                    log::info!("playlist {id} não existe mais no Spotify; fora da tela inicial");
+                    known.insert(id, (None, now));
+                }
+                // Falha de rede: tenta de novo na próxima atualização.
+                Err(e) => log::warn!("playlist da tela inicial {id}: {e}"),
+                Ok(_) => {}
+            }
+        }
+        cache::save("editorial", &known);
+        wanted.into_iter().filter_map(|id| Some((id.clone(), known.get(&id)?.0.clone()?))).collect()
     }
 
     /// O Spotify não registra o que toca pelo Cyder (doc 07): o álbum da faixa entra no histórico deste
@@ -997,7 +1119,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let (smart_tx, mut smart_rx) = unbounded_channel::<Vec<Track>>();
     let mut smart: Vec<String> = Vec::new();
     // Música tocando por aqui para as estatísticas: quando começou, quanto já tocou e desde quando está tocando.
-    let mut listen: Option<(Track, u64, u32, Option<std::time::Instant>)> = None;
+    // O contexto (álbum, playlist) vai junto para o histórico do Spotify.
+    let mut listen: Option<(Track, u64, u32, Option<std::time::Instant>, Option<String>)> = None;
     let mut cluster_due: Option<tokio::time::Instant> = None;
     // Volta da suspensão: a conexão da sessão pode voltar morta ou reconectando, e o aviso de que outro aparelho
     // começou a tocar se perde. O relógio de parede pula (o PC dormiu) e aí o estado é conferido pela Web API.
@@ -1689,13 +1812,34 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         }
                         // Trocou de música: a anterior entra nas estatísticas se tocou o bastante.
                         if i != index || listen.is_none() {
-                            if let Some((t, at, ms, since)) = listen.take() {
-                                let ms = ms + since.map_or(0, |s| s.elapsed().as_millis() as u32);
+                            if let Some((t, at, ms, since, play_context)) = listen.take() {
+                                let ms = (ms + since.map_or(0, |s| s.elapsed().as_millis() as u32)).min(t.duration_ms);
+                                // O Spotify recebe toda reprodução, até a pulada (o client oficial faz igual): ele decide o que conta.
+                                if ms > 0 {
+                                    let play = internal::EndSong { track_uri: t.uri.clone(), context: play_context, started_ms: at * 1000, ms_played: ms, duration_ms: t.duration_ms, shuffle };
+                                    let ctx = ctx.clone();
+                                    tokio::spawn(async move {
+                                        // Avisa uma vez quando para de funcionar (endereço mudou, evento recusado, sem rede) e de novo só depois de voltar.
+                                        static FAILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                                        match internal::report_end_song(&ctx.session, &play).await {
+                                            Ok(()) => {
+                                                FAILING.store(false, std::sync::atomic::Ordering::Relaxed);
+                                                log::debug!("histórico do Spotify: {} ({} ms)", play.track_uri, play.ms_played);
+                                            }
+                                            Err(e) => {
+                                                log::warn!("histórico do Spotify: {e}");
+                                                if !FAILING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                                    ctx.send(AppEvent::Notice("As músicas tocadas aqui pararam de ir para o histórico do Spotify.".into()));
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
                                 if ms >= crate::stats::MIN_PLAYED_MS {
-                                    tokio::task::spawn_blocking(move || crate::stats::record(&t, ms.min(t.duration_ms), at));
+                                    tokio::task::spawn_blocking(move || crate::stats::record(&t, ms, at));
                                 }
                             }
-                            listen = tracks.get(i).map(|t| (t.clone(), now_secs(), 0, playing.then(std::time::Instant::now)));
+                            listen = tracks.get(i).map(|t| (t.clone(), now_secs(), 0, playing.then(std::time::Instant::now), context.clone()));
                         }
                         // O episódio que estava tocando guarda onde parou (perto do fim, conta como ouvido).
                         if i != index {

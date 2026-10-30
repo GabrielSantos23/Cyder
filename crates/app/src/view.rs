@@ -3,10 +3,10 @@ use std::{cell::Cell, collections::{HashMap, HashSet}, path::PathBuf, rc::Rc, sy
 
 use cyder_core::{AppEvent, Cmd, Device, Library, Page, SearchKind, SearchResults, Shelf, Track, config, images::Art, lyrics::{Line, Lyrics}, player::Repeat};
 use gpui::{
-    Animation, AnimationExt, AnyElement, Bounds, Context, FocusHandle, Font, FontWeight, IntoElement, MouseButton,
+    Animation, AnimationExt, AnyElement, Bounds, ClickEvent, ClipboardItem, Context, FocusHandle, Font, FontWeight, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Render, SharedString,
     SpringAnimation, SpringConfig, Styled, TextRun, Window, WindowControlArea, actions, canvas, div, ease_out_quint,
-    font, img, point, prelude::*, px, relative, rgba, svg,
+    Div, font, img, point, prelude::*, px, relative, rgba, svg,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -358,6 +358,8 @@ pub struct Cyder {
     /// Campo do Client ID na tela de configuração.
     client_id: String,
     client_id_error: Option<String>,
+    /// O texto do campo com foco está todo selecionado (Ctrl+A ou duplo clique): digitar substitui, apagar limpa.
+    text_selected: bool,
     client_id_focus: FocusHandle,
     /// Pede foco no campo no próximo render (o foco precisa da janela).
     focus_client_id: bool,
@@ -616,6 +618,7 @@ impl Cyder {
             focus: cx.focus_handle(),
             client_id: String::new(),
             client_id_error: None,
+            text_selected: false,
             client_id_focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focus_client_id: false,
             uri_copied: false,
@@ -1270,18 +1273,11 @@ impl Cyder {
                 cx.notify();
                 return;
             }
-            "backspace" if k.modifiers.control => self.client_id.clear(),
-            "backspace" => drop(self.client_id.pop()),
-            "v" if k.modifiers.secondary() => match cx.read_from_clipboard().and_then(|c| c.text()) {
-                Some(t) => self.client_id.push_str(t.trim()),
-                None => return,
-            },
-            _ => match &k.key_char {
-                Some(c) if !k.modifiers.control && !k.modifiers.platform && !c.chars().any(char::is_control) => self.client_id.push_str(c),
-                _ => return,
-            },
+            _ if type_into(&mut self.client_id, k, &mut self.text_selected, cx) => {}
+            _ => return,
         }
-        self.client_id = self.client_id.chars().take(CLIENT_ID_MAX).collect();
+        // O Client ID não tem espaços: os que vêm ao colar saem.
+        self.client_id = self.client_id.chars().filter(|c| !c.is_whitespace()).take(CLIENT_ID_MAX).collect();
         self.client_id_error = None;
         cx.stop_propagation();
         cx.notify();
@@ -1308,13 +1304,13 @@ impl Cyder {
             .border_color(rgba(border))
             .font_family("Consolas")
             .cursor_text()
-            .on_click(cx.listener(|t, _, window, cx| { window.focus(&t.client_id_focus, cx); cx.notify(); }));
+            .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.client_id_focus, cx); cx.notify(); }));
         let field = field.on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.client_id_key(e, window, cx)));
         if self.client_id.is_empty() {
             // O cursor fica antes do exemplo, como num campo vazio de verdade.
             field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("7f3e91c2d84b4a06…")).into_any_element()
         } else {
-            field.child(div().child(self.client_id.clone())).when(focused, |d| d.child(caret())).into_any_element()
+            field.child(self.field_text(self.client_id.clone(), focused)).when(focused, |d| d.child(caret())).into_any_element()
         }
     }
 
@@ -1725,25 +1721,56 @@ impl Cyder {
     }
 }
 
-/// Edição de um campo de uma linha: digitar, colar, apagar (Ctrl+Backspace apaga tudo). False: a tecla não é do campo.
-fn type_into(text: &mut String, k: &gpui::Keystroke, cx: &mut Context<Cyder>) -> bool {
+/// Edição de um campo de uma linha: digitar, colar, apagar (Ctrl+Backspace apaga tudo). Ctrl+A seleciona tudo;
+/// com tudo selecionado (`selected`), digitar ou colar substitui, apagar limpa e Ctrl+C/Ctrl+X copiam.
+/// False: a tecla não é do campo.
+fn type_into(text: &mut String, k: &gpui::Keystroke, selected: &mut bool, cx: &mut Context<Cyder>) -> bool {
+    let all = std::mem::take(selected);
     match k.key.as_str() {
-        "backspace" if k.modifiers.control => text.clear(),
+        "a" if k.modifiers.secondary() => *selected = !text.is_empty(),
+        "c" | "x" if k.modifiers.secondary() && all => {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            if k.key == "x" {
+                text.clear();
+            } else {
+                *selected = true;
+            }
+        }
+        "backspace" | "delete" if all || k.modifiers.control => text.clear(),
         "backspace" => drop(text.pop()),
         "v" if k.modifiers.secondary() => match cx.read_from_clipboard().and_then(|c| c.text()) {
-            Some(t) => text.push_str(t.lines().next().unwrap_or_default()),
+            Some(t) => {
+                if all {
+                    text.clear();
+                }
+                text.push_str(t.lines().next().unwrap_or_default());
+            }
             None => return false,
         },
         _ => match &k.key_char {
-            Some(c) if !k.modifiers.control && !k.modifiers.platform && !c.chars().any(char::is_control) => text.push_str(c),
-            _ => return false,
+            Some(c) if !k.modifiers.control && !k.modifiers.platform && !c.chars().any(char::is_control) => {
+                if all {
+                    text.clear();
+                }
+                text.push_str(c);
+            }
+            // Setas, Home, End: só tiram a seleção.
+            _ => return all && matches!(k.key.as_str(), "left" | "right" | "home" | "end"),
         },
     }
     *text = text.chars().take(80).collect();
     true
 }
 
+/// Fundo do texto selecionado nos campos.
+const SELECTION: u32 = 0x3d7eff66;
+
 impl Cyder {
+    /// O texto de um campo, com o fundo de seleção quando está todo selecionado.
+    pub(crate) fn field_text(&self, text: impl Into<SharedString>, focused: bool) -> Div {
+        div().overflow_hidden().whitespace_nowrap().rounded(px(3.)).when(focused && self.text_selected, |d| d.bg(rgba(SELECTION))).child(text.into())
+    }
+
     /// Campo de texto de uma linha (busca da sidebar): digitar, colar, apagar; Esc fecha.
     fn side_search_key(&mut self, e: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
@@ -1754,7 +1781,7 @@ impl Cyder {
                 window.focus(&self.focus, cx);
             }
             "enter" => {}
-            _ if type_into(&mut self.side_query, k, cx) => {}
+            _ if type_into(&mut self.side_query, k, &mut self.text_selected, cx) => {}
             _ => return,
         }
         cx.stop_propagation();
@@ -1828,7 +1855,7 @@ impl Cyder {
             }
             _ => {
                 let Some(Dialog::Input { ask, text }) = self.dialog.as_mut() else { return };
-                if !type_into(text, k, cx) {
+                if !type_into(text, k, &mut self.text_selected, cx) {
                     return;
                 }
                 let max = ask.labels().4;
@@ -1947,12 +1974,12 @@ impl Cyder {
                     .border_1()
                     .border_color(rgba(if focused { theme::ink_2() } else { theme::wash(0x29) }))
                     .cursor_text()
-                    .on_click(cx.listener(|t, _, window, cx| { window.focus(&t.dialog_focus, cx); cx.notify(); }))
+                    .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.dialog_focus, cx); cx.notify(); }))
                     .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.input_key(e, window, cx)));
                 let field = if text.is_empty() {
                     field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(placeholder))
                 } else {
-                    field.child(div().child(shown)).when(focused, |d| d.child(caret()))
+                    field.child(self.field_text(shown, focused)).when(focused, |d| d.child(caret()))
                 };
                 card.child(div().text_lg().font_weight(FontWeight::BOLD).child(title))
                     .children(help.map(|h| div().text_sm().text_color(rgba(theme::ink_2())).child(h)))

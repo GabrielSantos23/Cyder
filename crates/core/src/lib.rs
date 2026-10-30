@@ -11,6 +11,7 @@ pub mod internal;
 pub mod lastfm;
 pub mod listen;
 pub mod lyrics;
+pub mod moods;
 pub mod player;
 pub mod stats;
 pub mod update;
@@ -194,4 +195,33 @@ pub struct Device {
 pub struct Shelf {
     pub title: String,
     pub cards: Vec<Card>,
+}
+
+/// Fuso local em segundos (hora local menos UTC), para as estatísticas contarem os dias certos
+/// e a tela inicial escolher as prateleiras da hora.
+#[cfg(windows)]
+pub fn local_offset_secs() -> i64 {
+    use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+    // SAFETY: as duas só escrevem na struct passada.
+    let (local, utc) = unsafe {
+        let (mut l, mut u) = (std::mem::zeroed(), std::mem::zeroed());
+        GetLocalTime(&mut l);
+        GetSystemTime(&mut u);
+        (l, u)
+    };
+    let mins = |t: &windows_sys::Win32::Foundation::SYSTEMTIME| (t.wDay as i64 * 24 + t.wHour as i64) * 60 + t.wMinute as i64;
+    let mut diff = mins(&local) - mins(&utc);
+    // Virada de mês entre os dois relógios: o dia "1" de um contra o "31" do outro.
+    if diff > 14 * 60 {
+        diff -= (local.wDay as i64) * 24 * 60;
+    } else if diff < -14 * 60 {
+        diff += (utc.wDay as i64) * 24 * 60;
+    }
+    // Arredonda a 15 minutos (os fusos existentes).
+    ((diff as f64 / 15.).round() as i64) * 15 * 60
+}
+
+#[cfg(not(windows))]
+pub fn local_offset_secs() -> i64 {
+    0
 }

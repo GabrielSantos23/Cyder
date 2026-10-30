@@ -77,6 +77,28 @@ pub async fn playlist_header(session: &Session, id: &str) -> Result<Card, String
     Ok(playlist_card(id, &content))
 }
 
+/// Cabeçalho com a descrição no lugar do dono, como nos cartões da Home do Spotify. A descrição vem com
+/// links em HTML (`<a href=…>Artista</a>`): fica só o texto.
+pub async fn playlist_teaser(session: &Session, id: &str) -> Result<Card, String> {
+    let content = list(session, &format!("/playlist/v2/playlist/{id}?from=0&length=0")).await?;
+    let mut card = playlist_card(id, &content);
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in content.attributes.description().chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text.replace("&amp;", "&").replace("&#x27;", "'").replace("&quot;", "\"");
+    if !text.trim().is_empty() {
+        card.subtitle = text.trim().to_string();
+    }
+    Ok(card)
+}
+
 /// Um pedaço de uma playlist de qualquer dono (inclusive do Spotify).
 pub struct PlaylistChunk {
     pub card: Card,
@@ -416,6 +438,122 @@ pub async fn canvas(session: &Session, track_uri: &str) -> Result<Option<String>
         }
     }
     Ok(None)
+}
+
+/// Uma reprodução que terminou, para o histórico do Spotify (doc 09).
+pub struct EndSong {
+    pub track_uri: String,
+    pub context: Option<String>,
+    /// Quando começou, em milissegundos Unix.
+    pub started_ms: u64,
+    pub ms_played: u32,
+    pub duration_ms: u32,
+    pub shuffle: bool,
+}
+
+/// Conta a reprodução para o Spotify: é o que põe a música em "Tocadas recentemente", no Wrapped e nas
+/// recomendações. O librespot não faz isso (doc 09). O app de desktop manda um `RawCoreStream` por faixa,
+/// dentro do envelope de eventos (`gabito.proto`), para o gabo-receiver, com os fragmentos de contexto
+/// (aparelho, app, horário) — formato capturado do 1.3.6 (doc 09, §6.4). Montado à mão: o librespot traz
+/// os .proto mas não os compila.
+/// shortcut: sem fila em disco, um evento que falha (sem internet) se perde; guardar e reenviar se fizer falta.
+pub async fn report_end_song(session: &Session, play: &EndSong) -> Result<(), String> {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::{OnceLock, atomic::{AtomicI64, Ordering}};
+    // Ids aleatórios sem dependência nova: o RandomState já vem com sementes aleatórias.
+    let random16 = || {
+        let state = std::collections::hash_map::RandomState::new();
+        let mut out = Vec::with_capacity(16);
+        for i in 0..2u8 {
+            let mut h = state.build_hasher();
+            h.write_u8(i);
+            out.extend(h.finish().to_le_bytes());
+        }
+        out
+    };
+    let unhex = |s: &str| (0..s.len() / 2).filter_map(|i| u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()).collect::<Vec<u8>>();
+    // Uma sequência por vez que o app abre, com o contador subindo a cada evento (como o client oficial).
+    static SEQUENCE_ID: OnceLock<Vec<u8>> = OnceLock::new();
+    static APP_SESSION: OnceLock<Vec<u8>> = OnceLock::new();
+    static SEQUENCE_NUMBER: AtomicI64 = AtomicI64::new(0);
+    let sequence_id = SEQUENCE_ID.get_or_init(random16);
+    let sequence_number = SEQUENCE_NUMBER.fetch_add(1, Ordering::Relaxed) + 1;
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+
+    let done = play.ms_played as u64 * 10 >= play.duration_ms as u64 * 9;
+    let mut msg = Vec::new();
+    put_bytes(&mut msg, 1, &random16());
+    put_bytes(&mut msg, 5, b"audio");
+    put_bytes(&mut msg, 10, b"trackdone");
+    put_bytes(&mut msg, 12, if done { b"trackdone" } else { b"fwdbtn" });
+    put_field(&mut msg, 13, play.started_ms);
+    put_field(&mut msg, 14, play.ms_played as u64);
+    put_field(&mut msg, 15, play.ms_played as u64);
+    put_field(&mut msg, 21, play.shuffle as u64);
+    if let Some(context) = &play.context {
+        put_bytes(&mut msg, 23, context.as_bytes());
+    }
+    put_bytes(&mut msg, 24, play.track_uri.as_bytes());
+    put_field(&mut msg, 26, 0);
+    put_field(&mut msg, 27, 0);
+    put_bytes(&mut msg, 28, b"context");
+    put_bytes(&mut msg, 32, b"none");
+    put_field(&mut msg, 39, 1);
+
+    let fragment = |name: &str, data: &[u8]| {
+        let mut f = Vec::new();
+        put_bytes(&mut f, 1, name.as_bytes());
+        put_bytes(&mut f, 2, data);
+        f
+    };
+    let one_bytes = |v: &[u8]| {
+        let mut f = Vec::new();
+        put_bytes(&mut f, 1, v);
+        f
+    };
+    // Mesmos ids que o librespot já apresenta ao Spotify: o Client ID da sessão e o id do aparelho.
+    let device_id = session.device_id().to_string();
+    let mut app = Vec::new();
+    put_bytes(&mut app, 1, librespot::core::version::SPOTIFY_SEMANTIC_VERSION.as_bytes());
+    put_field(&mut app, 2, librespot::core::version::SPOTIFY_VERSION);
+    put_bytes(&mut app, 3, APP_SESSION.get_or_init(random16));
+    let mut device = Vec::new();
+    put_bytes(&mut device, 1, std::env::consts::OS.as_bytes());
+    put_bytes(&mut device, 4, device_id.as_bytes());
+    let mut time = Vec::new();
+    put_field(&mut time, 1, now_ms);
+    let mut envelope = Vec::new();
+    put_bytes(&mut envelope, 2, b"RawCoreStream");
+    put_bytes(&mut envelope, 3, &fragment("message", &msg));
+    put_bytes(&mut envelope, 3, &fragment("context_client_id", &one_bytes(&unhex(&session.client_id()))));
+    put_bytes(&mut envelope, 3, &fragment("context_installation_id", &one_bytes(&<sha2::Sha256 as sha2::Digest>::digest(device_id.as_bytes())[..16])));
+    put_bytes(&mut envelope, 3, &fragment("context_application_desktop", &app));
+    put_bytes(&mut envelope, 3, &fragment("context_device_desktop", &device));
+    put_bytes(&mut envelope, 3, &fragment("context_time", &time));
+    put_bytes(&mut envelope, 4, sequence_id);
+    put_field(&mut envelope, 5, sequence_number as u64);
+    let mut body = Vec::new();
+    put_bytes(&mut body, 1, &envelope);
+
+    let mut headers = http::HeaderMap::new();
+    headers.insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/x-protobuf"));
+    let bytes = session.spclient().request(&http::Method::POST, "/gabo-receiver-service/v3/events/", Some(headers), Some(&body)).await.map_err(err)?;
+    // PublishEventsResponse: só traz `repeated EventError error = 1` quando algum evento foi recusado.
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    Err(format!("o Spotify recusou o evento: {}", hex(&bytes)))
+}
+
+fn put_field(out: &mut Vec<u8>, field: u64, v: u64) {
+    put_varint(out, field << 3);
+    put_varint(out, v);
+}
+
+fn put_bytes(out: &mut Vec<u8>, field: u64, data: &[u8]) {
+    put_varint(out, field << 3 | 2);
+    put_varint(out, data.len() as u64);
+    out.extend(data);
 }
 
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {

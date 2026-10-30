@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "cyder"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cyder-core",
@@ -1076,7 +1076,7 @@ dependencies = [
 
 [[package]]
 name = "cyder-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
@@ -1095,6 +1095,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

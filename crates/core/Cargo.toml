@@ -26,3 +26,7 @@ base64 = "0.22"
 md-5 = "0.10"
 # Conferir o executável baixado de uma atualização (update.rs).
 sha2 = "0.10"
+
+[target."cfg(windows)".dependencies]
+# A mesma do app: hora local para a tela inicial (moods.rs).
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Foundation"] }

@@ -113,10 +113,7 @@ impl Cyder {
         // Cabeçalho, as linhas (ou o aviso de vazio), o rodapé de "carregando mais" e o respiro embaixo do player.
         let count = rows.max(1) + 3;
         let state = self.page_lists.entry(LIST_KEY.into()).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
-        let old = state.item_count();
-        if old != count {
-            state.splice(1..old - 1, count - 2);
-        }
+        super::resize_list(&state, 1, 1, count);
         let focused = self.liked_search_focus.is_focused(window);
         list(state, cx.processor(move |this, i: usize, _window, cx| {
             if i == 0 {
@@ -263,7 +260,7 @@ impl Cyder {
         let text = if self.liked_query.is_empty() {
             div().flex_1().min_w_0().flex().items_center().when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("Buscar nas curtidas"))
         } else {
-            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.liked_query.clone()).when(focused, |d| d.child(caret()))
+            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.field_text(self.liked_query.clone(), focused)).when(focused, |d| d.child(caret()))
         };
         div()
             .id("liked-search-field")
@@ -283,7 +280,7 @@ impl Cyder {
             .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
             .text_sm()
             .cursor_text()
-            .on_click(cx.listener(|t, _, window, cx| { window.focus(&t.liked_search_focus, cx); cx.notify(); }))
+            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.liked_search_focus, cx); cx.notify(); }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.liked_search_key(e, window, cx)))
             .child(icon("search", 15., theme::ink_3()))
             .child(text)
@@ -316,7 +313,7 @@ impl Cyder {
         match k.key.as_str() {
             "escape" => self.close_liked_search(window, cx),
             "enter" => {}
-            _ if crate::view::type_into(&mut self.liked_query, k, cx) => self.liked_changed(),
+            _ if crate::view::type_into(&mut self.liked_query, k, &mut self.text_selected, cx) => self.liked_changed(),
             _ => return,
         }
         cx.stop_propagation();

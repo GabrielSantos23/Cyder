@@ -1,7 +1,7 @@
 //! Biblioteca (doc 05, tela 2): sidebar, grades, páginas de álbum/artista/playlist e a barra principal do player.
 use std::ops::Range;
 
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use cyder_core::{Card, Cmd, Device, Kind, Page, SearchKind, Shelf, Track};
 use gpui::{
@@ -19,6 +19,7 @@ pub(super) mod stats;
 use super::menus::{Menu, MenuTarget};
 use super::{Cyder, Tip, fmt, icon, loading};
 use crate::theme;
+use cyder_core::local_offset_secs;
 
 pub const SIDEBAR_W: f32 = 212.;
 pub const DOCK_H: f32 = 92.;
@@ -40,6 +41,8 @@ const SHELF_CARD: f32 = 176.;
 const SHELF_GAP: f32 = 16.;
 /// Cartões por prateleira: todos ficam montados (a rolagem é horizontal), então poucos o bastante para a RAM.
 const SHELF_MAX: usize = 12;
+/// Atalhos do topo da tela inicial: duas fileiras numa janela comum.
+const RECENT_MAX: usize = 8;
 /// Índice da prateleira de artistas parecidos (as da tela inicial começam em 0, as da busca em 100).
 const RELATED_SHELF: usize = 200;
 /// Cor da capa de "Músicas curtidas", que não tem imagem no Spotify.
@@ -261,15 +264,12 @@ impl Cyder {
         self.play_list(source, index, true);
     }
 
-    /// Marca da lista que está tocando (sidebar e cartões): o ícone da faixa tocando, pulsando enquanto toca
-    /// e parado e mais apagado quando pausado. Verde, a cor de "ativo" do app (curtida, outro aparelho): a cor
-    /// da capa saía cinza em capas sem cor forte e a marca sumia.
-    fn playing_mark(&self, id: impl Into<gpui::ElementId>, size: f32, color: u32) -> AnyElement {
-        let mark = gpui::svg().path("icons/audio-lines.svg").size(px(size)).flex_none().text_color(rgba(color));
-        if !self.playing {
-            return mark.opacity(0.6).into_any_element();
-        }
-        mark.with_animation(id, Animation::new(Duration::from_millis(1400)).repeat(), |s, t| s.opacity(1. - 0.45 * (t * std::f32::consts::PI).sin()))
+    /// Marca da lista que está tocando (sidebar e cartões): o ícone da faixa tocando, mais apagado quando pausado.
+    /// Fixo de propósito: um pulso redesenha a janela inteira a cada quadro (5–15% de GPU só para isso).
+    /// Verde, a cor de "ativo" do app (curtida, outro aparelho): a cor da capa saía cinza em capas sem cor forte.
+    fn playing_mark(&self, size: f32, color: u32) -> AnyElement {
+        gpui::svg().path("icons/audio-lines.svg").size(px(size)).flex_none().text_color(rgba(color))
+            .opacity(if self.playing { 1. } else { 0.6 })
             .into_any_element()
     }
 
@@ -502,7 +502,7 @@ impl Cyder {
             .on_click(cx.listener(|t, _, _, cx| { t.go(Screen::Section(Section::Songs)); cx.notify(); }))
             .child(div().size(px(28.)).flex_none().rounded(px(5.)).bg(rgba((LIKED_COLOR << 8) | 0xff)).flex().items_center().justify_center().child(icon("heart", 14., theme::ink_1())))
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child("Músicas curtidas"))
-            .when(liked_playing, |d| d.child(self.playing_mark("side-liked-playing", 15., LIKED_GREEN)));
+            .when(liked_playing, |d| d.child(self.playing_mark(15., LIKED_GREEN)));
         let handle = self.scroll("sidebar".into());
         // Virtualizada: só as linhas visíveis existem, e as capas são as de 64 px.
         let rows = uniform_list("sidebar-items", count, cx.processor(move |this, range: Range<usize>, _window, cx| {
@@ -536,7 +536,7 @@ impl Cyder {
                     })
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(playing_here, |d| d.text_color(accent)).child(title))
                     .when(pinned, |d| d.child(icon("pin", 12., theme::ink_3())))
-                    .when(playing_here, |d| d.child(this.playing_mark(("side-playing", i), 15., LIKED_GREEN)))
+                    .when(playing_here, |d| d.child(this.playing_mark(15., LIKED_GREEN)))
                     .into_any_element()
             }).collect::<Vec<_>>()
         }))
@@ -600,12 +600,12 @@ impl Cyder {
                 .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
                 .text_sm()
                 .cursor_text()
-                .on_click(cx.listener(|t, _, window, cx| { window.focus(&t.side_search_focus, cx); cx.notify(); }))
+                .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.side_search_focus, cx); cx.notify(); }))
                 .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.side_search_key(e, window, cx)));
             if self.side_query.is_empty() {
                 field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(format!("Buscar em {}", filter_label.to_lowercase())))
             } else {
-                field.child(div().overflow_hidden().whitespace_nowrap().child(self.side_query.clone())).when(focused, |d| d.child(caret()))
+                field.child(self.field_text(self.side_query.clone(), focused)).when(focused, |d| d.child(caret()))
             }
         });
         // Rodapé: a conta, com configurações, atalhos e sair.
@@ -966,11 +966,12 @@ impl Cyder {
         let inset = if card.kind == Kind::Artist { card_w * 0.1 } else { 10. };
         let badge = playing_here.then(|| {
             div().absolute().left(px(inset)).bottom(px(inset)).size(px(36.)).rounded_full().bg(rgba(LIKED_GREEN)).shadow_lg()
-                .flex().items_center().justify_center().child(self.playing_mark((id.0, id.1 + 900_000), 18., 0x000000ff))
+                .flex().items_center().justify_center().child(self.playing_mark(18., 0x000000ff))
         });
+        // Por fora da capa, com folga: em cima da borda dela, o contorno e o canto da imagem não coincidiam.
         let ring = playing_here.then(|| {
-            let ring = div().absolute().inset_0().border_2().border_color(rgba(LIKED_GREEN));
-            if card.kind == Kind::Artist { ring.rounded_full() } else { ring.rounded(px(12.)) }
+            let ring = div().absolute().top(px(-4.)).left(px(-4.)).right(px(-4.)).bottom(px(-4.)).border_2().border_color(rgba(LIKED_GREEN));
+            if card.kind == Kind::Artist { ring.rounded_full() } else { ring.rounded(px(16.)) }
         });
         let accent = rgba(LIKED_GREEN);
         let art = div().relative().child(art).children(ring).child(more).children(badge);
@@ -996,7 +997,9 @@ impl Cyder {
             .into_any_element()
     }
 
-    /// Tela inicial (como a Home do Apple Music no Cider): prateleiras que rolam na horizontal.
+    /// Tela inicial (como a Home do Apple Music no Cider): os atalhos do que você ouviu por último e prateleiras
+    /// que rolam na horizontal. Virtualizada: só as prateleiras à vista são desenhadas (e só as capas delas
+    /// ficam na memória); com todas desenhadas, a tela segurava mais de cem capas de uma vez.
     fn home_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let header = div()
             .pb_4()
@@ -1005,25 +1008,84 @@ impl Cyder {
             .child(div().flex_1().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Início"))
             .child(Self::chip("home-refresh", "Atualizar a tela inicial", "rotate-cw", false, true)
                 .on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::RefreshHome); cx.notify(); })));
-        let shelves = self.home_shelves();
-        let body = match shelves {
-            None => loading::home(SHELF_CARD),
-            Some(shelves) => div()
-                .id("home-scroll")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .pb(px(LIST_BOTTOM))
-                .flex()
-                .flex_col()
-                .gap(px(28.))
-                .children(shelves.into_iter().enumerate().map(|(i, mut shelf)| {
-                    shelf.cards.truncate(SHELF_MAX);
-                    self.shelf(i, shelf, cx)
-                }))
-                .into_any_element(),
+        let Some(shelves) = self.home_shelves() else {
+            return div().size_full().flex().flex_col().child(header).child(loading::home(SHELF_CARD)).into_any_element();
         };
+        let recent = self.recent_contexts(RECENT_MAX);
+        // Os atalhos, as prateleiras e o respiro embaixo do player.
+        let count = shelves.len() + 2;
+        let state = self.page_lists.entry("home".into()).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
+        if state.item_count() != count {
+            state.reset(count);
+        }
+        let body = list(state, cx.processor(move |this, i: usize, _window, cx| match i {
+            0 => this.recent_row(&recent, cx),
+            _ if i == count - 1 => div().h(px(LIST_BOTTOM)).into_any_element(),
+            _ => {
+                let mut shelf = shelves[i - 1].clone();
+                shelf.cards.truncate(SHELF_MAX);
+                div().pb(px(28.)).child(this.shelf(i - 1, shelf, cx)).into_any_element()
+            }
+        }))
+        .flex_1()
+        .min_h_0();
         div().size_full().flex().flex_col().child(header).child(body).into_any_element()
+    }
+
+    /// Álbuns, playlists e artistas tocados por último, do mais recente, com quando. O que está tocando agora
+    /// entra na frente na hora; o resto vem do histórico da conta, que chega com a tela inicial.
+    fn recent_contexts(&self, max: usize) -> Vec<(Card, u64)> {
+        let mut known: HashMap<&str, &Card> = HashMap::new();
+        let library = self.library.iter().flat_map(|l| l.playlists.iter().chain(&l.albums).chain(&l.artists));
+        for card in library.chain(self.home.iter().flatten().flat_map(|s| &s.cards)) {
+            known.entry(card.uri.as_str()).or_insert(card);
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let mut times = self.recent.clone();
+        if let Some(uri) = self.queue_context.clone().filter(|_| self.playing) {
+            times.insert(uri, now);
+        }
+        let mut out: Vec<(Card, u64)> = times.into_iter().filter_map(|(uri, at)| Some(((*known.get(uri.as_str())?).clone(), at))).collect();
+        out.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+        out.truncate(max);
+        out
+    }
+
+    /// Atalhos no topo da tela inicial: pílulas com a capa redonda, o nome e há quanto tempo tocou. Mais leves
+    /// que os cartões das prateleiras, para voltar ao que você ouvia com um clique.
+    fn recent_row(&mut self, recent: &[(Card, u64)], cx: &mut Context<Self>) -> AnyElement {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let pills = recent.iter().enumerate().map(|(j, (card, at))| {
+            let art = match card.image.as_ref().and_then(|u| self.thumbs_small.get(u)) {
+                Some(p) => img(p.clone()).size(px(40.)).rounded_full().object_fit(ObjectFit::Cover).into_any_element(),
+                None => div().size(px(40.)).rounded_full().bg(rgba(theme::wash(0x14))).flex().items_center().justify_center()
+                    .child(icon(match card.kind { Kind::Artist => "user-round", _ => "disc-3" }, 18., theme::ink_3()))
+                    .into_any_element(),
+            };
+            let playing_here = self.is_current(Some(&card.uri));
+            let open = card.clone();
+            Self::focusable(("recent-pill", j))
+                .w(px(240.))
+                .h(px(56.))
+                .pl(px(8.))
+                .pr(px(16.))
+                .rounded_full()
+                .bg(rgba(theme::wash(0x0d)))
+                .hover(|s| s.bg(rgba(theme::wash(0x1a))))
+                .flex()
+                .items_center()
+                .gap_3()
+                .aria_label(SharedString::from(format!("Abrir {} {}", kind_label(card.kind).to_lowercase(), card.title)))
+                .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(open.clone())); cx.notify(); }))
+                .child(art)
+                .child(
+                    div().flex_1().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().whitespace_nowrap().text_ellipsis()
+                        .when(playing_here, |d| d.text_color(rgba(LIKED_GREEN)))
+                        .child(card.title.clone()),
+                )
+                .child(div().flex_none().text_xs().text_color(rgba(theme::ink_2())).child(if playing_here && self.playing { "agora".to_string() } else { since(*at, now) }))
+        });
+        div().pb(px(28.)).flex().flex_wrap().gap(px(10.)).children(pills).into_any_element()
     }
 
     /// Tocadas recentemente, as playlists que o Spotify fez para você (daylist, Daily Mix, mixes salvos),
@@ -1036,7 +1098,7 @@ impl Cyder {
         let (spotify, mine): (Vec<Card>, Vec<Card>) = self.sidebar_playlists().into_iter().partition(|c| c.subtitle == "Spotify");
         let mut shelves = Vec::new();
         let mut api = from_api.into_iter();
-        shelves.extend(api.next());
+        shelves.extend(api.by_ref().take(2));
         for (title, cards) in [("Feitas para você", spotify), ("Suas playlists", mine)] {
             if !cards.is_empty() {
                 shelves.push(Shelf { title: title.into(), cards: cards.into_iter().take(SHELF_MAX).collect() });
@@ -1090,6 +1152,9 @@ impl Cyder {
                     // A roda do mouse (vertical) rola a página, não a prateleira; trackpad e Shift continuam na horizontal.
                     .restrict_scroll_to_axis()
                     .track_scroll(&handle)
+                    // Folga para o contorno de "tocando", que fica por fora da capa, sem tirar o alinhamento com o título.
+                    .p(px(4.))
+                    .m(px(-4.))
                     .flex()
                     .gap(px(SHELF_GAP))
                     .children(cards),
@@ -1402,10 +1467,7 @@ impl Cyder {
         let loaded = page.tracks.len();
         let count = loaded.max(1) + 2 + more as usize;
         let state = self.page_lists.entry(id.clone()).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
-        let old = state.item_count();
-        if old != count {
-            state.splice(1..old - 1, count - 2);
-        }
+        resize_list(&state, 1, 1, count);
         list(state, cx.processor(move |this, i: usize, _window, cx| {
             if i == 0 {
                 this.media_header(&id, cx)
@@ -2427,30 +2489,42 @@ pub(super) fn pretty_code(code: &str) -> String {
     if code.len() == 8 { format!("{}-{}", &code[..4], &code[4..]) } else { code.to_string() }
 }
 
-/// Fuso local em segundos (hora local menos UTC), para as estatísticas contarem os dias certos.
-#[cfg(windows)]
-fn local_offset_secs() -> i64 {
-    use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
-    // SAFETY: as duas só escrevem na struct passada.
-    let (local, utc) = unsafe {
-        let (mut l, mut u) = (std::mem::zeroed(), std::mem::zeroed());
-        GetLocalTime(&mut l);
-        GetSystemTime(&mut u);
-        (l, u)
-    };
-    let mins = |t: &windows_sys::Win32::Foundation::SYSTEMTIME| (t.wDay as i64 * 24 + t.wHour as i64) * 60 + t.wMinute as i64;
-    let mut diff = mins(&local) - mins(&utc);
-    // Virada de mês entre os dois relógios: o dia "1" de um contra o "31" do outro.
-    if diff > 14 * 60 {
-        diff -= (local.wDay as i64) * 24 * 60;
-    } else if diff < -14 * 60 {
-        diff += (utc.wDay as i64) * 24 * 60;
+/// "há 5 min", "há 3 h", "ontem", "há 4 dias": o quanto faz que uma lista tocou.
+fn since(at: u64, now: u64) -> String {
+    let secs = now.saturating_sub(at);
+    match secs {
+        0..3600 => format!("há {} min", (secs / 60).max(1)),
+        3600..86_400 => format!("há {} h", secs / 3600),
+        86_400..172_800 => "ontem".into(),
+        _ => format!("há {} dias", secs / 86_400),
     }
-    // Arredonda a 15 minutos (os fusos existentes).
-    ((diff as f64 / 15.).round() as i64) * 15 * 60
 }
 
-#[cfg(not(windows))]
-fn local_offset_secs() -> i64 {
-    0
+/// Muda a contagem de uma lista com `head` itens fixos no começo e `tail` no fim, mexendo só de onde as linhas
+/// antigas e as novas deixam de coincidir. Com `splice` em todo o miolo, carregar mais faixas no fim jogava a
+/// rolagem de volta para o topo. A última linha antes do rodapé ("carregando mais") é refeita junto.
+pub(super) fn resize_list(state: &ListState, head: usize, tail: usize, count: usize) {
+    let old = state.item_count();
+    if old == count {
+        return;
+    }
+    let start = head + old.saturating_sub(head + tail + 1).min(count.saturating_sub(head + tail));
+    state.splice(start..old - tail, count - tail - start);
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{ListAlignment, ListState, px};
+
+    #[test]
+    fn resize_list_keeps_loaded_rows() {
+        // Cabeçalho, 100 faixas, "carregando mais", respiro → 200 faixas carregadas.
+        let state = ListState::new(103, ListAlignment::Top, px(600.));
+        super::resize_list(&state, 1, 1, 203);
+        assert_eq!(state.item_count(), 203);
+        super::resize_list(&state, 1, 1, 5);
+        assert_eq!(state.item_count(), 5);
+        super::resize_list(&state, 1, 1, 5);
+        assert_eq!(state.item_count(), 5);
+    }
 }

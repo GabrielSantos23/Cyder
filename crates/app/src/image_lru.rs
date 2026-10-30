@@ -1,6 +1,6 @@
 //! Cache de imagens com limite: sem ele, o `img()` do GPUI guarda para sempre cada capa decodificada
 //! (e a textura dela na GPU), e a RAM só cresce enquanto se navega. Baseado no exemplo `image_gallery` do GPUI.
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
 
 use gpui::{App, AppContext, Context, ElementId, Entity, ImageCache, ImageCacheError, ImageCacheItem, ImageCacheProvider, RenderImage, Resource, Window, hash};
 
@@ -28,8 +28,8 @@ impl ImageCacheProvider for LruProvider {
 
 pub struct Lru {
     max_items: usize,
-    /// Mais recente primeiro.
-    usages: Vec<u64>,
+    /// Mais recente primeiro, com quando foi pedida.
+    usages: Vec<(u64, Instant)>,
     items: HashMap<u64, ImageCacheItem>,
 }
 
@@ -51,15 +51,20 @@ impl ImageCache for Lru {
     fn load(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let key = hash(resource);
         if let Some(item) = self.items.get_mut(&key) {
-            if let Some(ix) = self.usages.iter().position(|k| *k == key) {
+            if let Some(ix) = self.usages.iter().position(|(k, _)| *k == key) {
                 self.usages.remove(ix);
             }
-            self.usages.insert(0, key);
+            self.usages.insert(0, (key, Instant::now()));
             return item.use_image(window);
         }
-        // Cheio: sai a usada há mais tempo, liberando a imagem e a textura.
+        // Cheio: sai a usada há mais tempo, liberando a imagem e a textura. Nunca uma pedida há menos de um
+        // segundo: ela ainda está na tela, e tirá-la faz a tela pedir de novo, tirando outra, sem fim (com mais
+        // capas na tela que o limite, nenhuma aparecia). Nesse caso o cache passa do limite até sair da tela.
         while self.usages.len() >= self.max_items {
-            let Some(oldest) = self.usages.pop() else { break };
+            if self.usages.last().is_some_and(|(_, at)| at.elapsed() < Duration::from_secs(1)) {
+                break;
+            }
+            let Some((oldest, _)) = self.usages.pop() else { break };
             if let Some(Ok(image)) = self.items.remove(&oldest).and_then(|item| item.get()) {
                 cx.drop_image(image, Some(window));
             }
@@ -67,7 +72,7 @@ impl ImageCache for Lru {
         let item = ImageCacheItem::new(resource, cx);
         let result = item.use_image(window);
         self.items.insert(key, item);
-        self.usages.insert(0, key);
+        self.usages.insert(0, (key, Instant::now()));
         result
     }
 }
