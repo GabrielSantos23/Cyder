@@ -15,6 +15,8 @@ pub struct PlayerState {
     pub shuffle: bool,
     pub repeat: Repeat,
     pub track: Option<Track>,
+    /// Álbum ou playlist de onde a faixa toca, quando há um.
+    pub context: Option<String>,
 }
 use serde_json::json;
 
@@ -213,6 +215,7 @@ impl WebApi {
                 _ => Repeat::Off,
             },
             track: parse_track(&b["item"]),
+            context: b["context"]["uri"].as_str().map(str::to_string),
         }))
     }
 
@@ -360,11 +363,16 @@ impl WebApi {
             log::warn!("podcasts salvos: {e}");
             Vec::new()
         });
+        // Álbuns e podcasts vêm com a data; playlists e artistas o engine completa pela sessão.
+        let added = albums.iter().map(|i| (i, &i["album"])).chain(shows.iter().map(|i| (i, &i["show"])))
+            .filter_map(|(i, item)| Some((item["uri"].as_str()?.to_string(), iso_to_unix(i["added_at"].as_str()?)?)))
+            .collect();
         Ok(Library {
             albums: albums.iter().filter_map(|i| album_card(&i["album"])).collect(),
             artists: artists.iter().filter_map(artist_card).collect(),
             playlists: playlists.iter().filter_map(playlist_card).collect(),
             shows: shows.iter().filter_map(|i| show_card(&i["show"])).collect(),
+            added,
         })
     }
 

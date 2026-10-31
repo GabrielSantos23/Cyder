@@ -29,7 +29,9 @@ pub async fn audio_session(cache_dir: &Path) -> Result<(Session, Credentials), S
     let limit = settings.audio_cache.then_some(settings.audio_cache_mb as u64 * 1024 * 1024);
     let cache = Cache::new(Some(cache_dir.join("credentials")), None, audio, limit).map_err(err)?;
     // Como no Spotify: quando o álbum ou a playlist acaba, segue com músicas parecidas.
-    let config = SessionConfig { autoplay: Some(settings.autoplay), ..SessionConfig::default() };
+    let defaults = SessionConfig::default();
+    let device_id = crate::config::device_id(|| defaults.device_id.clone());
+    let config = SessionConfig { autoplay: Some(settings.autoplay), device_id, ..defaults };
     let credentials = match cache.credentials() {
         Some(c) => c,
         None => {

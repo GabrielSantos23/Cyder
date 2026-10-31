@@ -48,7 +48,7 @@ const RELATED_SHELF: usize = 200;
 /// Cor da capa de "Músicas curtidas", que não tem imagem no Spotify.
 const LIKED_COLOR: u32 = 0x6d4aff;
 /// Verde do coração das faixas curtidas, o do Spotify.
-const LIKED_GREEN: u32 = 0x1ed760ff;
+pub(super) const LIKED_GREEN: u32 = 0x1ed760ff;
 const PAD: f32 = 32.;
 const ROW_H: f32 = 48.;
 const CARD_MIN: f32 = 168.;
@@ -80,6 +80,25 @@ pub enum SideFilter {
     Artists,
     Albums,
     Podcasts,
+}
+
+/// Listas que lembram o aleatório, cada tipo o seu (`Settings::shuffle_playlists`/`shuffle_albums`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ListKind {
+    Playlists,
+    Albums,
+}
+
+impl ListKind {
+    pub fn of(uri: &str) -> Option<Self> {
+        if uri.starts_with("spotify:playlist:") {
+            Some(Self::Playlists)
+        } else if uri.starts_with("spotify:album:") {
+            Some(Self::Albums)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,6 +263,16 @@ impl Cyder {
     /// `shuffle_start`: veio do botão Aleatório; o Spotify sorteia a primeira (`index` só adianta a tela).
     fn play_list(&mut self, source: &TrackSource, index: usize, shuffle_start: bool) {
         let tracks = self.source_tracks(source).to_vec();
+        // Uma música da busca toca sozinha e depois o rádio dela, como no Spotify; as outras da busca não entram.
+        if let (TrackSource::Search, false, Some(t)) = (source, shuffle_start, tracks.get(index).cloned()) {
+            self.remember_search();
+            let label = format!("Rádio: {}", t.name);
+            self.queue_label = label.clone();
+            self.queue_context = None;
+            self.send(Cmd::Play { tracks: vec![t.clone()], index: 0, context: None, label, shuffle_start: false });
+            self.send(Cmd::SearchRadio(t));
+            return;
+        }
         let (context, label) = match source {
             TrackSource::Liked => (None, "Músicas curtidas".to_string()),
             TrackSource::Page(id) => self.pages.get(id).map_or((None, String::new()), |p| (Some(p.card.uri.clone()), p.card.title.clone())),
@@ -252,16 +281,117 @@ impl Cyder {
                 (None, format!("Busca: {}", self.search_query.trim()))
             }
         };
+        self.use_saved_shuffle(self.source_kind(source));
         self.queue_label = label.clone();
         self.queue_context = context.clone();
         self.send(Cmd::Play { tracks, index, context, label, shuffle_start });
     }
 
-    fn shuffle_from(&mut self, source: &TrackSource) {
-        self.shuffle = true;
-        self.send(Cmd::SetShuffle(true));
-        let index = random_index(self.source_tracks(source).len());
-        self.play_list(source, index, true);
+    /// Tira o que vem depois da atual. A tela responde já; o engine confirma com a fila nova.
+    fn clear_queue(&mut self) {
+        self.tracks.truncate(self.current + 1);
+        self.up_next = None;
+        self.queue_label.clear();
+        self.queue_context = None;
+        self.notify("Fila limpa.");
+        self.send(Cmd::ClearQueue);
+    }
+
+    /// Tipo de lista com aleatório próprio; as curtidas contam como playlist. Busca e artista não têm.
+    fn source_kind(&self, source: &TrackSource) -> Option<ListKind> {
+        match source {
+            TrackSource::Liked => Some(ListKind::Playlists),
+            TrackSource::Page(id) => self.pages.get(id).and_then(|p| ListKind::of(&p.card.uri)),
+            TrackSource::Search => None,
+        }
+    }
+
+    /// Tipo da lista que está tocando.
+    fn current_kind(&self) -> Option<ListKind> {
+        match &self.queue_context {
+            Some(uri) => ListKind::of(uri),
+            None => (self.queue_label == "Músicas curtidas").then_some(ListKind::Playlists),
+        }
+    }
+
+    pub(super) fn saved_shuffle(&self, kind: ListKind) -> bool {
+        match kind {
+            ListKind::Playlists => self.settings.shuffle_playlists,
+            ListKind::Albums => self.settings.shuffle_albums,
+        }
+    }
+
+    pub(super) fn save_shuffle(&mut self, kind: ListKind, on: bool) {
+        self.change(|s| match kind {
+            ListKind::Playlists => s.shuffle_playlists = on,
+            ListKind::Albums => s.shuffle_albums = on,
+        }, false);
+    }
+
+    /// O aleatório mudou tocando uma playlist ou um álbum: vale para as próximas do mesmo tipo.
+    pub(super) fn remember_shuffle(&mut self) {
+        if let Some(kind) = self.current_kind() {
+            self.save_shuffle(kind, self.shuffle || self.smart);
+        }
+    }
+
+    /// Antes de tocar uma playlist ou um álbum: o aleatório lembrado para esse tipo.
+    fn use_saved_shuffle(&mut self, kind: Option<ListKind>) {
+        let Some(on) = kind.map(|k| self.saved_shuffle(k)) else { return };
+        if on == self.shuffle {
+            return;
+        }
+        if !on && self.smart {
+            self.smart = false;
+            self.send(Cmd::SmartShuffle(false));
+        }
+        self.shuffle = on;
+        self.send(Cmd::SetShuffle(on));
+    }
+
+    /// Tocar a lista: com o aleatório ligado, o Spotify sorteia a primeira, como no app dele.
+    fn play_start(&mut self, source: &TrackSource) {
+        self.use_saved_shuffle(self.source_kind(source));
+        if self.shuffle {
+            let index = random_index(self.source_tracks(source).len());
+            self.play_list(source, index, true);
+        } else {
+            self.play_from(source, 0);
+        }
+    }
+
+    /// Aleatório das páginas, como no Spotify: só liga e desliga o modo, não toca nada.
+    /// Na lista que está tocando (ou sem tipo, como artista e busca): desligado → aleatório → smart shuffle →
+    /// desligado, igual ao botão do player. Numa playlist ou álbum que não está tocando, liga e desliga o
+    /// aleatório lembrado para esse tipo, que vale quando ela começar.
+    pub(super) fn shuffle_toggle(&self, toggle_id: &'static str, size: f32, icon_size: f32, kind: Option<ListKind>, here: bool, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(kind) = kind.filter(|_| !here) {
+            let on = self.saved_shuffle(kind);
+            return Self::bar_button(toggle_id, if on { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), size, on)
+                .flex_none()
+                .on_click(cx.listener(move |t, _, _, cx| { t.save_shuffle(kind, !on); cx.notify(); }))
+                .child(icon("shuffle", icon_size, if on { LIKED_GREEN } else { theme::ink_2() }))
+                .into_any_element();
+        }
+        let label = match (self.shuffle, self.smart) {
+            (_, true) => "Smart shuffle: ligado. Clique para desligar",
+            (true, false) => "Aleatório: ligado. Clique para o smart shuffle",
+            (false, _) => "Aleatório: desligado",
+        };
+        Self::bar_button(toggle_id, label.into(), size, self.shuffle || self.smart)
+            .flex_none()
+            .on_click(cx.listener(|t, _, _, cx| { t.cycle_shuffle(); cx.notify(); }))
+            .child(self.shuffle_icon(icon_size, theme::ink_2()))
+            .into_any_element()
+    }
+
+    /// Ícone do modo: ligado fica verde, como no Spotify; `off` é a cor do botão desligado.
+    pub(super) fn shuffle_icon(&self, size: f32, off: u32) -> gpui::Svg {
+        match (self.shuffle, self.smart) {
+            (_, true) => icon("shuffle-smart", size, LIKED_GREEN),
+            (true, false) => icon("shuffle", size, LIKED_GREEN),
+            (false, _) => icon("shuffle", size, off),
+        }
     }
 
     /// Marca da lista que está tocando (sidebar e cartões): o ícone da faixa tocando, mais apagado quando pausado.
@@ -408,7 +538,8 @@ impl Cyder {
                     .child(self.content(window, content_w, cx)),
             )
             .child(self.toolbar(cx))
-            .child(self.dock(cx))
+            // Sem nada tocado ainda (primeira abertura), sem player: ele aparece no primeiro play.
+            .children((!self.tracks.is_empty()).then(|| self.dock(cx)))
             .children(self.remote_banner(cx))
             .children(self.listen_banner(cx))
             .children(self.limit_banner());
@@ -680,6 +811,7 @@ impl Cyder {
                 if let Some(l) = lib {
                     v.extend(l.albums.iter().cloned());
                     v.extend(l.artists.iter().cloned());
+                    v.extend(l.shows.iter().cloned());
                 }
                 v
             }
@@ -692,6 +824,14 @@ impl Cyder {
         if !self.library_order.is_empty() {
             let pos: std::collections::HashMap<&str, usize> = self.library_order.iter().enumerate().map(|(i, u)| (u.as_str(), i + 1)).collect();
             items.sort_by_key(|c| (!self.pins.contains(&c.uri), pos.get(c.uri.as_str()).copied().unwrap_or(0)));
+        } else {
+            // Como o "Adicionados recentemente" do Spotify: fixadas no topo, na ordem delas; o resto do mais novo
+            // ao mais antigo, todos os tipos misturados. Sem data (o Spotify não informou) vai para o fim.
+            let added = lib.map(|l| &l.added);
+            items.sort_by_key(|c| match self.pins.iter().position(|p| *p == c.uri) {
+                Some(i) => (0, i as i64),
+                None => (1, -(added.and_then(|a| a.get(&c.uri)).copied().unwrap_or(0) as i64)),
+            });
         }
         let q = self.side_query.trim().to_lowercase();
         if !q.is_empty() {
@@ -743,6 +883,15 @@ impl Cyder {
         self.lyrics.retain(|i, _| *i <= current);
         self.art.retain(|i, _| *i <= current);
         self.send(Cmd::MoveQueue { from, to });
+    }
+
+    /// Arrastar na fila do Spotify (aleatório ligado): reorganiza já na tela e manda as URIs para o player.
+    fn move_up_next(&mut self, from: usize, to: usize) {
+        let Some(list) = self.up_next.as_mut().filter(|l| from != to && from < l.len() && to < l.len()) else { return };
+        let (from_uri, to_uri) = (list[from].uri.clone(), list[to].uri.clone());
+        let t = list.remove(from);
+        list.insert(to, t);
+        self.send(Cmd::MoveUpNext { from_uri, to_uri });
     }
 
     /// Fixadas primeiro (na ordem em que foram fixadas); depois as tocadas por último; o resto na ordem do Spotify.
@@ -826,21 +975,22 @@ impl Cyder {
     }
 
     fn play_buttons(&self, source: TrackSource, cx: &mut Context<Self>) -> impl IntoElement {
-        let s2 = source.clone();
         let context = match &source {
             TrackSource::Liked | TrackSource::Search => None,
             TrackSource::Page(id) => self.pages.get(id).map(|p| p.card.uri.clone()),
         };
         let here = self.is_current(context.as_deref());
+        let kind = self.source_kind(&source);
         div()
             .flex()
+            .items_center()
             .gap_2()
             .child(Self::primary_button("play-list", if here && self.playing { "Pausar" } else { "Tocar" })
                 .on_click(cx.listener(move |t, _, _, cx| {
-                    if here { t.send(Cmd::Toggle) } else { t.play_from(&source, 0) }
+                    if here { t.send(Cmd::Toggle) } else { t.play_start(&source) }
                     cx.notify();
                 })))
-            .child(Self::secondary_button("shuffle-list", "Aleatório").on_click(cx.listener(move |t, _, _, cx| { t.shuffle_from(&s2); cx.notify(); })))
+            .child(self.shuffle_toggle("shuffle-list", 36., 18., kind, here, cx))
     }
 
     fn track_list(&mut self, source: TrackSource, covers: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -1267,7 +1417,7 @@ impl Cyder {
         let source = TrackSource::Page(c.id.clone());
         let here = self.is_current(Some(&c.uri));
         let pause = here && self.playing;
-        let (s2, play_card, shuffle_card) = (source.clone(), c.clone(), c.clone());
+        let play_card = c.clone();
         let round = |button_id: &'static str, size: f32, label: &'static str| {
             Self::focusable(button_id).size(px(size)).flex_none().rounded_full().flex().items_center().justify_center().tip(label)
         };
@@ -1278,27 +1428,14 @@ impl Cyder {
                 if here {
                     t.send(Cmd::Toggle);
                 } else if has_top {
-                    t.play_from(&source, 0);
+                    t.play_start(&source);
                 } else {
                     t.play_context(&play_card);
                 }
                 cx.notify();
             }))
             .child(icon(if pause { "pause" } else { "play" }, 22., theme::on_ink()));
-        let shuffle = round("artist-shuffle", 44., "Tocar o artista em ordem aleatória")
-            .bg(rgba(theme::wash(0x26)))
-            .hover(|s| s.bg(rgba(theme::wash(0x40))))
-            .on_click(cx.listener(move |t, _, _, cx| {
-                if has_top {
-                    t.shuffle_from(&s2);
-                } else {
-                    t.shuffle = true;
-                    t.send(Cmd::SetShuffle(true));
-                    t.play_context(&shuffle_card);
-                }
-                cx.notify();
-            }))
-            .child(icon("shuffle", 18., theme::ink_1()));
+        let shuffle = self.shuffle_toggle("artist-shuffle", 44., 20., None, here, cx);
         div()
             .relative()
             .w_full()
@@ -1565,30 +1702,21 @@ impl Cyder {
                 .child(label)
         };
         let source = TrackSource::Page(c.id.clone());
-        let (play_card, shuffle_card, menu_card) = (c.clone(), c.clone(), c.clone());
-        let s2 = source.clone();
+        let (play_card, menu_card) = (c.clone(), c.clone());
         let here = self.is_current(Some(&c.uri));
         let pause = here && self.playing;
         let play = pill("page-play", if pause { "Pausar" } else { "Tocar" }, if pause { "pause" } else { "play" }).on_click(cx.listener(move |t, _, _, cx| {
             if here {
                 t.send(Cmd::Toggle);
             } else if by_uri {
+                // Pela URI, sem faixa escolhida: com o aleatório ligado, o Spotify sorteia a primeira.
                 t.play_context(&play_card);
             } else {
-                t.play_from(&source, 0);
+                t.play_start(&source);
             }
             cx.notify();
         }));
-        let shuffle = pill("page-shuffle", "Aleatório", "shuffle").on_click(cx.listener(move |t, _, _, cx| {
-            if by_uri {
-                t.shuffle = true;
-                t.send(Cmd::SetShuffle(true));
-                t.play_context(&shuffle_card);
-            } else {
-                t.shuffle_from(&s2);
-            }
-            cx.notify();
-        }));
+        let shuffle = self.shuffle_toggle("page-shuffle", 36., 18., ListKind::of(&c.uri), here, cx);
         // Podcast: seguir pela página, como no Spotify.
         let following = self.library.as_ref().is_some_and(|l| l.shows.iter().any(|s| s.id == c.id));
         let follow_card = c.clone();
@@ -1718,6 +1846,7 @@ impl Cyder {
 
     /// Toca uma playlist pela URI, sem a lista de faixas (o Spotify resolve).
     pub(super) fn play_context(&mut self, card: &Card) {
+        self.use_saved_shuffle(ListKind::of(&card.uri));
         self.queue_label = card.title.clone();
         self.queue_context = Some(card.uri.clone());
         self.send(Cmd::Play { tracks: Vec::new(), index: 0, context: Some(card.uri.clone()), label: card.title.clone(), shuffle_start: false });
@@ -2206,8 +2335,8 @@ impl Cyder {
             .child(
                 div().flex().items_center().gap_1()
                     .child(Self::bar_button("queue-shuffle", if self.shuffle { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), 32., self.shuffle)
-                        .on_click(cx.listener(|t, _, _, cx| { t.shuffle = !t.shuffle; t.send(Cmd::SetShuffle(t.shuffle)); cx.notify(); }))
-                        .child(icon("shuffle", 15., mode_color(self.shuffle))))
+                        .on_click(cx.listener(|t, _, _, cx| { t.shuffle = !t.shuffle; t.send(Cmd::SetShuffle(t.shuffle)); t.remember_shuffle(); cx.notify(); }))
+                        .child(self.shuffle_icon(15., mode_color(false))))
                     .child(Self::bar_button("queue-repeat", "Repetir".into(), 32., self.repeat != cyder_core::player::Repeat::Off)
                         .on_click(cx.listener(|t, _, _, cx| { t.cycle_repeat(); cx.notify(); }))
                         .child(icon(if self.repeat == cyder_core::player::Repeat::One { "repeat-1" } else { "repeat" }, 15., mode_color(self.repeat != cyder_core::player::Repeat::Off))))
@@ -2215,18 +2344,20 @@ impl Cyder {
                     .child(div().px_3().py_1().rounded_full().bg(rgba(theme::wash(0x12))).text_xs().text_color(rgba(theme::ink_2())).child(items)),
             )
             .child(heading("Tocando agora"))
-            .children(now.map(|t| self.queue_row(&t, None, true, cx)))
+            .children(now.map(|t| self.queue_row(&t, None, None, true, cx)))
             .child(
-                div().mt_2().flex().items_end()
-                    .child(div().flex_1().flex().flex_col()
-                        .child(heading("A seguir"))
-                        .when(!self.queue_label.is_empty(), |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(format!("De {}", self.queue_label)))))
-                    .when(!self.tracks.is_empty() && !from_spotify, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(format!("{} de {}", self.current + 1, self.tracks.len())))),
+                div().mt_2().flex().flex_col().gap_0p5()
+                    // De onde vem a fila em cima (cortado se for longo); embaixo o título e a ação, como no Spotify.
+                    .child(div().flex().items_center().gap_2().text_xs().text_color(rgba(theme::ink_3()))
+                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis()
+                            .when(!self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label))))
+                        .when(!self.tracks.is_empty() && !from_spotify, |d| d.child(div().flex_none().child(format!("{} de {}", self.current + 1, self.tracks.len())))))
+                    .child(div().flex().items_center().gap_2()
+                        .child(div().flex_1().child(heading("A seguir")))
+                        // Tocando em outro aparelho, a fila é a dele: a Web API não deixa limpar.
+                        .when(upcoming > 0 && self.remote.is_none(), |d| d.child(Self::text_button("queue-clear", "Limpar fila").flex_none()
+                            .on_click(cx.listener(|t, _, _, cx| { t.clear_queue(); cx.notify(); }))))),
             )
-            .when(from_spotify, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3()))
-                .child(if self.shuffle { "Na ordem do Spotify (até 20 próximas). Desligue o aleatório para reorganizar." } else { "Na ordem do Spotify (até 20 próximas)." })))
-            .when(!from_spotify && self.shuffle && upcoming > 0, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3()))
-                .child("Na ordem da lista; o aleatório sorteia ao tocar.")))
             .child(if upcoming == 0 { Self::quiet("Nada na fila depois desta.").into_any_element() } else { list.into_any_element() })
             .child(
                 div().mb_1().flex().justify_center().child(
@@ -2239,23 +2370,24 @@ impl Cyder {
     fn queue_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if let Some(list) = self.spotify_queue().cloned() {
             return range
-                .filter_map(|i| list.get(i).cloned())
-                .map(|t| {
+                .filter_map(|i| Some((i, list.get(i).cloned()?)))
+                .map(|(i, t)| {
                     let index = self.tracks.iter().position(|x| x.uri == t.uri);
-                    self.queue_row(&t, index, false, cx)
+                    self.queue_row(&t, index, Some(i), false, cx)
                 })
                 .collect();
         }
         range
             .filter_map(|i| {
                 let index = self.current + 1 + i;
-                self.tracks.get(index).cloned().map(|t| self.queue_row(&t, Some(index), false, cx))
+                self.tracks.get(index).cloned().map(|t| self.queue_row(&t, Some(index), None, false, cx))
             })
             .collect()
     }
 
     /// Linha da fila. `index`: posição na fila, para tocar a partir dela (None = a que está tocando).
-    fn queue_row(&mut self, t: &Track, index: Option<usize>, current: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// `spotify`: posição na fila do Spotify, quando é ela que aparece (aleatório ligado).
+    fn queue_row(&mut self, t: &Track, index: Option<usize>, spotify: Option<usize>, current: bool, cx: &mut Context<Self>) -> AnyElement {
         let thumb = t.cover_small.as_ref().and_then(|u| self.thumbs.get(u)).cloned();
         let cover = match thumb {
             Some(p) => img(p).size(px(40.)).rounded(px(6.)).into_any_element(),
@@ -2263,13 +2395,23 @@ impl Cyder {
         };
         let menu_track = t.clone();
         let accent = self.accent_ink();
-        // Só a nossa lista dá para reorganizar: com aleatório ou outro aparelho, quem manda na ordem é o Spotify.
-        let draggable = !current && self.spotify_queue().is_none() && self.remote.is_none();
-        let row = Self::focusable(("queue-row", index.unwrap_or(usize::MAX)))
-            .when_some(index.filter(|_| draggable), |d, i| d
+        // Arrasta pela posição na lista que aparece: a nossa ou, com o aleatório, a do Spotify (o player troca
+        // a ordem das próximas dele). Com outro aparelho tocando, a Web API não deixa reorganizar.
+        let drag = if current || self.remote.is_some() {
+            None
+        } else if self.spotify_queue().is_some() {
+            spotify.map(|i| (i, true))
+        } else {
+            index.map(|i| (i, false))
+        };
+        let row = Self::focusable(("queue-row", spotify.or(index).unwrap_or(usize::MAX)))
+            .when_some(drag, |d, (i, from_spotify)| d
                 .on_drag(QueueDrag { from: i, title: t.name.clone() }, |q, _, _, cx| cx.new(|_| DragGhost(q.title.clone().into())))
                 .drag_over::<QueueDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
-                .on_drop(cx.listener(move |this, q: &QueueDrag, _, cx| { this.move_queue(q.from, i); cx.notify(); })))
+                .on_drop(cx.listener(move |this, q: &QueueDrag, _, cx| {
+                    if from_spotify { this.move_up_next(q.from, i) } else { this.move_queue(q.from, i) }
+                    cx.notify();
+                })))
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
             .w_full()
             .h(px(52.))
@@ -2290,7 +2432,7 @@ impl Cyder {
             // Recomendada pelo smart shuffle, como no Spotify.
             .when(!current && self.smart_added.contains(&t.uri), |d| d.child(icon("sparkles", 14., theme::ink_2())))
             .when(current, |d| d.child(now_icon(accent)))
-            .when(draggable && index.is_some(), |d| d.child(icon("grip-vertical", 14., theme::ink_3())));
+            .when(drag.is_some(), |d| d.child(icon("grip-vertical", 14., theme::ink_3())));
         match index {
             Some(i) => row
                 .aria_label(SharedString::from(format!("Tocar {}", t.name)))

@@ -25,6 +25,7 @@ base64 = "0.22"
 # Assinatura dos pedidos do Last.fm; já vem com o librespot.
 md-5 = "0.10"
 # Conferir o executável baixado de uma atualização (update.rs).
+sha1 = "0.10"
 sha2 = "0.10"
 
 [target."cfg(windows)".dependencies]

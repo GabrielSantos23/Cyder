@@ -74,6 +74,8 @@ enum Action {
     Credits(Track),
     Sleep(Option<SleepChoice>),
     Filter(SideFilter),
+    /// Volta a sidebar para "mais novos primeiro", descartando a ordem arrastada à mão.
+    LibraryByAdded,
     /// Escolher a ordem já escolhida inverte a direção.
     LikedSort(LikedSort),
     LikedCompact(bool),
@@ -140,16 +142,27 @@ impl Cyder {
         match target {
             MenuTarget::Card(card) => self.card_entries(card),
             MenuTarget::Track(track) => self.track_entries(track),
-            MenuTarget::SidebarFilter => [
-                (SideFilter::All, "Tudo", "layout-grid"),
-                (SideFilter::Playlists, "Playlists", "list-music"),
-                (SideFilter::Artists, "Artistas", "user-round"),
-                (SideFilter::Albums, "Álbuns", "disc-3"),
-                (SideFilter::Podcasts, "Podcasts", "podcast"),
-            ]
-            .into_iter()
-            .map(|(f, label, icon)| Entry::Item(Item { label: label.into(), icon, action: Some(Action::Filter(f)), sub: Vec::new(), checked: self.side_filter == f, mark: "check" }))
-            .collect(),
+            MenuTarget::SidebarFilter => {
+                let mut out: Vec<Entry> = [
+                    (SideFilter::All, "Tudo", "layout-grid"),
+                    (SideFilter::Playlists, "Playlists", "list-music"),
+                    (SideFilter::Artists, "Artistas", "user-round"),
+                    (SideFilter::Albums, "Álbuns", "disc-3"),
+                    (SideFilter::Podcasts, "Podcasts", "podcast"),
+                ]
+                .into_iter()
+                .map(|(f, label, icon)| Entry::Item(Item { label: label.into(), icon, action: Some(Action::Filter(f)), sub: Vec::new(), checked: self.side_filter == f, mark: "check" }))
+                .collect();
+                // Arrastar um item muda para a ordem personalizada; ela só aparece aqui para mostrar que está valendo.
+                let custom = !self.library_order.is_empty();
+                out.push(Entry::Sep);
+                out.push(Entry::Heading("Ordenar por"));
+                out.push(Entry::Item(Item { label: "Adicionados recentemente".into(), icon: "clock", action: Some(Action::LibraryByAdded), sub: Vec::new(), checked: !custom, mark: "check" }));
+                if custom {
+                    out.push(Entry::Item(Item { label: "Ordem personalizada".into(), icon: "grip-vertical", action: None, sub: Vec::new(), checked: true, mark: "check" }));
+                }
+                out
+            }
             MenuTarget::LikedSort => {
                 let o = self.liked_order;
                 let mut out = vec![Entry::Heading("Ordenar por")];
@@ -334,6 +347,10 @@ impl Cyder {
                     self.shuffle = shuffle;
                     self.send(Cmd::SetShuffle(shuffle));
                 }
+                // Escolha explícita no menu: vira o aleatório lembrado para esse tipo de lista.
+                if let Some(kind) = super::library::ListKind::of(&card.uri) {
+                    self.save_shuffle(kind, shuffle);
+                }
                 self.play_context(&card);
             }
             Action::Save { card, save } => self.save_card(card, save),
@@ -379,6 +396,10 @@ impl Cyder {
             Action::Filter(f) => {
                 self.side_filter = f;
                 self.refocus = true;
+            }
+            Action::LibraryByAdded => {
+                self.library_order.clear();
+                self.send(Cmd::SaveLibraryOrder(Vec::new()));
             }
             Action::Settings => self.go(Screen::Settings),
             Action::Rename(card) => self.ask_playlist_name(Some(card)),

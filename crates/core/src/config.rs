@@ -25,6 +25,22 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+/// Id do Cyder no Spotify Connect, o mesmo a cada abertura. O librespot sorteia um novo por sessão, e aí o "Cyder"
+/// da execução anterior ainda aparecia como ativo e tocando: o app novo o seguia como outro aparelho.
+pub fn device_id(fresh: impl FnOnce() -> String) -> String {
+    let path = config_dir().join("device-id");
+    match std::fs::read_to_string(&path) {
+        Ok(id) if !id.trim().is_empty() => id.trim().to_string(),
+        _ => {
+            let id = fresh();
+            if let Err(e) = std::fs::create_dir_all(config_dir()).and_then(|_| std::fs::write(&path, &id)) {
+                log::warn!("device-id: {e}");
+            }
+            id
+        }
+    }
+}
+
 /// Playlists fixadas no topo da sidebar. Ficam na pasta de configuração, não no cache: são escolha do usuário.
 fn load_list(file: &str) -> Vec<String> {
     std::fs::read_to_string(config_dir().join(file)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
@@ -139,6 +155,10 @@ pub struct Settings {
     /// Mostra no Discord o que está tocando, pelo app que o usuário criou no Discord.
     pub discord: bool,
     pub discord_app_id: String,
+    /// Aleatório lembrado por tipo de lista, como no Spotify: ligar numa playlist (ou nas curtidas) liga para
+    /// as próximas playlists; álbuns têm o deles.
+    pub shuffle_playlists: bool,
+    pub shuffle_albums: bool,
 }
 
 impl Default for Settings {
@@ -161,6 +181,8 @@ impl Default for Settings {
             fade_secs: 0,
             discord: false,
             discord_app_id: String::new(),
+            shuffle_playlists: false,
+            shuffle_albums: false,
         }
     }
 }

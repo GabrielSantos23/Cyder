@@ -200,18 +200,11 @@ impl Cyder {
                 if here {
                     t.send(Cmd::Toggle);
                 } else if !t.liked_view.is_empty() {
-                    t.play_from(&TrackSource::Liked, 0);
+                    t.play_start(&TrackSource::Liked);
                 }
                 cx.notify();
             }));
-        let shuffle = pill("liked-shuffle", "Aleatório", "shuffle")
-            .when(empty, |d| d.opacity(0.4))
-            .on_click(cx.listener(|t, _, _, cx| {
-                if !t.liked_view.is_empty() {
-                    t.shuffle_from(&TrackSource::Liked);
-                }
-                cx.notify();
-            }));
+        let shuffle = self.shuffle_toggle("liked-shuffle", 36., 18., Some(super::ListKind::Playlists), here, cx);
         div()
             .w_full()
             .px(px(12.))

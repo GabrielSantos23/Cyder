@@ -45,6 +45,10 @@ pub enum PlayerCmd {
     Reload { queue: Vec<Track>, index: usize, position_ms: u32 },
     /// Religa o player com as configurações salvas (qualidade, nome, cache…), na mesma fila e posição.
     Restart,
+    /// Reorganiza as próximas do Spirc (a ordem do aleatório) sem recarregar: `from_uri` vai para o lugar de `to_uri`.
+    MoveNext { from_uri: String, to_uri: String },
+    /// Outro aparelho está tocando a faixa `index` da fila: o próximo play por aqui continua dela, nesse contexto.
+    Follow { index: usize, context: Option<String>, position_ms: u32 },
 }
 
 pub enum PlayerOut {
@@ -156,6 +160,10 @@ impl State {
 
     /// Entrega a fila ao Spirc. Isto torna o app o dispositivo ativo da conta.
     fn start(&mut self, play: bool) {
+        // Nada escolhido ainda (primeira abertura): tecla de mídia ou Espaço não têm o que tocar.
+        if self.queue.is_empty() && self.context.is_none() {
+            return;
+        }
         let playing = self.queue.get(self.index).map(|t| t.uri.clone());
         let options = LoadRequestOptions {
             start_playing: play,
@@ -235,6 +243,14 @@ impl State {
             PlayerCmd::Restart => {
                 let _ = self.spirc.shutdown();
             }
+            // Sem isto, o play seguinte recarregava a fila e o contexto antigos: voltava ao começo da playlist
+            // ou tocava outra faixa. Com o Spirc carregado, quem manda é ele.
+            PlayerCmd::Follow { index, context, position_ms } if !self.loaded => {
+                (self.index, self.context, self.start_ms) = (index.min(self.queue.len().saturating_sub(1)), context, position_ms);
+            }
+            PlayerCmd::Follow { .. } => {}
+            PlayerCmd::MoveNext { from_uri, to_uri } if self.loaded => self.report(self.spirc.move_next_track(from_uri, to_uri)),
+            PlayerCmd::MoveNext { .. } => {}
             PlayerCmd::Insert { at, track } => {
                 let at = at.min(self.queue.len());
                 self.queue.insert(at, track);

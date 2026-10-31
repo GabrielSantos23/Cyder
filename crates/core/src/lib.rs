@@ -6,6 +6,7 @@ pub mod cache;
 pub mod config;
 pub mod engine;
 pub mod fx;
+pub mod history;
 pub mod images;
 pub mod internal;
 pub mod lastfm;
@@ -67,6 +68,10 @@ pub struct Library {
     /// Podcasts salvos. Caches antigos não têm.
     #[serde(default)]
     pub shows: Vec<Card>,
+    /// Quando cada item entrou na biblioteca (URI → segundos Unix), para a sidebar mostrar os mais novos primeiro.
+    /// Fica sem os que o Spotify não informa; caches antigos não têm nenhum.
+    #[serde(default)]
+    pub added: std::collections::HashMap<String, u64>,
 }
 
 /// Lançamento de um artista seguido, para a tela Novidades. `card.subtitle` é o artista.

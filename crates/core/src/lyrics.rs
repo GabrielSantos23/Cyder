@@ -132,6 +132,37 @@ async fn lookup(http: &reqwest::Client, t: &Track) -> Result<Option<Value>, Stri
     }))
 }
 
+/// Reserva quando o LRCLIB falha ou não tem: a letra que o próprio Spotify mostra, pela sessão do áudio.
+/// Não vai para o cache em disco; o LRCLIB continua sendo a fonte principal.
+pub async fn from_spotify(session: &librespot::core::Session, t: &Track) -> Option<Lyrics> {
+    if !t.uri.starts_with("spotify:track:") {
+        return None;
+    }
+    let id = librespot::core::SpotifyId::from_base62(&t.id).ok()?;
+    match session.spclient().get_lyrics(&id).await {
+        Ok(body) => parse_spotify(&serde_json::from_slice(&body).ok()?),
+        // 404 quando o Spotify não tem a letra.
+        Err(e) => {
+            log::debug!("letra do Spotify para {}: {e}", t.name);
+            None
+        }
+    }
+}
+
+/// `{"lyrics": {"syncType": "LINE_SYNCED", "lines": [{"startTimeMs": "1230", "words": "…"}]}}`; "♪" marca trecho sem voz.
+fn parse_spotify(v: &Value) -> Option<Lyrics> {
+    let l = &v["lyrics"];
+    let lines = l["lines"].as_array()?;
+    let words = |x: &Value| x["words"].as_str().unwrap_or_default().replace('♪', "").trim().to_string();
+    if l["syncType"] == "LINE_SYNCED" {
+        let out: Vec<Line> = lines.iter().filter_map(|x| Some(Line { time_ms: x["startTimeMs"].as_str()?.parse().ok()?, text: words(x) })).collect();
+        (!out.is_empty()).then_some(Lyrics::Synced(out))
+    } else {
+        let out: Vec<String> = lines.iter().map(words).collect();
+        (!out.is_empty()).then_some(Lyrics::Plain(out))
+    }
+}
+
 /// Letra da faixa, do cache em disco ou do LRCLIB. "Não encontrada" também é cacheada, por 7 dias.
 pub async fn fetch(http: &reqwest::Client, cache_dir: &Path, t: &Track) -> Result<Lyrics, String> {
     let dir = cache_dir.join("lyrics");
@@ -176,6 +207,17 @@ mod tests {
                 Line { time_ms: 60000, text: "refrão".into() },
             ]
         );
+    }
+
+    #[test]
+    fn spotify_lyrics() {
+        let synced = json!({"lyrics": {"syncType": "LINE_SYNCED", "lines": [
+            {"startTimeMs": "1000", "words": "oi"}, {"startTimeMs": "2500", "words": "♪"}, {"startTimeMs": "x", "words": "ruim"}]}});
+        assert_eq!(parse_spotify(&synced), Some(Lyrics::Synced(vec![Line { time_ms: 1000, text: "oi".into() }, Line { time_ms: 2500, text: "".into() }])));
+        let plain = json!({"lyrics": {"syncType": "UNSYNCED", "lines": [{"startTimeMs": "0", "words": "a"}]}});
+        assert_eq!(parse_spotify(&plain), Some(Lyrics::Plain(vec!["a".into()])));
+        assert_eq!(parse_spotify(&json!({"lyrics": {"lines": []}})), None);
+        assert_eq!(parse_spotify(&json!({})), None);
     }
 
     #[test]

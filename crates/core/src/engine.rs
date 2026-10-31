@@ -9,7 +9,7 @@ use librespot::protocol::connect::ClusterUpdate;
 use tokio::sync::{Semaphore, mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}};
 
 use crate::{
-    Card, Device, Kind, Library, Page, SearchKind, SearchResults, Shelf, Track, api::{self, WebApi}, auth, cache, config, internal, lastfm, listen, update,
+    Card, Device, Kind, Library, Page, SearchKind, SearchResults, Shelf, Track, api::{self, WebApi}, auth, cache, config, history, internal, lastfm, listen, update,
     images::{self, Art},
     lyrics::{self, Lyrics},
     player::{self, PlayerCmd, PlayerOut, Repeat},
@@ -44,6 +44,8 @@ pub enum Cmd {
     AddToQueue(Track),
     /// Arrasta uma faixa da fila de `from` para `to` (índices da fila, depois da que está tocando).
     MoveQueue { from: usize, to: usize },
+    /// Arrastar na fila do Spotify (aleatório ligado): `from_uri` vai para o lugar de `to_uri` nas próximas.
+    MoveUpNext { from_uri: String, to_uri: String },
     /// Próximo pedaço de uma playlist grande.
     LoadMore { card: Card, from: usize },
     /// Ordem da lista da sidebar arrastada à mão.
@@ -86,6 +88,11 @@ pub enum Cmd {
     RefreshHome,
     /// Passa a reprodução para o aparelho com este id.
     Transfer(String),
+    /// Música tocada da busca: depois dela, recomendadas parecidas com ela e com o que a pessoa ouve, como no Spotify.
+    /// Vem logo depois do `Play` dessa música sozinha.
+    SearchRadio(Track),
+    /// Tira da fila tudo o que vem depois da música atual.
+    ClearQueue,
     /// Tentar o login de novo depois de um erro ou de preencher o config.
     Retry,
     /// Pedir de novo a letra da faixa `index` da fila (o LRCLIB não tinha respondido).
@@ -440,7 +447,10 @@ impl Ctx {
         match internal::rootlist(&self.session).await {
             Ok(uris) => {
                 let mut by_id: HashMap<String, Card> = lib.playlists.drain(..).map(|c| (c.id.clone(), c)).collect();
-                for uri in uris {
+                for (uri, at) in uris {
+                    if at > 0 {
+                        lib.added.insert(uri.clone(), at);
+                    }
                     let id = uri.trim_start_matches("spotify:playlist:");
                     if let Some(card) = by_id.remove(id) {
                         lib.playlists.push(card);
@@ -453,6 +463,11 @@ impl Ctx {
                 lib.playlists.extend(by_id.into_values());
             }
             Err(e) => log::warn!("rootlist: {e}"),
+        }
+        // Sem as datas dos artistas, eles só vão para o fim da sidebar: o resto da biblioteca vem igual.
+        match internal::followed_artists(&self.session).await {
+            Ok(list) => lib.added.extend(list.into_iter().filter(|(_, at)| *at > 0)),
+            Err(e) => log::warn!("datas dos artistas seguidos: {e}"),
         }
         cache::save("library", &lib);
         self.thumbs(library_images(&lib));
@@ -970,7 +985,40 @@ impl Ctx {
 }
 
 /// Capa e letra da faixa `index`, em segundo plano.
-fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, tracks: &[Track], index: usize) {
+/// Rádio de uma música, como o do Spotify: algumas do mesmo artista no meio das mais tocadas de artistas parecidos
+/// com ele e com os que a pessoa mais ouviu no Cyder nos últimos 30 dias. Tudo pela sessão, sem a cota da Web API.
+async fn radio(session: &librespot::core::Session, seed: &Track) -> Result<Vec<Track>, String> {
+    use librespot::metadata::Metadata;
+    let Some((artist, _)) = seed.artists.first().cloned() else { return Ok(Vec::new()) };
+    let since = now_secs().saturating_sub(30 * 24 * 3600);
+    let plays = tokio::task::spawn_blocking(crate::stats::load).await.unwrap_or_default();
+    let mut count: HashMap<String, usize> = HashMap::new();
+    for p in plays.iter().filter(|p| p.at >= since && !p.artist_id.is_empty() && p.artist_id != artist) {
+        *count.entry(p.artist_id.clone()).or_default() += 1;
+    }
+    let mut top: Vec<(String, usize)> = count.into_iter().collect();
+    top.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let seeds: Vec<String> = std::iter::once(artist.clone()).chain(top.into_iter().take(2).map(|(id, _)| id)).collect();
+    let uri = librespot::core::SpotifyUri::from_uri(&format!("spotify:artist:{artist}")).map_err(|e| e.to_string())?;
+    let own: Vec<String> = librespot::metadata::Artist::get(session, &uri).await.map_err(|e| e.to_string())?
+        .top_tracks.for_country(&session.country()).iter().filter_map(|u| u.to_uri().ok()).filter(|u| *u != seed.uri).take(3).collect();
+    let exclude: HashSet<String> = own.iter().cloned().chain([seed.uri.clone()]).collect();
+    let mut own = internal::track_metadata(session, &own).await?.into_iter();
+    // As recomendadas vêm duas por artista: primeiro uma de cada, depois as segundas, com uma do artista a cada quatro.
+    let mut recs: Vec<(usize, Track)> = internal::recommendations(session, &seeds, &exclude).await?.into_iter().enumerate().collect();
+    recs.sort_by_key(|(i, _)| (i % 2, *i));
+    let mut out = Vec::new();
+    for (n, (_, t)) in recs.into_iter().enumerate() {
+        if n % 4 == 0 {
+            out.extend(own.next());
+        }
+        out.push(t);
+    }
+    out.extend(own);
+    Ok(out)
+}
+
+fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session: &librespot::core::Session, tracks: &[Track], index: usize) {
     let Some(track) = tracks.get(index).cloned() else { return };
     let cache = config::cache_dir();
     let (http2, out2, cache2, track2) = (http.clone(), out.clone(), cache.clone(), track.clone());
@@ -980,7 +1028,7 @@ fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, tracks:
             Err(e) => log::warn!("capa de {}: {e}", track2.name),
         }
     });
-    let (http, out) = (http.clone(), out.clone());
+    let (http, out, session) = (http.clone(), out.clone(), session.clone());
     tokio::spawn(async move {
         // Episódio de podcast não tem letra no LRCLIB.
         if track.uri.starts_with("spotify:episode:") {
@@ -992,6 +1040,11 @@ fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, tracks:
             log::warn!("letra de {}: {e}", track.name);
             Lyrics::Failed
         });
+        // LRCLIB fora do ar ou sem a letra: tenta a do Spotify. Sem ela também, fica o resultado do LRCLIB.
+        let lyrics = match lyrics {
+            Lyrics::Failed | Lyrics::NotFound => lyrics::from_spotify(&session, &track).await.unwrap_or(lyrics),
+            found => found,
+        };
         let _ = out.send(AppEvent::Lyrics { index, lyrics });
     });
 }
@@ -1071,11 +1124,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // Miniaturas do tamanho antigo (320 px): a pasta nova as substitui.
     let _ = std::fs::remove_dir_all(config::cache_dir().join("thumbs"));
     let resume = cache::load::<Resume>("resume").filter(|r| r.index < r.queue.len());
-    let mut tracks = resume.as_ref().map_or_else(|| liked.clone(), |r| r.queue.clone());
+    // Sem nada tocado ainda, a fila começa vazia e a janela esconde o player até o primeiro play.
+    let mut tracks = resume.as_ref().map_or_else(Vec::new, |r| r.queue.clone());
     // O que vai sendo salvo: onde está, de onde veio e os modos.
     let mut index = resume.as_ref().map_or(0, |r| r.index);
     let mut context = resume.as_ref().and_then(|r| r.context.clone());
-    let mut label = resume.as_ref().map_or_else(|| "Músicas curtidas".to_string(), |r| r.label.clone());
+    let mut label = resume.as_ref().map_or_else(String::new, |r| r.label.clone());
     let (mut shuffle, mut repeat) = resume.as_ref().map_or((false, Repeat::Off), |r| (r.shuffle, r.repeat));
     let mut volume = resume.as_ref().map_or(DEFAULT_VOLUME, |r| r.volume);
     let mut anchor = (resume.as_ref().map_or(0, |r| r.position_ms), std::time::Instant::now());
@@ -1118,6 +1172,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // Recomendações do smart shuffle prontas (vêm de uma tarefa à parte).
     let (smart_tx, mut smart_rx) = unbounded_channel::<Vec<Track>>();
     let mut smart: Vec<String> = Vec::new();
+    // Rádio de uma música da busca: (URI da música, recomendadas), quando ficam prontas.
+    let (radio_tx, mut radio_rx) = unbounded_channel::<(String, Vec<Track>)>();
     // Música tocando por aqui para as estatísticas: quando começou, quanto já tocou e desde quando está tocando.
     // O contexto (álbum, playlist) vai junto para o histórico do Spotify.
     let mut listen: Option<(Track, u64, u32, Option<std::time::Instant>, Option<String>)> = None;
@@ -1271,6 +1327,16 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 ctx.send(AppEvent::SmartShuffle { on: true, added: smart.clone() });
                 let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
             }
+            Some((seed, recs)) = radio_rx.recv() => {
+                // Só se a fila ainda é a da música da busca: a pessoa pode ter mudado de música nesse meio-tempo.
+                if remote.is_none() && context.is_none() && tracks.len() == 1 && tracks[0].uri == seed {
+                    tracks.extend(recs);
+                    dirty = true;
+                    let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
+                    ctx.send(AppEvent::Reordered(tracks.clone()));
+                    let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                }
+            }
             Some(active) = cluster_rx.recv() => {
                 // Com o próprio Cyder tocando, o Spirc já conta tudo.
                 if remote.is_some() || (!active.is_empty() && active != device_id) {
@@ -1295,6 +1361,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             let i = match tracks.iter().position(|x| x.uri == t.uri) {
                                 Some(i) => i,
                                 None => {
+                                    // Na fila do player também: o Spirc avisa a faixa pelo índice da fila dele, que
+                                    // tem que bater com a nossa (sem isto, depois de trocar de aparelho a tela pulava
+                                    // para outra música e o "próxima" parecia pular duas).
+                                    let _ = pcmd_tx.send(PlayerCmd::Insert { at: tracks.len(), track: t.clone() });
                                     tracks.push(t.clone());
                                     label.clear();
                                     ctx.thumbs(t.cover_small.clone().into_iter().collect());
@@ -1302,12 +1372,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                     tracks.len() - 1
                                 }
                             };
-                            (index, dirty) = (i, true);
-                            fetch_extras(http, out, &tracks, i);
+                            (index, context, dirty) = (i, st.context.clone(), true);
+                            fetch_extras(http, out, &ctx.session, &tracks, i);
                             ctx.send(AppEvent::TrackChanged(i));
                             up_next(&ctx, 0);
                         }
                     }
+                    let _ = pcmd_tx.send(PlayerCmd::Follow { index, context: context.clone(), position_ms: st.position_ms });
                     (playing, anchor) = (st.playing, (st.position_ms, std::time::Instant::now()));
                     ctx.send(AppEvent::Playback { playing, position_ms: st.position_ms });
                     volume = st.volume_percent.map_or(volume, |p| (p.min(100) * u16::MAX as u64 / 100) as u16);
@@ -1536,6 +1607,44 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         ctx.send(AppEvent::SmartShuffle { on: false, added: Vec::new() });
                         continue;
                     }
+                    Cmd::SearchRadio(seed) => {
+                        let (ctx, radio_tx) = (ctx.clone(), radio_tx.clone());
+                        tokio::spawn(async move {
+                            match radio(&ctx.session, &seed).await {
+                                Ok(recs) if !recs.is_empty() => {
+                                    ctx.thumbs(recs.iter().filter_map(|t| t.cover_small.clone()).collect());
+                                    drop(radio_tx.send((seed.uri, recs)));
+                                }
+                                Ok(_) => {}
+                                Err(e) => log::warn!("rádio de {}: {e}", seed.name),
+                            }
+                        });
+                        continue;
+                    }
+                    Cmd::ClearQueue => {
+                        if remote.is_some() {
+                            ctx.send(AppEvent::Notice("Só dá para limpar a fila tocando neste computador.".into()));
+                            continue;
+                        }
+                        // As que já tocaram ficam, para o "anterior" e o índice continuarem valendo.
+                        tracks.truncate(index + 1);
+                        (queued, smart, context, dirty) = (Vec::new(), Vec::new(), None, true);
+                        let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
+                        ctx.send(AppEvent::Reordered(tracks.clone()));
+                        ctx.send(AppEvent::SmartShuffle { on: false, added: Vec::new() });
+                        let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                        // Com o autoplay, o Spotify já pode ter escolhido as próximas.
+                        up_next(&ctx, 1500);
+                        continue;
+                    }
+                    Cmd::MoveUpNext { from_uri, to_uri } => {
+                        if remote.is_some() {
+                            continue;
+                        }
+                        // A tela já mostra a ordem nova; a fila do Spotify confirma (ou desfaz, se não deu).
+                        up_next(&ctx, 800);
+                        PlayerCmd::MoveNext { from_uri, to_uri }
+                    }
                     Cmd::MoveQueue { from, to } => {
                         // Só o que vem depois da atual; a lista recarrega como faixas soltas na mesma posição.
                         if from > index && to > index && from < tracks.len() && to < tracks.len() && from != to {
@@ -1734,7 +1843,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     Cmd::RetryLyrics(i) => {
-                        fetch_extras(http, out, &tracks, i);
+                        fetch_extras(http, out, &ctx.session, &tracks, i);
                         continue;
                     }
                     Cmd::RestartPlayer => PlayerCmd::Restart,
@@ -1816,12 +1925,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                 let ms = (ms + since.map_or(0, |s| s.elapsed().as_millis() as u32)).min(t.duration_ms);
                                 // O Spotify recebe toda reprodução, até a pulada (o client oficial faz igual): ele decide o que conta.
                                 if ms > 0 {
-                                    let play = internal::EndSong { track_uri: t.uri.clone(), context: play_context, started_ms: at * 1000, ms_played: ms, duration_ms: t.duration_ms, shuffle };
+                                    let play = history::EndSong { track_uri: t.uri.clone(), context: play_context, started_ms: at * 1000, ms_played: ms, duration_ms: t.duration_ms, shuffle };
                                     let ctx = ctx.clone();
                                     tokio::spawn(async move {
                                         // Avisa uma vez quando para de funcionar (endereço mudou, evento recusado, sem rede) e de novo só depois de voltar.
                                         static FAILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                                        match internal::report_end_song(&ctx.session, &play).await {
+                                        match history::report_end_song(&ctx.session, &play).await {
                                             Ok(()) => {
                                                 FAILING.store(false, std::sync::atomic::Ordering::Relaxed);
                                                 log::debug!("histórico do Spotify: {} ({} ms)", play.track_uri, play.ms_played);
@@ -1855,9 +1964,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         }
                         (index, dirty) = (i, true);
                         publish_listen(&ctx, hosting.as_deref(), &tracks, index, playing, anchor);
-                        fetch_extras(http, out, &tracks, i);
+                        fetch_extras(http, out, &ctx.session, &tracks, i);
                         // Pré-busca a próxima para a letra já estar pronta na troca (doc 04).
-                        fetch_extras(http, out, &tracks, i + 1);
+                        fetch_extras(http, out, &ctx.session, &tracks, i + 1);
                         AppEvent::TrackChanged(i)
                     }
                     PlayerOut::Playback { playing: p, position_ms } => {

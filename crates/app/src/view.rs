@@ -899,6 +899,7 @@ impl Cyder {
             self.shuffle = true;
             self.send(Cmd::SetShuffle(true));
         }
+        self.remember_shuffle();
     }
 
     /// Tocar/pausar, próxima e anterior respondem na hora; o player confirma em seguida.
@@ -1637,7 +1638,7 @@ impl Cyder {
                 (false, _) => "Aleatório: desligado",
             }.into(), 36., false)
                 .on_click(cx.listener(|t, _, _, cx| { t.cycle_shuffle(); cx.notify(); }))
-                .child(icon(if self.smart { "sparkles" } else { "shuffle" }, 15., mode_color(self.shuffle || self.smart)))
+                .child(self.shuffle_icon(15., mode_color(false)))
                 .into_any_element(),
             button("prev", "Anterior".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.prev_track(); cx.notify(); })).child(icon("rewind", 18., theme::ink_1())).into_any_element(),
             button("play", if self.playing { "Pausar" } else { "Tocar" }.into(), 42., false)

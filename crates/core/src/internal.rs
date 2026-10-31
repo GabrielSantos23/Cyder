@@ -27,8 +27,9 @@ async fn list(session: &Session, endpoint: &str) -> Result<SelectedListContent, 
     SelectedListContent::parse_from_bytes(&bytes).map_err(err)
 }
 
-/// URIs das playlists da conta, na ordem da biblioteca do Spotify (pastas achatadas).
-pub async fn rootlist(session: &Session) -> Result<Vec<String>, String> {
+/// URIs das playlists da conta, na ordem da biblioteca do Spotify (pastas achatadas), com quando entraram
+/// nela (segundos Unix; 0 quando o Spotify não informa).
+pub async fn rootlist(session: &Session) -> Result<Vec<(String, u64)>, String> {
     let mut uris = Vec::new();
     // Marcadores de pasta (start-group/end-group) também contam na paginação.
     let mut from = 0;
@@ -36,13 +37,105 @@ pub async fn rootlist(session: &Session) -> Result<Vec<String>, String> {
         let bytes = session.spclient().get_rootlist(from, Some(500)).await.map_err(err)?;
         let content = SelectedListContent::parse_from_bytes(&bytes).map_err(err)?;
         let items = &content.contents.items;
-        uris.extend(items.iter().map(|i| i.uri()).filter(|u| u.starts_with("spotify:playlist:") && *u != DJ_URI).map(String::from));
+        uris.extend(items.iter().filter(|i| i.uri().starts_with("spotify:playlist:") && i.uri() != DJ_URI)
+            .map(|i| (i.uri().to_string(), (i.attributes.timestamp() / 1000).max(0) as u64)));
         from += items.len();
         if items.is_empty() || from >= content.length() as usize || uris.len() >= 1000 {
             break;
         }
     }
     Ok(uris)
+}
+
+/// Artistas seguidos e quando (segundos Unix), pela coleção da conta: a Web API não diz quando se seguiu.
+/// O protobuf dela (collection2v2) não vem compilado no librespot; os quatro campos vão à mão.
+pub async fn followed_artists(session: &Session) -> Result<Vec<(String, u64)>, String> {
+    const PROTO: &str = "application/vnd.collection-v2.spotify.proto";
+    let (mut out, mut token) = (Vec::new(), String::new());
+    loop {
+        // PageRequest: username = 1, set = 2, pagination_token = 3, limit = 4.
+        let mut req = Vec::new();
+        put_str(&mut req, 1, &session.username());
+        put_str(&mut req, 2, "artist");
+        if !token.is_empty() {
+            put_str(&mut req, 3, &token);
+        }
+        req.push(4 << 3);
+        put_varint(&mut req, 300);
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static(PROTO));
+        headers.insert(http::header::ACCEPT, http::HeaderValue::from_static(PROTO));
+        let body = session.spclient().request(&http::Method::POST, "/collection/v2/paging", Some(headers), Some(&req)).await.map_err(err)?;
+        let (items, next) = collection_page(&body).ok_or("resposta da coleção em formato inesperado")?;
+        out.extend(items);
+        if next.is_empty() || out.len() >= 5000 {
+            return Ok(out);
+        }
+        token = next;
+    }
+}
+
+fn put_str(buf: &mut Vec<u8>, field: u64, s: &str) {
+    put_varint(buf, field << 3 | 2);
+    put_varint(buf, s.len() as u64);
+    buf.extend_from_slice(s.as_bytes());
+}
+
+/// Campos de um protobuf: (número, valor numérico, bytes). Só varint e bytes; outro tipo devolve None.
+fn proto_fields(mut b: &[u8]) -> Option<Vec<(u64, u64, &[u8])>> {
+    fn varint(b: &mut &[u8]) -> Option<u64> {
+        let mut v = 0u64;
+        for shift in (0..64).step_by(7) {
+            let (&c, rest) = b.split_first()?;
+            *b = rest;
+            v |= u64::from(c & 0x7f) << shift;
+            if c < 0x80 {
+                return Some(v);
+            }
+        }
+        None
+    }
+    let mut out = Vec::new();
+    while !b.is_empty() {
+        let key = varint(&mut b)?;
+        match key & 7 {
+            0 => out.push((key >> 3, varint(&mut b)?, &[][..])),
+            2 => {
+                let len = usize::try_from(varint(&mut b)?).ok()?;
+                let (v, rest) = (b.get(..len)?, b.get(len..)?);
+                b = rest;
+                out.push((key >> 3, 0, v));
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// PageResponse: items = 1 (uri = 1, added_at = 2, is_removed = 3), next_page_token = 2.
+fn collection_page(body: &[u8]) -> Option<(Vec<(String, u64)>, String)> {
+    let (mut items, mut next) = (Vec::new(), String::new());
+    for (field, _, bytes) in proto_fields(body)? {
+        match field {
+            1 => {
+                let (mut uri, mut at, mut removed) = (String::new(), 0, false);
+                for (f, n, b) in proto_fields(bytes)? {
+                    match f {
+                        1 => uri = String::from_utf8_lossy(b).into_owned(),
+                        2 => at = n,
+                        3 => removed = n != 0,
+                        _ => {}
+                    }
+                }
+                if !removed && !uri.is_empty() {
+                    items.push((uri, at));
+                }
+            }
+            2 => next = String::from_utf8_lossy(bytes).into_owned(),
+            _ => {}
+        }
+    }
+    Some((items, next))
 }
 
 fn playlist_card(id: &str, content: &SelectedListContent) -> Card {
@@ -261,6 +354,38 @@ pub(crate) async fn track_metadata(session: &Session, uris: &[String]) -> Result
 }
 
 #[cfg(test)]
+mod collection_tests {
+    use super::*;
+
+    #[test]
+    fn reads_a_collection_page() {
+        // Item que fica, item removido, item com campo desconhecido, e o token da próxima página.
+        let item = |uri: &str, at: u64, removed: bool| {
+            let mut b = Vec::new();
+            put_str(&mut b, 1, uri);
+            b.push(2 << 3);
+            put_varint(&mut b, at);
+            if removed {
+                b.extend([3 << 3, 1]);
+            }
+            put_str(&mut b, 9, "ctx");
+            b
+        };
+        let mut body = Vec::new();
+        for i in [item("spotify:artist:a", 1_700_000_000, false), item("spotify:artist:b", 5, true)] {
+            put_varint(&mut body, 1 << 3 | 2);
+            put_varint(&mut body, i.len() as u64);
+            body.extend(i);
+        }
+        put_str(&mut body, 2, "next");
+        assert_eq!(collection_page(&body), Some((vec![("spotify:artist:a".into(), 1_700_000_000)], "next".into())));
+        // Tipo de campo que não sabemos ler (fixo de 64 bits) não vira lixo.
+        assert_eq!(collection_page(&[1 << 3 | 1, 0, 0, 0, 0, 0, 0, 0, 0]), None);
+        assert_eq!(collection_page(&[]), Some((Vec::new(), String::new())));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     fn t(n: &str) -> crate::Track {
         crate::Track { id: n.into(), uri: n.into(), name: n.into(), artist: String::new(), album: String::new(), album_id: String::new(), duration_ms: 1, cover_small: None, cover_large: None, artists: Vec::new() }
@@ -438,122 +563,6 @@ pub async fn canvas(session: &Session, track_uri: &str) -> Result<Option<String>
         }
     }
     Ok(None)
-}
-
-/// Uma reprodução que terminou, para o histórico do Spotify (doc 09).
-pub struct EndSong {
-    pub track_uri: String,
-    pub context: Option<String>,
-    /// Quando começou, em milissegundos Unix.
-    pub started_ms: u64,
-    pub ms_played: u32,
-    pub duration_ms: u32,
-    pub shuffle: bool,
-}
-
-/// Conta a reprodução para o Spotify: é o que põe a música em "Tocadas recentemente", no Wrapped e nas
-/// recomendações. O librespot não faz isso (doc 09). O app de desktop manda um `RawCoreStream` por faixa,
-/// dentro do envelope de eventos (`gabito.proto`), para o gabo-receiver, com os fragmentos de contexto
-/// (aparelho, app, horário) — formato capturado do 1.3.6 (doc 09, §6.4). Montado à mão: o librespot traz
-/// os .proto mas não os compila.
-/// shortcut: sem fila em disco, um evento que falha (sem internet) se perde; guardar e reenviar se fizer falta.
-pub async fn report_end_song(session: &Session, play: &EndSong) -> Result<(), String> {
-    use std::hash::{BuildHasher, Hasher};
-    use std::sync::{OnceLock, atomic::{AtomicI64, Ordering}};
-    // Ids aleatórios sem dependência nova: o RandomState já vem com sementes aleatórias.
-    let random16 = || {
-        let state = std::collections::hash_map::RandomState::new();
-        let mut out = Vec::with_capacity(16);
-        for i in 0..2u8 {
-            let mut h = state.build_hasher();
-            h.write_u8(i);
-            out.extend(h.finish().to_le_bytes());
-        }
-        out
-    };
-    let unhex = |s: &str| (0..s.len() / 2).filter_map(|i| u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()).collect::<Vec<u8>>();
-    // Uma sequência por vez que o app abre, com o contador subindo a cada evento (como o client oficial).
-    static SEQUENCE_ID: OnceLock<Vec<u8>> = OnceLock::new();
-    static APP_SESSION: OnceLock<Vec<u8>> = OnceLock::new();
-    static SEQUENCE_NUMBER: AtomicI64 = AtomicI64::new(0);
-    let sequence_id = SEQUENCE_ID.get_or_init(random16);
-    let sequence_number = SEQUENCE_NUMBER.fetch_add(1, Ordering::Relaxed) + 1;
-    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-
-    let done = play.ms_played as u64 * 10 >= play.duration_ms as u64 * 9;
-    let mut msg = Vec::new();
-    put_bytes(&mut msg, 1, &random16());
-    put_bytes(&mut msg, 5, b"audio");
-    put_bytes(&mut msg, 10, b"trackdone");
-    put_bytes(&mut msg, 12, if done { b"trackdone" } else { b"fwdbtn" });
-    put_field(&mut msg, 13, play.started_ms);
-    put_field(&mut msg, 14, play.ms_played as u64);
-    put_field(&mut msg, 15, play.ms_played as u64);
-    put_field(&mut msg, 21, play.shuffle as u64);
-    if let Some(context) = &play.context {
-        put_bytes(&mut msg, 23, context.as_bytes());
-    }
-    put_bytes(&mut msg, 24, play.track_uri.as_bytes());
-    put_field(&mut msg, 26, 0);
-    put_field(&mut msg, 27, 0);
-    put_bytes(&mut msg, 28, b"context");
-    put_bytes(&mut msg, 32, b"none");
-    put_field(&mut msg, 39, 1);
-
-    let fragment = |name: &str, data: &[u8]| {
-        let mut f = Vec::new();
-        put_bytes(&mut f, 1, name.as_bytes());
-        put_bytes(&mut f, 2, data);
-        f
-    };
-    let one_bytes = |v: &[u8]| {
-        let mut f = Vec::new();
-        put_bytes(&mut f, 1, v);
-        f
-    };
-    // Mesmos ids que o librespot já apresenta ao Spotify: o Client ID da sessão e o id do aparelho.
-    let device_id = session.device_id().to_string();
-    let mut app = Vec::new();
-    put_bytes(&mut app, 1, librespot::core::version::SPOTIFY_SEMANTIC_VERSION.as_bytes());
-    put_field(&mut app, 2, librespot::core::version::SPOTIFY_VERSION);
-    put_bytes(&mut app, 3, APP_SESSION.get_or_init(random16));
-    let mut device = Vec::new();
-    put_bytes(&mut device, 1, std::env::consts::OS.as_bytes());
-    put_bytes(&mut device, 4, device_id.as_bytes());
-    let mut time = Vec::new();
-    put_field(&mut time, 1, now_ms);
-    let mut envelope = Vec::new();
-    put_bytes(&mut envelope, 2, b"RawCoreStream");
-    put_bytes(&mut envelope, 3, &fragment("message", &msg));
-    put_bytes(&mut envelope, 3, &fragment("context_client_id", &one_bytes(&unhex(&session.client_id()))));
-    put_bytes(&mut envelope, 3, &fragment("context_installation_id", &one_bytes(&<sha2::Sha256 as sha2::Digest>::digest(device_id.as_bytes())[..16])));
-    put_bytes(&mut envelope, 3, &fragment("context_application_desktop", &app));
-    put_bytes(&mut envelope, 3, &fragment("context_device_desktop", &device));
-    put_bytes(&mut envelope, 3, &fragment("context_time", &time));
-    put_bytes(&mut envelope, 4, sequence_id);
-    put_field(&mut envelope, 5, sequence_number as u64);
-    let mut body = Vec::new();
-    put_bytes(&mut body, 1, &envelope);
-
-    let mut headers = http::HeaderMap::new();
-    headers.insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/x-protobuf"));
-    let bytes = session.spclient().request(&http::Method::POST, "/gabo-receiver-service/v3/events/", Some(headers), Some(&body)).await.map_err(err)?;
-    // PublishEventsResponse: só traz `repeated EventError error = 1` quando algum evento foi recusado.
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    Err(format!("o Spotify recusou o evento: {}", hex(&bytes)))
-}
-
-fn put_field(out: &mut Vec<u8>, field: u64, v: u64) {
-    put_varint(out, field << 3);
-    put_varint(out, v);
-}
-
-fn put_bytes(out: &mut Vec<u8>, field: u64, data: &[u8]) {
-    put_varint(out, field << 3 | 2);
-    put_varint(out, data.len() as u64);
-    out.extend(data);
 }
 
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {

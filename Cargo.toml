@@ -5,7 +5,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-version = "0.3.0"
+version = "0.4.0"
 # Releases do GitHub: de onde o app baixa as atualizações (core/src/update.rs) e onde o workflow publica.
 repository = "https://github.com/GabrielSantos23/Cyder"
 
@@ -28,3 +28,7 @@ env_logger = "0.11"
 [profile.release]
 opt-level = 3
 strip = true
+
+# Cópia do librespot-connect 0.8.0 com o id de reprodução no estado do Connect (doc 09, §6.6).
+[patch.crates-io]
+librespot-connect = { path = "vendor/librespot-connect" }
