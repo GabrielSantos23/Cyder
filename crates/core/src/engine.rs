@@ -163,6 +163,8 @@ pub enum AppEvent {
     LibraryOrder(Vec<String>),
     /// Resultado de `Cmd::Search`; `more` quando é a continuação de um tipo.
     Search { results: SearchResults, more: bool },
+    /// Playlists da busca `query` com o rádio do artista buscado na frente; chega depois do resultado.
+    SearchPlaylists { query: String, playlists: Vec<Card> },
     /// O Spotify bloqueou os pedidos do Client ID por `secs` segundos (a partir de agora).
     RateLimited { secs: u64 },
     /// Playlist criada: a UI abre a página dela.
@@ -310,7 +312,7 @@ fn shelf_images(shelves: &[Shelf]) -> Vec<String> {
 fn page_images(page: &Page) -> Vec<String> {
     let owner = page.owner_image.clone();
     let latest = page.artist.as_ref().and_then(|a| a.latest.as_ref()).and_then(|(c, _)| c.image.clone());
-    let related = page.artist.as_ref().map(|a| card_images(&a.related).collect::<Vec<_>>()).unwrap_or_default();
+    let related = page.artist.as_ref().map(|a| card_images(&a.related).chain(card_images(&a.featuring)).collect::<Vec<_>>()).unwrap_or_default();
     page.card.image.clone().into_iter().chain(owner).chain(latest).chain(related).chain(card_images(&page.albums)).chain(page.tracks.iter().filter_map(|t| t.cover_small.clone())).collect()
 }
 
@@ -815,13 +817,46 @@ impl Ctx {
                 let cards = results.artists.iter().chain(&results.albums).chain(&results.playlists).chain(&results.shows);
                 self.thumbs(cards.filter_map(|c| c.image.clone()).chain(results.tracks.iter().filter_map(|t| t.cover_small.clone())).collect());
                 self.check_saved(&results.tracks);
+                // Buscou um artista: o rádio dele entra na frente das playlists, como no Spotify.
+                let q = query.trim().to_lowercase();
+                let artist = results.artists.first().filter(|a| a.title.to_lowercase() == q).cloned();
+                let found = results.playlists.clone();
                 self.send(AppEvent::Search { results, more: kind.is_some() });
+                if let (None, Some(artist)) = (kind, artist) {
+                    let playlists = self.featuring(&artist, found).await;
+                    self.thumbs(card_images(&playlists).collect());
+                    self.send(AppEvent::SearchPlaylists { query, playlists });
+                }
             }
             Err(e) => {
                 log::warn!("busca \"{query}\": {e}");
                 self.send(AppEvent::SearchFailed { query, error: e });
             }
         }
+    }
+
+    /// Playlists com o artista: o rádio dele (pela sessão) e `found`, as que a busca achou pelo nome, com a
+    /// descrição no lugar do dono, como no Spotify. As "This Is" do Spotify a Web API não devolve desde 2024.
+    async fn featuring(&self, artist: &Card, found: Vec<Card>) -> Vec<Card> {
+        let mut cards = Vec::new();
+        match internal::radio_for(&self.session, &artist.uri).await {
+            Ok(uri) => cards.push(Card { kind: Kind::Playlist, id: uri.trim_start_matches("spotify:playlist:").to_string(), uri, title: String::new(), subtitle: String::new(), image: None }),
+            Err(e) => log::warn!("rádio de {}: {e}", artist.title),
+        }
+        for c in found {
+            if !cards.iter().any(|k| k.id == c.id) {
+                cards.push(c);
+            }
+        }
+        futures_util::stream::iter(cards)
+            .map(|card| {
+                let session = self.session.clone();
+                async move { internal::playlist_teaser(&session, &card.id).await.unwrap_or(card) }
+            })
+            .buffered(6)
+            .filter(|c| std::future::ready(!c.title.is_empty()))
+            .collect()
+            .await
     }
 
     async fn load_more(self, card: Card, from: usize) {
@@ -963,6 +998,17 @@ impl Ctx {
                         }
                         Err(e) => log::warn!("mais tocadas de {}: {e}", card.id),
                     }
+                    let found = match self.api.search(&page.card.title, &[SearchKind::Playlists], 0).await {
+                        Ok(r) => r.playlists,
+                        Err(e) => {
+                            log::warn!("playlists com {}: {e}", card.id);
+                            Vec::new()
+                        }
+                    };
+                    let featuring = self.featuring(&page.card, found).await;
+                    if let Some(info) = page.artist.as_mut() {
+                        info.featuring = featuring;
+                    }
                     Ok(page)
                 }
                 Err(e) => Err(e),
@@ -984,10 +1030,27 @@ impl Ctx {
     }
 }
 
-/// Capa e letra da faixa `index`, em segundo plano.
-/// Rádio de uma música, como o do Spotify: algumas do mesmo artista no meio das mais tocadas de artistas parecidos
-/// com ele e com os que a pessoa mais ouviu no Cyder nos últimos 30 dias. Tudo pela sessão, sem a cota da Web API.
+/// Rádio de uma música: a playlist que o Spotify monta a partir dela (a mesma do "Ir para o rádio da música").
+/// Sem ela, o nosso: algumas do mesmo artista no meio das mais tocadas de artistas parecidos com ele e com os
+/// que a pessoa mais ouviu no Cyder nos últimos 30 dias. Tudo pela sessão, sem a cota da Web API.
 async fn radio(session: &librespot::core::Session, seed: &Track) -> Result<Vec<Track>, String> {
+    let spotify = match internal::radio_for(session, &seed.uri).await {
+        Ok(uri) => internal::playlist(session, uri.trim_start_matches("spotify:playlist:"), 0, RADIO_MAX).await.map(|c| c.tracks),
+        Err(e) => Err(e),
+    };
+    match spotify {
+        Ok(tracks) if tracks.iter().any(|t| t.uri != seed.uri) => Ok(tracks.into_iter().filter(|t| t.uri != seed.uri).collect()),
+        Ok(_) => own_radio(session, seed).await,
+        Err(e) => {
+            log::warn!("rádio do Spotify para {}: {e}", seed.name);
+            own_radio(session, seed).await
+        }
+    }
+}
+
+const RADIO_MAX: usize = 50;
+
+async fn own_radio(session: &librespot::core::Session, seed: &Track) -> Result<Vec<Track>, String> {
     use librespot::metadata::Metadata;
     let Some((artist, _)) = seed.artists.first().cloned() else { return Ok(Vec::new()) };
     let since = now_secs().saturating_sub(30 * 24 * 3600);
@@ -1018,6 +1081,7 @@ async fn radio(session: &librespot::core::Session, seed: &Track) -> Result<Vec<T
     Ok(out)
 }
 
+/// Capa e letra da faixa `index`, em segundo plano.
 fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session: &librespot::core::Session, tracks: &[Track], index: usize) {
     let Some(track) = tracks.get(index).cloned() else { return };
     let cache = config::cache_dir();
@@ -1615,7 +1679,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                     ctx.thumbs(recs.iter().filter_map(|t| t.cover_small.clone()).collect());
                                     drop(radio_tx.send((seed.uri, recs)));
                                 }
-                                Ok(_) => {}
+                                Ok(_) => log::warn!("rádio de {}: nada para tocar depois", seed.name),
                                 Err(e) => log::warn!("rádio de {}: {e}", seed.name),
                             }
                         });

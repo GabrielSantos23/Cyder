@@ -429,6 +429,7 @@ impl WebApi {
                         album_count: albums.iter().filter(|r| release_card(r).is_some()).count(),
                         latest,
                         related: Vec::new(),
+                        featuring: Vec::new(),
                     }),
                 })
             }

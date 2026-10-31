@@ -192,6 +192,8 @@ pub struct Cyder {
     heroes: HashMap<String, PathBuf>,
     /// Filtro da discografia na página de artista: tudo, só álbuns ou só singles e EPs.
     release_filter: library::Releases,
+    /// Discografia inteira aberta pelo "Ver mais"; fechada mostra duas linhas.
+    discography_open: bool,
     /// Fundos borrados das capas das páginas: URL da capa → arquivo.
     backdrops: HashMap<String, PathBuf>,
     /// Fundo que está saindo e o que está entrando no painel; `bg_gen` reinicia a transição.
@@ -507,6 +509,7 @@ impl Cyder {
             devices_open: false,
             heroes: HashMap::new(),
             release_filter: library::Releases::All,
+            discography_open: false,
             backdrops: HashMap::new(),
             bg_from: None,
             bg_to: None,
@@ -814,6 +817,13 @@ impl Cyder {
                     self.notify(format!("Não deu para carregar mais resultados: {error}"));
                 } else {
                     self.search_error = Some(error);
+                }
+            }
+            AppEvent::SearchPlaylists { query, mut playlists } => {
+                // As que o "Ver mais" já trouxe continuam, depois destas.
+                if let Some(found) = self.search.as_mut().filter(|s| s.query == query) {
+                    playlists.extend(found.playlists.drain(..).filter(|c| !playlists.iter().any(|p| p.id == c.id)).collect::<Vec<_>>());
+                    found.playlists = playlists;
                 }
             }
             AppEvent::Search { .. } | AppEvent::SearchFailed { .. } => {}

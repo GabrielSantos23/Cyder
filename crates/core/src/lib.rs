@@ -183,6 +183,9 @@ pub struct ArtistInfo {
     /// Artistas parecidos ("Fãs também curtem"), pela sessão. Caches antigos não têm.
     #[serde(default)]
     pub related: Vec<Card>,
+    /// Playlists com o artista: o rádio dele e as que a busca acha pelo nome. Caches antigos não têm.
+    #[serde(default)]
+    pub featuring: Vec<Card>,
 }
 
 /// Aparelho Spotify Connect da conta.

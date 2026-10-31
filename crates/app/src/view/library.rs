@@ -45,6 +45,9 @@ const SHELF_MAX: usize = 12;
 const RECENT_MAX: usize = 8;
 /// Índice da prateleira de artistas parecidos (as da tela inicial começam em 0, as da busca em 100).
 const RELATED_SHELF: usize = 200;
+const FEATURING_SHELF: usize = 201;
+/// Linhas da discografia antes do "Ver mais".
+const DISCOGRAPHY_ROWS: usize = 2;
 /// Cor da capa de "Músicas curtidas", que não tem imagem no Spotify.
 const LIKED_COLOR: u32 = 0x6d4aff;
 /// Verde do coração das faixas curtidas, o do Spotify.
@@ -193,6 +196,7 @@ impl Cyder {
         self.history.push(std::mem::replace(&mut self.screen, screen));
         self.forward.clear();
         self.release_filter = Releases::All;
+        self.discography_open = false;
         self.refocus = true;
     }
 
@@ -1372,14 +1376,18 @@ impl Cyder {
         let id = page.card.id.clone();
         let cols = (((width + GRID_GAP) / (CARD_MIN + GRID_GAP)).floor() as usize).max(2);
         let card_w = (width - GRID_GAP * (cols - 1) as f32) / cols as f32;
-        let rows = self.source_cards(&CardSource::ArtistAlbums(id.clone())).len().div_ceil(cols);
-        // Foto, destaques, título da discografia, as linhas de cartões, os parecidos e o respiro embaixo do player.
-        let count = 3 + rows.max(1) + 2;
+        let all_rows = self.source_cards(&CardSource::ArtistAlbums(id.clone())).len().div_ceil(cols);
+        // Fechada, a discografia mostra duas linhas e o "Ver mais".
+        let rows = if self.discography_open { all_rows } else { all_rows.min(DISCOGRAPHY_ROWS) };
+        let more = all_rows > DISCOGRAPHY_ROWS;
+        // Foto, destaques, título da discografia, as linhas de cartões, o "Ver mais", as playlists com o artista,
+        // os parecidos e o respiro embaixo do player.
+        let count = 3 + rows.max(1) + 4;
         let state = self.page_lists.entry(format!("artist-{id}")).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
         // Trocar o filtro troca só as linhas de cartões; `reset` voltaria a rolagem para o topo.
         let old = state.item_count();
         if old != count {
-            state.splice(3..old - 2, count - 5);
+            state.splice(3..old - 4, count - 7);
         }
         list(state, cx.processor(move |this, i: usize, _window, cx| {
             let source = CardSource::ArtistAlbums(id.clone());
@@ -1389,6 +1397,12 @@ impl Cyder {
                 2 => this.discography_header(&id, cx),
                 _ if i == count - 1 => div().h(px(LIST_BOTTOM)).into_any_element(),
                 _ if i == count - 2 => this.related_shelf(&id, cx),
+                _ if i == count - 3 => this.featuring_shelf(&id, cx),
+                _ if i == count - 4 => match more {
+                    true => div().px(px(PAD)).pt_2().child(Self::text_button("discography-more", if this.discography_open { "Ver menos" } else { "Ver mais" })
+                        .on_click(cx.listener(|t, _, _, cx| { t.discography_open = !t.discography_open; cx.notify(); }))).into_any_element(),
+                    false => div().into_any_element(),
+                },
                 _ if rows == 0 => div().px(px(PAD)).child(Self::quiet("Nada nesta seção.")).into_any_element(),
                 _ => div().px(px(PAD)).child(this.card_row(&source, i - 3, cols, card_w, cx)).into_any_element(),
             }
@@ -1396,6 +1410,17 @@ impl Cyder {
         .flex_1()
         .min_h_0()
         .into_any_element()
+    }
+
+    /// Playlists com o artista (o rádio dele e as que a busca acha), como o "Featuring" do Spotify.
+    fn featuring_shelf(&mut self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let Some(page) = self.pages.get(id) else { return div().into_any_element() };
+        let cards = page.artist.as_ref().map(|a| a.featuring.clone()).unwrap_or_default();
+        if cards.is_empty() {
+            return div().into_any_element();
+        }
+        let title = format!("Com {}", page.card.title);
+        div().px(px(PAD)).pt_8().child(self.shelf(FEATURING_SHELF, Shelf { title, cards }, cx)).into_any_element()
     }
 
     /// "Fãs também curtem": os artistas parecidos, numa prateleira como as da tela inicial.
