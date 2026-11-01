@@ -66,6 +66,8 @@ pub enum PlayerOut {
     Idle,
     /// Sem conexão com o Spotify: o que está acontecendo (reconectando, o erro da última tentativa).
     Offline(String),
+    /// Várias faixas seguidas não carregaram: quase sempre o Spotify recusando a chave de áudio desta conta.
+    Refused,
 }
 
 
@@ -90,6 +92,10 @@ struct State {
     fading: bool,
     /// Entre o `load` e a faixa começar: os avisos de aleatório e repetir que chegam aí são velhos (veja `start`).
     settling: bool,
+    /// Para saber o plano da conta quando uma faixa falha.
+    session: Session,
+    /// Faixas seguidas que não carregaram; zera quando uma toca.
+    failed: u8,
     out: UnboundedSender<PlayerOut>,
 }
 
@@ -325,6 +331,7 @@ impl State {
                 self.send(PlayerOut::TrackChanged(index));
             }
             PlayerEvent::Playing { position_ms, .. } => {
+                self.failed = 0;
                 self.playing = true;
                 self.anchor = (position_ms, Instant::now());
                 self.send(PlayerOut::Playback { playing: true, position_ms });
@@ -356,12 +363,40 @@ impl State {
                 self.send_modes();
             }
             PlayerEvent::VolumeChanged { .. } => self.send_modes(),
+            // O librespot manda isto para qualquer falha ao carregar a faixa, não só restrição de região.
             PlayerEvent::Unavailable { .. } => {
-                let name = self.queue.get(self.index).map(|t| t.name.clone()).unwrap_or_default();
-                self.send(PlayerOut::Error(format!("\"{name}\" não está disponível na sua região. Pulando.")));
+                self.failed = self.failed.saturating_add(1);
+                if self.session.get_user_attribute("type").is_some_and(|plan| plan != "premium") {
+                    // Conta Free: toda faixa falha e o Spirc pularia a fila inteira.
+                    let _ = self.spirc.pause();
+                    self.send(PlayerOut::Error("Sua conta do Spotify é Free. O Spotify só libera música em apps como o Cyder para contas Premium.".into()));
+                } else if self.failed >= 3 {
+                    // Quase sempre é o Spotify recusando a chave de áudio desta conta (librespot #1649); pular só
+                    // repete a recusa em cada faixa.
+                    let _ = self.spirc.pause();
+                    self.send(PlayerOut::Refused);
+                } else {
+                    let name = self.queue.get(self.index).map(|t| t.name.clone()).unwrap_or_default();
+                    self.send(PlayerOut::Error(format!("Não deu para tocar \"{name}\": indisponível na sua região ou falhou ao carregar. Pulando.")));
+                }
             }
             _ => {}
         }
+    }
+}
+
+/// Pede ao Spotify a chave de áudio de uma faixa, sem tocar: algumas contas recebem recusa (librespot #1649).
+/// None: não deu para saber (sem rede, faixa sem arquivo).
+pub async fn audio_key_refused(session: &Session, uri: &str) -> Option<bool> {
+    let uri = librespot::core::SpotifyUri::from_uri(uri).ok()?;
+    let id = librespot::core::SpotifyId::try_from(&uri).ok()?;
+    let item = AudioItem::get_file(session, uri).await.ok()?;
+    let file = *item.files.values().next()?;
+    match session.audio_key().request(id, file).await {
+        Ok(_) => Some(false),
+        // A recusa vem como "unavailable"; tempo esgotado e canal fechado são outra coisa.
+        Err(e) if e.kind == librespot::core::error::ErrorKind::Unavailable => Some(true),
+        Err(_) => None,
     }
 }
 
@@ -406,10 +441,10 @@ pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials,
         }
     };
     let mut task = tokio::spawn(task);
-    let _ = out.send(PlayerOut::Connected(session));
+    let _ = out.send(PlayerOut::Connected(session.clone()));
     let mut events = player.get_player_event_channel();
     let mut _player = player;
-    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, settling: false, out };
+    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, settling: false, session, failed: 0, out };
     state.send_modes();
     let started = Instant::now();
     let mut fade_tick = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -450,6 +485,7 @@ pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials,
                 events = player.get_player_event_channel();
                 _player = player;
                 task = tokio::spawn(t);
+                state.session = session.clone();
                 state.send(PlayerOut::Connected(session));
                 if was_playing {
                     state.start(true);

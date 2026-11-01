@@ -159,6 +159,8 @@ pub struct Settings {
     /// as próximas playlists; álbuns têm o deles.
     pub shuffle_playlists: bool,
     pub shuffle_albums: bool,
+    /// Relatórios de erro ao desenvolvedor: None enquanto a pessoa não respondeu.
+    pub send_errors: Option<bool>,
 }
 
 impl Default for Settings {
@@ -183,6 +185,7 @@ impl Default for Settings {
             discord_app_id: String::new(),
             shuffle_playlists: false,
             shuffle_albums: false,
+            send_errors: None,
         }
     }
 }

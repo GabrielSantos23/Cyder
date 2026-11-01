@@ -45,12 +45,16 @@ pub(crate) enum Dialog {
     Update(String),
     /// Depois do primeiro login: o que dá para fazer e onde fica.
     Welcome,
+    /// Pergunta, uma vez, se pode mandar relatórios de erro.
+    Reports,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Help {
     Lastfm,
     Discord,
+    /// Também abre sozinho quando o Spotify recusa o áudio desta conta.
+    Soloist,
 }
 
 impl Help {
@@ -76,6 +80,12 @@ impl Help {
                 "Deixe o Discord aberto neste computador. Se nada aparecer, ligue Compartilhar a sua atividade em Configurações do Discord › Privacidade de atividade.",
             ], "Se o Spotify já está conectado ao seu Discord, a música aparece duas vezes no perfil. Desconecte o Spotify em Configurações do Discord › Conexões e use só o Cyder.",
             "Abrir o portal", "https://discord.com/developers/applications"),
+            Help::Soloist => ("O Spotify recusou o áudio desta conta", &[
+                "Em Gerar chave, crie a chave do Soloist com a sua conta Premium.",
+                "Clique em Colar chave e cole.",
+                "No app do Spotify, escolha “Cyder (Soloist)” nos aparelhos. Só na primeira vez.",
+            ], "O Soloist é o player oficial do Spotify; o Cyder passa a tocar por ele.",
+            "Gerar chave", cyder_core::soloist::KEY_PAGE),
         }
     }
 }
@@ -89,6 +99,7 @@ pub(crate) enum Ask {
     /// Segredo, depois da chave.
     LastfmSecret(String),
     DiscordApp,
+    SoloistKey,
     /// Código de quem convidou para ouvir junto.
     ListenCode,
 }
@@ -102,10 +113,14 @@ impl Ask {
             Ask::LastfmKey => ("Ligar o Last.fm", Some("Crie um app de API no Last.fm (é de graça) e cole aqui a chave dele. Depois vem o segredo."), "API key", "Continuar", 64),
             Ask::LastfmSecret(_) => ("Ligar o Last.fm", Some("Agora o segredo compartilhado do mesmo app. Ao ligar, o navegador abre para você autorizar o Cyder."), "Shared secret", "Ligar", 64),
             Ask::ListenCode => ("Ouvir junto", Some("Digite o código que a pessoa recebeu ao convidar. O Cyder toca o mesmo que ela, na mesma hora, cada um pela própria conta."), "Código", "Entrar", 16),
+            Ask::SoloistKey => ("Ligar o Soloist", Some("Gere a chave no painel do Spotify (precisa de Premium) e cole aqui. Ela fica só neste computador."), "Chave do Soloist", "Ligar", 200),
             Ask::DiscordApp => ("Discord", Some("Crie um aplicativo no portal de desenvolvedores do Discord com o nome que deve aparecer no seu perfil (por exemplo, Cyder) e cole aqui o Application ID dele."), "Application ID", "Salvar", 32),
         }
     }
 }
+
+/// O que os relatórios de erro levam, na pergunta e nas configurações.
+pub(crate) const REPORTS_TEXT: &str = "Manda ao desenvolvedor os erros do Cyder, com as versões do app e do Windows. Sem o nome da conta, o que você ouve ou os seus arquivos.";
 
 /// Chave de uma faixa oculta num álbum ou playlist.
 pub(crate) fn hidden_key(context_uri: &str, track_uri: &str) -> String {
@@ -245,6 +260,8 @@ pub struct Cyder {
     settings: config::Settings,
     /// "premium", "free"…, pela sessão.
     plan: Option<String>,
+    /// O player oficial do Spotify (Soloist), quando ligado.
+    soloist: cyder_core::soloist::Status,
     /// None: o player está conectado; Some: o motivo de não estar.
     player_status: Option<String>,
     /// Nome do aparelho sendo digitado (vale no Enter).
@@ -543,6 +560,7 @@ impl Cyder {
             recent_searches: config::recent_searches(),
             settings: settings.clone(),
             plan: None,
+            soloist: cyder_core::soloist::Status::Off,
             player_status: None,
             device_draft: settings.device_name(),
             device_focus: cx.focus_handle(),
@@ -657,6 +675,8 @@ impl Cyder {
                 self.phase = Phase::Ready;
                 if std::mem::take(&mut self.welcome_pending) {
                     self.dialog = Some(Dialog::Welcome);
+                } else {
+                    self.ask_reports();
                 }
                 // Uma vez por abertura (o Ready volta ao entrar de novo na conta).
                 if !std::mem::replace(&mut self.update_checked, true) {
@@ -733,7 +753,7 @@ impl Cyder {
                 }
                 // Oculta neste álbum ou playlist: pula, como no Spotify.
                 let hidden = self.queue_context.as_ref().zip(self.tracks.get(i)).is_some_and(|(c, t)| self.hidden.contains(&hidden_key(c, &t.uri)));
-                if hidden && self.remote.is_none() {
+                if hidden && self.elsewhere().is_none() {
                     self.send(Cmd::Next);
                 }
             }
@@ -850,6 +870,12 @@ impl Cyder {
                 self.news_loading = false;
             }
             AppEvent::Lastfm(user) => self.lastfm_user = user,
+            AppEvent::Soloist(status) => self.soloist = status,
+            AppEvent::AudioRefused => {
+                if self.dialog.is_none() {
+                    self.dialog = Some(Dialog::Help(Help::Soloist));
+                }
+            }
             AppEvent::Listen(mode) => {
                 if let cyder_core::engine::Listen::Hosting(code) = &mode {
                     self.notify(format!("Ouvir junto: passe o código {} para quem vai ouvir com você.", library::pretty_code(code)));
@@ -901,7 +927,7 @@ impl Cyder {
             self.send(Cmd::SmartShuffle(false));
             self.send(Cmd::SetShuffle(false));
         } else if self.shuffle {
-            if self.remote.is_some() {
+            if self.elsewhere().is_some() {
                 return self.notify("O smart shuffle só funciona tocando neste computador.");
             }
             self.smart = true;
@@ -1807,6 +1833,18 @@ impl Cyder {
         self.ask(Ask::Playlist(editing), text);
     }
 
+    /// Pergunta dos relatórios de erro, enquanto a pessoa não respondeu (e se o Cyder tem para onde mandar).
+    pub(super) fn ask_reports(&mut self) {
+        if self.dialog.is_none() && self.settings.send_errors.is_none() && crate::reports::available() {
+            self.dialog = Some(Dialog::Reports);
+        }
+    }
+
+    /// Outro aparelho tocando. O Soloist do próprio Cyder não conta: ele é o player daqui, não outro app.
+    pub(crate) fn elsewhere(&self) -> Option<&str> {
+        self.remote.as_deref().filter(|d| *d != cyder_core::soloist::DEVICE_NAME)
+    }
+
     /// Abre a janela de texto com o campo já focado.
     pub(super) fn ask(&mut self, ask: Ask, text: String) {
         self.dialog = Some(Dialog::Input { ask, text });
@@ -1831,6 +1869,13 @@ impl Cyder {
                 match cyder_core::listen::normalize(&name) {
                     Some(code) => self.send(Cmd::ListenJoin(Some(code))),
                     None => self.notify("Esse código não parece certo: são 8 letras e números."),
+                }
+                return;
+            }
+            Ask::SoloistKey => {
+                match cyder_core::soloist::check_key(&name) {
+                    Ok(()) => self.send(Cmd::SoloistKey(Some(name))),
+                    Err(e) => self.notify(e),
                 }
                 return;
             }
@@ -1914,6 +1959,21 @@ impl Cyder {
                     .child(Self::secondary_button("update-later", "Depois").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
                     .child(Self::primary_button("update-restart", "Reiniciar agora").on_click(cx.listener(|t, _, _, cx| t.restart_for_update(cx))))),
             Dialog::Welcome => self.welcome_dialog(card, cx),
+            Dialog::Reports => card
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child("Enviar relatórios de erro?"))
+                .child(div().text_sm().text_color(rgba(theme::ink_2())).child(REPORTS_TEXT))
+                .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Dá para mudar em Configurações › Sobre."))
+                .child(div().flex().justify_end().gap_2()
+                    .child(Self::secondary_button("reports-no", "Não enviar").on_click(cx.listener(|t, _, _, cx| {
+                        t.dialog = None;
+                        t.change(|st| st.send_errors = Some(false), false);
+                        cx.notify();
+                    })))
+                    .child(Self::primary_button("reports-yes", "Enviar").on_click(cx.listener(|t, _, _, cx| {
+                        t.dialog = None;
+                        t.change(|st| st.send_errors = Some(true), false);
+                        cx.notify();
+                    })))),
             Dialog::Logout => card
                 .child(div().text_lg().font_weight(FontWeight::BOLD).child("Sair da conta?"))
                 .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Para voltar, você entra de novo pelo navegador. A biblioteca guardada neste computador é apagada."))
@@ -1963,7 +2023,10 @@ impl Cyder {
                         .child(div().flex_1().min_w_0().text_color(rgba(theme::ink_1())).child(warning)))
                     .child(div().flex().justify_end().gap_2()
                         .child(Self::secondary_button("help-close", "Fechar").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
-                        .child(Self::primary_button("help-site", site).on_click(move |_, _, cx| cx.open_url(url))))
+                        .when(!matches!(help, Help::Soloist), |d| d.child(Self::primary_button("help-site", site).on_click(move |_, _, cx| cx.open_url(url))))
+                        .when(matches!(help, Help::Soloist), |d| d
+                            .child(Self::secondary_button("help-site", site).on_click(move |_, _, cx| cx.open_url(url)))
+                            .child(Self::primary_button("help-soloist-key", "Colar chave").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::SoloistKey, String::new()); cx.notify(); })))))
             }
             Dialog::Input { ask, text } => {
                 let (title, help, placeholder, action, _) = ask.labels();
@@ -2036,7 +2099,7 @@ impl Render for Cyder {
             window.focus(&self.focus, cx);
         }
         // Como o Spotify: tocando, o Alt+Tab e a barra de tarefas mostram "Artista - Música"; pausado, "Cyder".
-        let title = match self.tracks.get(self.current).filter(|_| self.playing && self.remote.is_none()) {
+        let title = match self.tracks.get(self.current).filter(|_| self.playing && self.elsewhere().is_none()) {
             Some(t) => format!("{} - {}", t.artist, t.name),
             None => "Cyder".to_string(),
         };

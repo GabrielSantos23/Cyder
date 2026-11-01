@@ -24,6 +24,16 @@ fn masked(id: &str) -> String {
     if id.len() > 8 { format!("{}…{}", &id[..4], &id[id.len() - 4..]) } else { id.to_string() }
 }
 
+/// Opção que não vale agora (o som não sai do player do Cyder): apagada e sem responder ao mouse.
+fn dimmed(off: bool, row: AnyElement) -> AnyElement {
+    if !off {
+        return row;
+    }
+    div().relative().opacity(0.4).child(row)
+        .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll())
+        .into_any_element()
+}
+
 fn plan_label(plan: &str) -> String {
     match plan {
         "premium" => "Spotify Premium".into(),
@@ -49,6 +59,9 @@ impl Cyder {
             }
         }
         config::save_settings(&self.settings);
+        if self.settings.send_errors != before.send_errors {
+            crate::reports::set(self.settings.send_errors == Some(true));
+        }
         cyder_core::fx::set(self.settings.fx());
         KEEP_PLAYING.store(self.settings.keep_playing_on_close, std::sync::atomic::Ordering::Relaxed);
         if restart {
@@ -162,42 +175,87 @@ impl Cyder {
             cx,
         );
         let cache_sizes = self.segmented("settings-cache-size", CACHE_SIZES, s.audio_cache_mb, |st, mb| st.audio_cache_mb = mb, true, cx);
+        let why = self.sound_elsewhere();
+        let off = why.is_some();
         let mut rows = vec![
             status,
+            self.soloist_row(cx),
             Self::row("Nome do aparelho", "Como este computador aparece no Spotify Connect. Enter para salvar.".into(), self.device_field(window, cx)),
-            Self::row("Qualidade do áudio", "Mais qualidade usa mais internet e mais espaço no cache.".into(), quality),
-            Self::row("Normalizar volume", "Deixa músicas altas e baixas num volume parecido.".into(),
-                self.toggle("settings-normalize", s.normalize, |st| st.normalize = !st.normalize, true, cx)),
-            Self::row("Autoplay", "Continua com músicas parecidas quando a lista acaba.".into(),
-                self.toggle("settings-autoplay", s.autoplay, |st| st.autoplay = !st.autoplay, true, cx)),
-            Self::row("Sem pausa entre faixas", "Emenda uma faixa na outra, sem silêncio.".into(),
-                self.toggle("settings-gapless", s.gapless, |st| st.gapless = !st.gapless, true, cx)),
+            dimmed(off, Self::row("Qualidade do áudio", "Mais qualidade usa mais internet e mais espaço no cache.".into(), quality)),
+            dimmed(off, Self::row("Normalizar volume", "Deixa músicas altas e baixas num volume parecido.".into(),
+                self.toggle("settings-normalize", s.normalize, |st| st.normalize = !st.normalize, true, cx))),
+            dimmed(off, Self::row("Autoplay", "Continua com músicas parecidas quando a lista acaba.".into(),
+                self.toggle("settings-autoplay", s.autoplay, |st| st.autoplay = !st.autoplay, true, cx))),
+            dimmed(off, Self::row("Sem pausa entre faixas", "Emenda uma faixa na outra, sem silêncio.".into(),
+                self.toggle("settings-gapless", s.gapless, |st| st.gapless = !st.gapless, true, cx))),
             Self::row("Continuar tocando ao fechar a janela", "Fechar esconde o Cyder no ícone da bandeja, perto do relógio. Para sair, use Ctrl+Q ou Sair no ícone.".into(),
                 self.toggle("settings-keep-playing", s.keep_playing_on_close, |st| st.keep_playing_on_close = !st.keep_playing_on_close, false, cx)),
             Self::row("Abrir com o Windows", "Abre o Cyder escondido no ícone da bandeja quando você entra no Windows, pronto para tocar.".into(),
                 self.toggle("settings-open-at-login", s.open_at_login, |st| st.open_at_login = !st.open_at_login, false, cx)),
-            Self::row(
+            dimmed(off, Self::row(
                 "Cache de áudio",
                 "Guarda o áudio baixado para não baixar de novo ao repetir.".into(),
                 div().flex().items_center().gap_3()
                     .when(s.audio_cache, |d| d.child(cache_sizes))
                     .child(self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx)),
-            ),
+            )),
         ];
+        // Com o Soloist, a linha dele já explica; com outro aparelho, explica aqui.
+        if let Some(why) = why.filter(|_| self.soloist != cyder_core::soloist::Status::Ready) {
+            rows.insert(2, div().text_sm().text_color(rgba(theme::ink_2())).child(why).into_any_element());
+        }
         if let Some(note) = self.playback_note {
             rows.push(div().text_sm().text_color(rgba(theme::ink_2())).child(note).into_any_element());
         }
         Self::section("Reprodução neste computador", rows)
     }
 
+    /// O Soloist: para contas em que o Spotify recusa o áudio ao player do Cyder.
+    fn soloist_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use cyder_core::soloist::{DEVICE_NAME, KEY_PAGE, Status};
+        let off = || Self::secondary_button("settings-soloist-off", "Desligar").on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::SoloistKey(None)); cx.notify(); }));
+        let detail = match self.soloist.clone() {
+            Status::Off => {
+                return self.help_row(
+                    "Player oficial do Spotify (Soloist)",
+                    Help::Soloist,
+                    "Toca pelo player oficial do Spotify quando ele recusa o áudio desta conta ao Cyder. Precisa de uma chave sua (Premium).".into(),
+                    div().flex().gap_2()
+                        .child(Self::secondary_button("settings-soloist-page", "Gerar chave").on_click(|_, _, cx| cx.open_url(KEY_PAGE)))
+                        .child(Self::primary_button("settings-soloist-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(crate::view::Ask::SoloistKey, String::new()); cx.notify(); }))),
+                    cx,
+                );
+            }
+            Status::Starting(what) => what,
+            Status::Pairing => format!("Falta parear, uma vez só: no app do Spotify, na mesma rede, escolha “{DEVICE_NAME}” nos aparelhos."),
+            Status::Ready => "Ligado: o Cyder toca pelo Soloist. As opções de som apagadas não valem nele.".into(),
+            Status::Failed(why) => why,
+        };
+        let off = off();
+        self.help_row("Player oficial do Spotify (Soloist)", Help::Soloist, detail, off, cx)
+    }
+
+    /// O som não sai do player do Cyder: pelo Soloist (pareado, é por onde tudo toca) ou outro aparelho.
+    /// O texto diz por quê; None quando as opções de som valem.
+    fn sound_elsewhere(&self) -> Option<String> {
+        if self.soloist == cyder_core::soloist::Status::Ready {
+            return Some("Pelo Soloist, o som sai dele direto para o Windows e o Cyder não tem como mexer. Estas opções voltam a valer se você desligar o Soloist.".into());
+        }
+        self.remote.as_ref().map(|d| format!("Tocando em {d}: o som sai de lá, não do Cyder. Estas opções voltam a valer quando a música tocar aqui."))
+    }
+
     /// Equalizador e transição suave: valem na hora, sem religar o player.
     fn sound_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let s = self.settings.clone();
         let fade = self.segmented("settings-fade", [(0, "Desligada"), (3, "3 s"), (6, "6 s"), (10, "10 s")], s.fade_secs, |st, v| st.fade_secs = v, false, cx);
-        let mut rows = vec![
-            Self::row("Equalizador", "Ajusta graves, médios e agudos do que toca neste computador.".into(),
-                self.toggle("settings-eq", s.eq_on, |st| st.eq_on = !st.eq_on, false, cx)),
-        ];
+        let why = self.sound_elsewhere();
+        let off = why.is_some();
+        let mut rows = Vec::new();
+        if let Some(why) = why {
+            rows.push(div().text_sm().text_color(rgba(theme::ink_2())).child(why).into_any_element());
+        }
+        rows.push(dimmed(off, Self::row("Equalizador", "Ajusta graves, médios e agudos do que toca neste computador.".into(),
+            self.toggle("settings-eq", s.eq_on, |st| st.eq_on = !st.eq_on, false, cx))));
         if s.eq_on {
             let presets = div().flex().flex_wrap().gap_1().children(cyder_core::fx::PRESETS.iter().enumerate().map(|(i, (name, gains))| {
                 let on = s.eq == *gains;
@@ -216,14 +274,15 @@ impl Cyder {
                     .on_click(cx.listener(move |t, _, _, cx| { t.change(|st| st.eq = gains, false); cx.notify(); }))
                     .child(*name)
             }));
-            rows.push(presets.into_any_element());
-            rows.push(self.eq_bands(cx));
+            rows.push(dimmed(off, presets.into_any_element()));
+            let bands = self.eq_bands(cx);
+            rows.push(dimmed(off, bands));
         }
-        rows.push(Self::row(
+        rows.push(dimmed(off, Self::row(
             "Transição suave",
             "Abaixa o fim de cada música e sobe o começo da próxima. Elas não tocam juntas: o player do Cyder toca uma por vez.".into(),
             fade,
-        ));
+        )));
         Self::section("Som", rows)
     }
 
@@ -368,7 +427,9 @@ impl Cyder {
 
     fn about_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let config_dir = config::config_dir();
-        Self::section("Sobre", vec![
+        let reports = crate::reports::available().then(|| Self::row("Enviar relatórios de erro", crate::view::REPORTS_TEXT.into(),
+            self.toggle("settings-reports", self.settings.send_errors == Some(true), |st| st.send_errors = Some(st.send_errors != Some(true)), false, cx)));
+        let mut rows = vec![
             div().flex().items_center().gap_4()
                 .child(div().size(px(44.)).flex_none().rounded(px(12.)).bg(rgba(theme::ink_1())).flex().items_center().justify_center()
                     .child(icon("play", 20., theme::on_ink())))
@@ -379,6 +440,9 @@ impl Cyder {
                 )
                 .into_any_element(),
             self.update_row(cx),
+        ];
+        rows.extend(reports);
+        rows.push(
             div().flex().gap_2()
                 .child(Self::secondary_button("settings-shortcuts", "Atalhos do teclado")
                     .on_click(cx.listener(|t, _, _, cx| { t.dialog = Some(Dialog::Shortcuts); cx.notify(); })))
@@ -386,7 +450,8 @@ impl Cyder {
                 // O que mandar quando algo der errado: o log desta abertura (e o da anterior, na mesma pasta).
                 .child(Self::secondary_button("settings-log", "Registro").on_click(|_, _, cx| cx.reveal_path(&config::log_path())))
                 .into_any_element(),
-        ])
+        );
+        Self::section("Sobre", rows)
     }
 
     /// Título e o cartão com as linhas.
@@ -412,7 +477,7 @@ impl Cyder {
             .items_center()
             .justify_center()
             .hover(|s| s.bg(rgba(theme::wash(0x1a))))
-            .tip(match help { Help::Lastfm => "Como ligar o Last.fm", Help::Discord => "Como ligar o Discord" })
+            .tip(match help { Help::Lastfm => "Como ligar o Last.fm", Help::Discord => "Como ligar o Discord", Help::Soloist => "Como ligar o Soloist" })
             .on_click(cx.listener(move |t, _, _, cx| { t.dialog = Some(Dialog::Help(help)); cx.notify(); }))
             .child(icon("info", 14., theme::ink_2()));
         div()

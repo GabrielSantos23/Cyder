@@ -2020,7 +2020,7 @@ impl Cyder {
     fn limit_banner(&self) -> Option<AnyElement> {
         let left = self.limited_until?.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero())?;
         let until = finish_clock(left.as_secs()).map_or_else(|| format!("daqui a {} min", left.as_secs().div_ceil(60)), |c| format!("até {c}"));
-        let bottom = 16. + DOCK_H + 8. + if self.remote.is_some() { 38. } else { 0. };
+        let bottom = 16. + DOCK_H + 8. + if self.elsewhere().is_some() { 38. } else { 0. };
         Some(
             div().absolute().left_0().right_0().bottom(px(bottom)).flex().justify_center().child(
                 div()
@@ -2086,7 +2086,7 @@ impl Cyder {
     /// Pílula em cima do player enquanto ouve junto; clicar abre os controles.
     fn listen_banner(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use cyder_core::engine::Listen;
-        if self.remote.is_some() {
+        if self.elsewhere().is_some() {
             return None;
         }
         let text = match &self.together {
@@ -2125,7 +2125,7 @@ impl Cyder {
     }
 
     fn remote_banner(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let device = self.remote.clone()?;
+        let device = self.elsewhere()?.to_string();
         Some(
             div().absolute().left_0().right_0().bottom(px(16. + DOCK_H + 8.)).flex().justify_center().child(
                 Self::focusable("remote-banner")
@@ -2237,7 +2237,7 @@ impl Cyder {
             )
             .child(
                 // Verde enquanto outro aparelho toca, como no Spotify.
-                if self.remote.is_some() {
+                if self.elsewhere().is_some() {
                     Self::focusable("toolbar-devices").size(px(36.)).rounded_full().flex().items_center().justify_center()
                         .bg(rgba(LIKED_GREEN)).hover(|s| s.opacity(0.9)).tip("Aparelhos")
                         .child(icon("headphones", 16., 0x000000ff))
@@ -2323,7 +2323,7 @@ impl Cyder {
     /// Com aleatório ou outro aparelho tocando, a ordem que vale é a do Spotify.
     fn spotify_queue(&self) -> Option<&Vec<Track>> {
         // Vazia (antes do primeiro play o Spotify ainda não tem fila deste aparelho): vale a nossa lista.
-        self.up_next.as_ref().filter(|l| !l.is_empty() && (self.shuffle || self.remote.is_some()))
+        self.up_next.as_ref().filter(|l| !l.is_empty() && (self.shuffle || self.elsewhere().is_some()))
     }
 
     fn queue_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2380,7 +2380,7 @@ impl Cyder {
                     .child(div().flex().items_center().gap_2()
                         .child(div().flex_1().child(heading("A seguir")))
                         // Tocando em outro aparelho, a fila é a dele: a Web API não deixa limpar.
-                        .when(upcoming > 0 && self.remote.is_none(), |d| d.child(Self::text_button("queue-clear", "Limpar fila").flex_none()
+                        .when(upcoming > 0 && self.elsewhere().is_none(), |d| d.child(Self::text_button("queue-clear", "Limpar fila").flex_none()
                             .on_click(cx.listener(|t, _, _, cx| { t.clear_queue(); cx.notify(); }))))),
             )
             .child(if upcoming == 0 { Self::quiet("Nada na fila depois desta.").into_any_element() } else { list.into_any_element() })
@@ -2422,7 +2422,7 @@ impl Cyder {
         let accent = self.accent_ink();
         // Arrasta pela posição na lista que aparece: a nossa ou, com o aleatório, a do Spotify (o player troca
         // a ordem das próximas dele). Com outro aparelho tocando, a Web API não deixa reorganizar.
-        let drag = if current || self.remote.is_some() {
+        let drag = if current || self.elsewhere().is_some() {
             None
         } else if self.spotify_queue().is_some() {
             spotify.map(|i| (i, true))

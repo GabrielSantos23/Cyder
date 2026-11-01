@@ -14,6 +14,7 @@ pub mod listen;
 pub mod lyrics;
 pub mod moods;
 pub mod player;
+pub mod soloist;
 pub mod stats;
 pub mod update;
 mod sink;

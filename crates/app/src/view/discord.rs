@@ -109,12 +109,13 @@ impl Cyder {
             return;
         }
         let start = now_secs().saturating_sub(self.position() as u64 / 1000);
+        let here = self.elsewhere().is_none();
         let presence = self.presence.get_or_insert_with(|| {
             let (tx, rx) = mpsc::channel();
             std::thread::Builder::new().name("discord".into()).spawn(move || run(rx)).ok();
             Presence { tx, shown: Shown::default() }
         });
-        let track = self.tracks.get(self.current).filter(|_| on && self.remote.is_none());
+        let track = self.tracks.get(self.current).filter(|_| on && here);
         let now = Shown {
             app_id: self.settings.discord_app_id.trim().to_string(),
             uri: track.map(|t| t.uri.clone()).unwrap_or_default(),

@@ -9,7 +9,7 @@ use librespot::protocol::connect::ClusterUpdate;
 use tokio::sync::{Semaphore, mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}};
 
 use crate::{
-    Card, Device, Kind, Library, Page, SearchKind, SearchResults, Shelf, Track, api::{self, WebApi}, auth, cache, config, history, internal, lastfm, listen, update,
+    Card, Device, Kind, Library, Page, SearchKind, SearchResults, Shelf, Track, api::{self, WebApi}, auth, cache, config, history, internal, lastfm, listen, soloist, update,
     images::{self, Art},
     lyrics::{self, Lyrics},
     player::{self, PlayerCmd, PlayerOut, Repeat},
@@ -107,6 +107,8 @@ pub enum Cmd {
     RestartPlayer,
     /// O Client ID mudou: refaz o login da Web API com o app novo.
     Relogin,
+    /// Chave do Soloist (o player oficial do Spotify) nova, ou None para desligar.
+    SoloistKey(Option<String>),
 }
 
 pub enum AppEvent {
@@ -195,6 +197,9 @@ pub enum AppEvent {
     Lastfm(Option<String>),
     /// Abrir no navegador (autorizar o Last.fm).
     OpenUrl(String),
+    Soloist(crate::soloist::Status),
+    /// O Spotify recusa o áudio desta conta ao player do Cyder e o Soloist não está ligado.
+    AudioRefused,
 }
 
 /// Modo de ouvir junto.
@@ -1082,6 +1087,81 @@ async fn own_radio(session: &librespot::core::Session, seed: &Track) -> Result<V
 }
 
 /// Capa e letra da faixa `index`, em segundo plano.
+/// Corpo do play da Web API para o Soloist: álbum e playlist vão como contexto (o Spotify segue a lista dele);
+/// o resto vai como lista de faixas, até 100 em volta da escolhida. Devolve também onde a lista mandada acaba
+/// na nossa (`usize::MAX` com contexto: o Spotify segue sozinho).
+fn soloist_body(tracks: &[Track], index: usize, context: Option<&str>, position_ms: u32) -> (serde_json::Value, usize) {
+    const MAX: usize = 100;
+    let uri = tracks.get(index).map(|t| t.uri.as_str());
+    match context.filter(|c| c.starts_with("spotify:album:") || c.starts_with("spotify:playlist:")) {
+        Some(c) => match uri {
+            Some(u) => (serde_json::json!({ "context_uri": c, "offset": { "uri": u }, "position_ms": position_ms }), usize::MAX),
+            None => (serde_json::json!({ "context_uri": c }), usize::MAX),
+        },
+        None => {
+            let start = index.saturating_sub(MAX / 4).min(tracks.len().saturating_sub(MAX));
+            let uris: Vec<&str> = tracks.iter().skip(start).take(MAX).map(|t| t.uri.as_str()).collect();
+            let end = start + uris.len();
+            (serde_json::json!({ "uris": uris, "offset": { "position": index.saturating_sub(start) }, "position_ms": position_ms }), end)
+        }
+    }
+}
+
+/// O Cyder toca: pelo próprio player (nenhum aparelho remoto) ou pelo Soloist dele.
+fn plays_here(remote: Option<&str>) -> bool {
+    remote.is_none_or(|d| d == soloist::DEVICE_NAME)
+}
+
+/// A fila mudou (mover, limpar, smart shuffle, rádio): manda a lista nova para quem toca. Outro aparelho segue a
+/// fila do Spotify e não recebe nada. Devolve até onde vai a lista mandada ao Soloist.
+#[allow(clippy::too_many_arguments)]
+fn reload_queue(ctx: &Ctx, pcmd: &UnboundedSender<PlayerCmd>, remote: Option<&str>, tracks: &[Track], index: usize, position_ms: u32, playing: bool, shuffle: bool, repeat: Repeat) -> usize {
+    match remote {
+        None => {
+            let _ = pcmd.send(PlayerCmd::Reload { queue: tracks.to_vec(), index, position_ms });
+            usize::MAX
+        }
+        Some(soloist::DEVICE_NAME) => {
+            // Sem o contexto: a lista agora é a nossa, não a do álbum.
+            let (body, end) = soloist_body(tracks, index, None, position_ms);
+            tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, !playing));
+            end
+        }
+        Some(_) => usize::MAX,
+    }
+}
+
+/// Toca pelo Soloist: acha o aparelho na conta e manda o play, com o aleatório e o repetir do Cyder.
+/// `paused`: era só trocar a lista com a música pausada; pausa de novo.
+async fn play_on_soloist(ctx: Ctx, body: serde_json::Value, shuffle: bool, repeat: Repeat, paused: bool) {
+    let mut device = None;
+    // Logo depois de parear, o aparelho demora um pouco para aparecer na lista.
+    for _ in 0..3 {
+        match ctx.api.devices().await {
+            Ok(list) => device = list.into_iter().find(|d| d.name == soloist::DEVICE_NAME).map(|d| d.id),
+            Err(e) => return ctx.send(AppEvent::Notice(format!("Não deu para achar o Soloist: {e}"))),
+        }
+        if device.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+    let Some(id) = device else {
+        return ctx.send(AppEvent::Notice("O Soloist não aparece nos aparelhos desta conta. Ele precisa ser escolhido no app do Spotify com a mesma conta do Cyder.".into()));
+    };
+    log::info!("tocando pelo Soloist ({id})");
+    if let Err(e) = ctx.api.play_on(&id, body).await {
+        return ctx.send(AppEvent::Notice(format!("O Soloist não aceitou o play: {e}")));
+    }
+    let repeat = match repeat { Repeat::Off => "off", Repeat::All => "context", Repeat::One => "track" };
+    let pause = paused.then(|| format!("/pause?device_id={id}"));
+    for path in [format!("/shuffle?state={shuffle}&device_id={id}"), format!("/repeat?state={repeat}&device_id={id}")].into_iter().chain(pause) {
+        if let Err(e) = ctx.api.control(reqwest::Method::PUT, &path).await {
+            log::warn!("soloist: {path}: {e}");
+        }
+    }
+}
+
 fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session: &librespot::core::Session, tracks: &[Track], index: usize) {
     let Some(track) = tracks.get(index).cloned() else { return };
     let cache = config::cache_dir();
@@ -1301,6 +1381,18 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let _ = pcmd_tx.send(PlayerCmd::SetRepeat(repeat));
     let _ = pcmd_tx.send(PlayerCmd::Load { queue: tracks.clone(), index, context: context.clone(), position_ms: anchor.0 });
     let mut liked_from_cache = ready.liked_from_cache;
+    // Com o Soloist pareado, o play vai para ele; o resto segue o modo "outro aparelho".
+    let (soloist_tx, mut soloist_rx) = unbounded_channel();
+    let mut _soloist = soloist::key().map(|key| soloist::start(ctx.http.clone(), key, soloist_tx.clone()));
+    let mut soloist_ready = false;
+    // O Spotify recusou o áudio: quando o Soloist ficar pronto, a fila continua por ele sem pedir nada.
+    let mut resume_on_soloist = false;
+    // Fora de álbum e playlist, o Soloist recebe até 100 faixas: o índice (na nossa lista) onde a mandada acaba.
+    let mut soloist_end = usize::MAX;
+    // Teste da chave de áudio ao abrir (uma vez): sem o Soloist, a recusa já aparece antes do primeiro play.
+    let (refused_tx, mut refused_rx) = unbounded_channel::<bool>();
+    let mut probed = false;
+    ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
     // O app pode fechar a qualquer momento (o processo morre junto com a janela): salva com frequência.
     let mut autosave = tokio::time::interval(std::time::Duration::from_secs(5));
     // Ouvir junto: o código de quem convida e, de quem entrou, o que chega do canal.
@@ -1357,18 +1449,45 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     ctx.thumbs(tracks.iter().filter_map(|t| t.cover_small.clone()).collect());
                     ctx.send(AppEvent::Queue(tracks.clone()));
                     ctx.send(AppEvent::TrackChanged(0));
-                    let _ = pcmd_tx.send(if st.playing {
-                        PlayerCmd::Play { queue: tracks.clone(), index: 0, context: None, start_ms: target, shuffle_start: false }
+                    if soloist_ready {
+                        if st.playing {
+                            let (body, end) = soloist_body(&tracks, 0, None, target);
+                            soloist_end = end;
+                            tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                            poll(&ctx, 1500);
+                        }
                     } else {
-                        PlayerCmd::Load { queue: tracks.clone(), index: 0, context: None, position_ms: target }
-                    });
+                        let _ = pcmd_tx.send(if st.playing {
+                            PlayerCmd::Play { queue: tracks.clone(), index: 0, context: None, start_ms: target, shuffle_start: false }
+                        } else {
+                            PlayerCmd::Load { queue: tracks.clone(), index: 0, context: None, position_ms: target }
+                        });
+                    }
                 } else {
                     let here = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
+                    // Pelo Soloist (ou outro aparelho), os ajustes vão pela Web API.
+                    let mut calls = Vec::new();
                     if here.abs_diff(target) > LISTEN_DRIFT_MS {
-                        let _ = pcmd_tx.send(PlayerCmd::Seek(target));
+                        match remote {
+                            Some(_) => calls.push(format!("/seek?position_ms={target}")),
+                            None => drop(pcmd_tx.send(PlayerCmd::Seek(target))),
+                        }
                     }
                     if st.playing != playing {
-                        let _ = pcmd_tx.send(PlayerCmd::Toggle);
+                        match remote {
+                            Some(_) => calls.push(if st.playing { "/play".into() } else { "/pause".into() }),
+                            None => drop(pcmd_tx.send(PlayerCmd::Toggle)),
+                        }
+                    }
+                    if !calls.is_empty() {
+                        let ctx = ctx.clone();
+                        tokio::spawn(async move {
+                            for path in calls {
+                                if let Err(e) = ctx.api.control(reqwest::Method::PUT, &path).await {
+                                    log::warn!("ouvir junto: {path}: {e}");
+                                }
+                            }
+                        });
                     }
                 }
             }
@@ -1377,6 +1496,22 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 tokio::spawn(ctx.clone().refresh_home());
             }
             _ = remote_tick.tick(), if remote.is_some() => poll(&ctx, 0),
+            Some(st) = soloist_rx.recv() => {
+                soloist_ready = st == soloist::Status::Ready;
+                ctx.send(AppEvent::Soloist(st));
+                if soloist_ready && std::mem::take(&mut resume_on_soloist) && !tracks.is_empty() {
+                    let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
+                    soloist_end = end;
+                    tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                    poll(&ctx, 1500);
+                }
+            }
+            Some(true) = refused_rx.recv() => {
+                log::error!("o Spotify recusa a chave de áudio desta conta ao librespot");
+                if _soloist.is_none() {
+                    ctx.send(AppEvent::AudioRefused);
+                }
+            }
             _ = wake_tick.tick() => {
                 let now = std::time::SystemTime::now();
                 let gap = now.duration_since(wall).unwrap_or_default();
@@ -1399,16 +1534,16 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                 ctx.send(AppEvent::Reordered(tracks.clone()));
                 ctx.send(AppEvent::SmartShuffle { on: true, added: smart.clone() });
-                let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
             }
             Some((seed, recs)) = radio_rx.recv() => {
                 // Só se a fila ainda é a da música da busca: a pessoa pode ter mudado de música nesse meio-tempo.
-                if remote.is_none() && context.is_none() && tracks.len() == 1 && tracks[0].uri == seed {
+                if plays_here(remote.as_deref()) && context.is_none() && tracks.len() == 1 && tracks[0].uri == seed {
                     tracks.extend(recs);
                     dirty = true;
                     let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                     ctx.send(AppEvent::Reordered(tracks.clone()));
-                    let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                    soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                 }
             }
             Some(active) = cluster_rx.recv() => {
@@ -1454,6 +1589,36 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             fetch_extras(http, out, &ctx.session, &tracks, i);
                             ctx.send(AppEvent::TrackChanged(i));
                             up_next(&ctx, 0);
+                            if st.device == soloist::DEVICE_NAME {
+                                // Começou a última da lista mandada: manda as próximas, quase do começo da faixa.
+                                if i + 1 >= soloist_end && soloist_end < tracks.len() {
+                                    soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, i, st.position_ms, st.playing, st.shuffle, st.repeat);
+                                }
+                                // O Soloist manda o histórico do Spotify sozinho; as estatísticas do Cyder contam aqui.
+                                if let Some((t, at, ms, since, _)) = listen.take() {
+                                    let ms = (ms + since.map_or(0, |s| s.elapsed().as_millis() as u32)).min(t.duration_ms);
+                                    if ms >= crate::stats::MIN_PLAYED_MS {
+                                        tokio::task::spawn_blocking(move || crate::stats::record(&t, ms, at));
+                                    }
+                                }
+                                listen = tracks.get(i).map(|t| (t.clone(), now_secs(), 0, None, context.clone()));
+                            }
+                        }
+                    }
+                    if st.device == soloist::DEVICE_NAME {
+                        if let Some(l) = listen.as_mut() {
+                            match (st.playing, l.3) {
+                                (true, None) => l.3 = Some(std::time::Instant::now()),
+                                (false, Some(since)) => {
+                                    l.2 += since.elapsed().as_millis() as u32;
+                                    l.3 = None;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(t) = tracks.get(index).filter(|t| st.playing && t.uri != noted) {
+                            noted = t.uri.clone();
+                            ctx.note_played(t);
                         }
                     }
                     let _ = pcmd_tx.send(PlayerCmd::Follow { index, context: context.clone(), position_ms: st.position_ms });
@@ -1502,6 +1667,14 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                 }
                 let pcmd = match cmd {
+                    // Nada tocando: retoma a fila pelo Soloist.
+                    Cmd::Toggle if soloist_ready && !playing && !tracks.is_empty() => {
+                        let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
+                        soloist_end = end;
+                        tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                        poll(&ctx, 1500);
+                        continue;
+                    }
                     Cmd::Toggle => PlayerCmd::Toggle,
                     Cmd::Next => PlayerCmd::Next,
                     Cmd::Prev => PlayerCmd::Prev,
@@ -1532,6 +1705,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         }
                         // No Aleatório a faixa `i` é só um palpite da tela: não continua episódio nenhum.
                         let start_ms = queue.get(i).filter(|_| !shuffle_start).and_then(|t| episodes.get(&t.uri)).copied().unwrap_or(0);
+                        if soloist_ready {
+                            let (body, end) = soloist_body(&queue, i, c.as_deref(), start_ms);
+                            soloist_end = end;
+                            tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                            poll(&ctx, 1500);
+                            continue;
+                        }
                         PlayerCmd::Play { queue, index: i, context: c, start_ms, shuffle_start }
                     }
                     Cmd::Open(card) => {
@@ -1585,7 +1765,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             context = None;
                             let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                             ctx.send(AppEvent::Reordered(tracks.clone()));
-                            let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                            soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                             ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
                             continue;
                         }
@@ -1681,7 +1861,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             dirty = true;
                             let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                             ctx.send(AppEvent::Reordered(tracks.clone()));
-                            let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                            soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                         }
                         ctx.send(AppEvent::SmartShuffle { on: false, added: Vec::new() });
                         continue;
@@ -1701,7 +1881,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     Cmd::ClearQueue => {
-                        if remote.is_some() {
+                        if !plays_here(remote.as_deref()) {
                             ctx.send(AppEvent::Notice("Só dá para limpar a fila tocando neste computador.".into()));
                             continue;
                         }
@@ -1711,7 +1891,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                         ctx.send(AppEvent::Reordered(tracks.clone()));
                         ctx.send(AppEvent::SmartShuffle { on: false, added: Vec::new() });
-                        let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                        soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                         // Com o autoplay, o Spotify já pode ter escolhido as próximas.
                         up_next(&ctx, 1500);
                         continue;
@@ -1734,7 +1914,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             dirty = true;
                             let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                             ctx.send(AppEvent::Reordered(tracks.clone()));
-                            let _ = pcmd_tx.send(PlayerCmd::Reload { queue: tracks.clone(), index, position_ms });
+                            soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                         }
                         continue;
                     }
@@ -1930,6 +2110,17 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         auth::forget_web_login();
                         return Flow::Relogin;
                     }
+                    Cmd::SoloistKey(key) => {
+                        if let Err(e) = soloist::save_key(key.as_deref()) {
+                            ctx.send(AppEvent::Notice(format!("Não deu para guardar a chave do Soloist: {e}")));
+                            continue;
+                        }
+                        // Trocar a tarefa fecha o Soloist que estava aberto.
+                        soloist_ready = false;
+                        _soloist = key.map(|key| soloist::start(ctx.http.clone(), key, soloist_tx.clone()));
+                        ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
+                        continue;
+                    }
                 };
                 let _ = pcmd_tx.send(pcmd);
             }
@@ -1942,6 +2133,17 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         ctx.send(AppEvent::PlayerStatus(None));
                         if let Some(plan) = session.get_user_attribute("type") {
                             ctx.send(AppEvent::Plan(plan));
+                        }
+                        // Com o Soloist ligado, ele já toca: não precisa testar.
+                        if !std::mem::replace(&mut probed, true) && _soloist.is_none() {
+                            if let Some(uri) = tracks.iter().chain(liked.iter()).map(|t| t.uri.clone()).find(|u| u.starts_with("spotify:track:")) {
+                                let (session, tx) = (session.clone(), refused_tx.clone());
+                                tokio::spawn(async move {
+                                    if let Some(refused) = player::audio_key_refused(&session, &uri).await {
+                                        let _ = tx.send(refused);
+                                    }
+                                });
+                            }
                         }
                         ctx.session = session;
                         // Outro aparelho já pode estar tocando quando o Cyder abre.
@@ -1972,6 +2174,23 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             tokio::spawn(ctx.clone().refresh_home());
                         }
                         continue;
+                    }
+                    PlayerOut::Refused => {
+                        log::error!("várias faixas seguidas não carregaram; provável recusa da chave de áudio");
+                        resume_on_soloist = true;
+                        if soloist_ready {
+                            resume_on_soloist = false;
+                            let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
+                            soloist_end = end;
+                            tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                            poll(&ctx, 1500);
+                            continue;
+                        }
+                        if _soloist.is_some() {
+                            AppEvent::Notice("O Spotify recusou o áudio ao player do Cyder. A música continua pelo Soloist assim que ele ficar pronto.".into())
+                        } else {
+                            AppEvent::AudioRefused
+                        }
                     }
                     PlayerOut::TrackAdded(t) => {
                         // O que o Connect conta da faixa não traz os ids de artista e álbum; a sessão traz.
@@ -2129,5 +2348,31 @@ mod recent_tests {
         let local = vec![(album("b2", "B"), 40), (album("c", "C"), 20)];
         let ids: Vec<String> = super::recent_albums(&spotify, &local).into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["b2", "a", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod soloist_tests {
+    fn track(n: usize) -> crate::Track {
+        crate::Track { id: n.to_string(), uri: format!("spotify:track:{n}"), name: String::new(), artist: String::new(), album: String::new(), album_id: String::new(), duration_ms: 1, cover_small: None, cover_large: None, artists: Vec::new() }
+    }
+
+    #[test]
+    fn play_body() {
+        let tracks: Vec<_> = (0..300).map(track).collect();
+        let (b, end) = super::soloist_body(&tracks, 5, Some("spotify:album:a"), 1000);
+        assert_eq!(end, usize::MAX);
+        assert_eq!(b["context_uri"], "spotify:album:a");
+        assert_eq!(b["offset"]["uri"], "spotify:track:5");
+        // Sem álbum nem playlist: 100 faixas em volta, com a escolhida no lugar certo.
+        let (b, end) = super::soloist_body(&tracks, 150, Some("spotify:collection"), 0);
+        assert_eq!(b["uris"].as_array().unwrap().len(), 100);
+        assert_eq!(end, 225);
+        assert_eq!(b["uris"][b["offset"]["position"].as_u64().unwrap() as usize], "spotify:track:150");
+        let (b, end) = super::soloist_body(&tracks, 290, None, 0);
+        assert_eq!(end, 300);
+        assert_eq!(b["uris"][b["offset"]["position"].as_u64().unwrap() as usize], "spotify:track:290");
+        let (b, _) = super::soloist_body(&tracks[..3], 2, None, 0);
+        assert_eq!(b["offset"]["position"], 2);
     }
 }

@@ -5,6 +5,7 @@ mod autostart;
 #[cfg(windows)]
 mod icon;
 mod image_lru;
+mod reports;
 mod theme;
 mod view;
 
@@ -193,13 +194,24 @@ fn init_log() {
         let _ = std::fs::rename(&path, dir.join("cyder.old.log"));
     }
     // shortcut: um arquivo por abertura, sem limite de tamanho; no nível info cresce pouco, rotacionar por tamanho se precisar.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,cyder=info,cyder_core=info"))
+    let logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,cyder=info,cyder_core=info"))
         .target(env_logger::Target::Pipe(Box::new(Tee(std::fs::File::create(&path).ok()))))
-        .init();
+        .build();
+    let max = logger.filter();
+    // Os erros viram relatório quando a pessoa deixou (sem o Sentry ligado, não sai nada).
+    let logger = sentry_log::SentryLogger::with_dest(logger).filter(|md| match md.level() {
+        log::Level::Error => sentry_log::LogFilter::Event,
+        _ => sentry_log::LogFilter::Ignore,
+    });
+    if log::set_boxed_logger(Box::new(logger)).is_ok() {
+        log::set_max_level(max);
+    }
+    reports::set(cyder_core::config::settings().send_errors == Some(true));
     // Um panic fecha o app sem janela de erro: fica no log, com o backtrace, e a próxima abertura avisa.
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         log::error!("o Cyder fechou por um erro: {info}\n{}", std::backtrace::Backtrace::force_capture());
+        reports::flush();
         let _ = std::fs::write(crash_marker(), info.to_string());
         default(info);
     }));

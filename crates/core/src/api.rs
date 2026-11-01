@@ -298,6 +298,11 @@ impl WebApi {
         self.write(reqwest::Method::DELETE, &format!("/playlists/{id}/followers"), json!({})).await
     }
 
+    /// Começa a tocar neste aparelho (`body` é o do `/me/player/play`).
+    pub async fn play_on(&self, device_id: &str, body: Value) -> Result<(), String> {
+        self.put(&format!("/me/player/play?device_id={device_id}"), body).await
+    }
+
     /// Passa a reprodução para outro aparelho, continuando a tocar.
     pub async fn transfer(&self, device_id: &str) -> Result<(), String> {
         self.put("/me/player", json!({ "device_ids": [device_id], "play": true })).await

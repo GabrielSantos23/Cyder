@@ -19,6 +19,9 @@ serde_json.workspace = true
 mp4 = "0.14"
 openh264 = "0.9"
 image.workspace = true
+# Relatórios de erro, só com consentimento (reports.rs). Sem o envio de panics do Sentry: o hook do Cyder já registra.
+sentry = { version = "0.49", default-features = false, features = ["reqwest", "native-tls", "contexts"] }
+sentry-log = "0.49"
 
 [build-dependencies]
 # Ícone e nome no executável do Windows (build.rs).

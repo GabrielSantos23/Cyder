@@ -202,7 +202,7 @@ impl Cyder {
                 .child(Self::text_button("onb-shortcuts", "Ver todos os atalhos")
                     .on_click(cx.listener(|t, _, _, cx| { t.dialog = Some(Dialog::Shortcuts); cx.notify(); })))
                 .child(Self::primary_button("onb-listen", "Começar a ouvir")
-                    .on_click(cx.listener(|t, _, window, cx| { t.dialog = None; window.focus(&t.focus, cx); cx.notify(); }))))
+                    .on_click(cx.listener(|t, _, window, cx| { t.dialog = None; t.ask_reports(); window.focus(&t.focus, cx); cx.notify(); }))))
     }
 }
 

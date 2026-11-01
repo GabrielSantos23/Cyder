@@ -7,7 +7,7 @@ repository.workspace = true
 [dependencies]
 librespot.workspace = true
 librespot-oauth.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,7 +27,9 @@ md-5 = "0.10"
 # Conferir o executável baixado de uma atualização (update.rs).
 sha1 = "0.10"
 sha2 = "0.10"
+# API local do Soloist (ws://127.0.0.1); a mesma versão do librespot, sem TLS.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect"] }
 
 [target."cfg(windows)".dependencies]
 # A mesma do app: hora local para a tela inicial (moods.rs).
-windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
