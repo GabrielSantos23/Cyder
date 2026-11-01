@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "cyder"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "cyder-core",
@@ -1066,17 +1066,19 @@ dependencies = [
  "mp4",
  "openh264",
  "raw-window-handle",
+ "resvg",
  "serde_json",
  "souvlaki",
  "tokio",
  "tray-icon",
+ "windows 0.62.2",
  "windows-sys 0.59.0",
  "winresource",
 ]
 
 [[package]]
 name = "cyder-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "dirs",

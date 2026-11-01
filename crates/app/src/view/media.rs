@@ -54,6 +54,23 @@ impl Cyder {
             return log::warn!("teclas de mídia indisponíveis: {e:?}");
         }
         self.media = Some(controls);
+        #[cfg(windows)]
+        if let Some(hwnd) = hwnd {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            match super::thumbbar::attach(hwnd, tx) {
+                Ok(()) => {
+                    cx.spawn(async move |this, cx| {
+                        while let Some(button) = rx.recv().await {
+                            if this.update(cx, |s, cx| { s.thumb_button(button); s.sync_media(); cx.notify(); }).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
+                Err(e) => log::warn!("botões da miniatura indisponíveis: {e}"),
+            }
+        }
         cx.spawn(async move |this, cx| {
             while let Some(ev) = rx.recv().await {
                 if this.update(cx, |s, cx| { s.media_event(ev); s.sync_media(); cx.notify(); }).is_err() {
@@ -63,6 +80,22 @@ impl Cyder {
         })
         .detach();
         self.sync_media();
+    }
+
+    #[cfg(windows)]
+    fn thumb_button(&mut self, button: super::thumbbar::Button) {
+        use super::thumbbar::Button;
+        match button {
+            Button::Like => {
+                if let Some(t) = self.tracks.get(self.current).cloned() {
+                    let liked = self.is_liked(&t.uri);
+                    self.set_liked(&t, !liked);
+                }
+            }
+            Button::Prev => self.prev_track(),
+            Button::Toggle => self.toggle_play(),
+            Button::Next => self.next_track(),
+        }
     }
 
     fn media_event(&mut self, ev: MediaControlEvent) {
@@ -118,6 +151,12 @@ impl Cyder {
         self.track_listen();
         self.sync_discord();
         self.sync_canvas();
+        #[cfg(windows)]
+        super::thumbbar::update(super::thumbbar::Shown {
+            track: self.tracks.get(self.current).is_some(),
+            playing: self.playing,
+            liked: self.tracks.get(self.current).is_some_and(|t| self.is_liked(&t.uri)),
+        });
         let position = self.position();
         let Some(controls) = self.media.as_mut() else { return };
         let track = self.tracks.get(self.current);

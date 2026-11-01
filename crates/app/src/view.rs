@@ -21,6 +21,8 @@ mod menus;
 mod mini;
 mod onboarding;
 #[cfg(windows)]
+mod thumbbar;
+#[cfg(windows)]
 mod tray;
 pub(crate) mod update;
 #[cfg(windows)]

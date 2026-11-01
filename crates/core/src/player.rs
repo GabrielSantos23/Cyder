@@ -88,6 +88,8 @@ struct State {
     anchor: (u32, Instant),
     /// O fim da música está abaixando (transição suave): a próxima entra subindo.
     fading: bool,
+    /// Entre o `load` e a faixa começar: os avisos de aleatório e repetir que chegam aí são velhos (veja `start`).
+    settling: bool,
     out: UnboundedSender<PlayerOut>,
 }
 
@@ -182,8 +184,13 @@ impl State {
             Some(uri) => LoadRequest::from_context_uri(uri.clone(), options),
             None => LoadRequest::from_tracks(self.queue.iter().map(|t| t.uri.clone()).collect(), options),
         };
+        // Ativar o aparelho faz o Spirc avisar o aleatório e o repetir de antes do `load` (desligados, na primeira
+        // vez); o `load` aplica os nossos sem avisar. Sem ignorar esses avisos, o aleatório ligado antes do play
+        // aparecia desligado na tela enquanto a lista tocava embaralhada.
+        self.settling = true;
         let r = self.spirc.activate().and_then(|_| self.spirc.load(request));
         self.loaded = r.is_ok();
+        self.settling = self.loaded;
         self.report(r);
     }
 
@@ -298,6 +305,7 @@ impl State {
             PlayerEvent::TrackChanged { audio_item } => {
                 // Outro aparelho pode ter mandado tocar algo que não está na fila.
                 self.loaded = true;
+                self.settling = false;
                 // Procura da faixa atual para a frente: a mesma música pode estar na fila mais de uma vez.
                 let from = self.index.min(self.queue.len());
                 let found = self.queue[from..].iter().position(|t| t.uri == audio_item.uri).map(|p| p + from)
@@ -338,6 +346,7 @@ impl State {
                 self.send(PlayerOut::Playback { playing: false, position_ms: 0 });
                 self.send(PlayerOut::Idle);
             }
+            PlayerEvent::ShuffleChanged { .. } | PlayerEvent::RepeatChanged { .. } if self.settling => {}
             PlayerEvent::ShuffleChanged { shuffle } => {
                 self.shuffle = shuffle;
                 self.send_modes();
@@ -400,7 +409,7 @@ pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials,
     let _ = out.send(PlayerOut::Connected(session));
     let mut events = player.get_player_event_channel();
     let mut _player = player;
-    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, out };
+    let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, settling: false, out };
     state.send_modes();
     let started = Instant::now();
     let mut fade_tick = tokio::time::interval(std::time::Duration::from_millis(100));
