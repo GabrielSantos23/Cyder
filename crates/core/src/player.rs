@@ -224,6 +224,7 @@ impl State {
                 self.start(true);
             }
             PlayerCmd::Next => {
+                log::info!("próxima pelo Spirc (faixa {} de {})", self.index + 1, self.queue.len());
                 self.report(self.spirc.next());
                 if !self.playing {
                     self.report(self.spirc.play());
@@ -310,6 +311,7 @@ impl State {
                         self.queue.len() - 1
                     }
                 };
+                log::info!("tocando {} (faixa {} de {})", audio_item.uri, index + 1, self.queue.len());
                 self.index = index;
                 self.end_fade(crate::fx::get().fade_ms);
                 self.send(PlayerOut::TrackChanged(index));

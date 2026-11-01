@@ -1150,20 +1150,30 @@ async fn run(mut cmds: UnboundedReceiver<Cmd>, out: UnboundedSender<AppEvent>) {
 /// Repassa os avisos do Spotify Connect da sessão: o id do aparelho ativo ("" quando nenhum toca).
 /// O fluxo acaba junto com a sessão; a próxima (depois de reconectar) assina de novo.
 fn watch_cluster(session: &librespot::core::Session, tx: UnboundedSender<String>) {
-    match session.dealer().listen_for("hm://connect-state/v1/cluster", Message::from_raw::<ClusterUpdate>) {
-        Ok(mut updates) => {
-            tokio::spawn(async move {
-                while let Some(update) = updates.next().await {
-                    let Ok(update) = update else { continue };
-                    let active = update.cluster.as_ref().map_or(String::new(), |c| c.active_device_id.clone());
-                    if tx.send(active).is_err() {
-                        break;
-                    }
+    let session = session.clone();
+    tokio::spawn(async move {
+        // Enquanto o Spirc ainda liga o dealer (logo depois de religar o player), não dá para se inscrever:
+        // espera ele subir.
+        let mut tries = 0;
+        let mut updates = loop {
+            match session.dealer().listen_for("hm://connect-state/v1/cluster", Message::from_raw::<ClusterUpdate>) {
+                Ok(updates) => break updates,
+                Err(e) if tries < 20 && !session.is_invalid() => {
+                    tries += 1;
+                    log::debug!("avisos do Spotify Connect, tentativa {tries}: {e}");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-            });
+                Err(e) => return log::warn!("avisos do Spotify Connect: {e}"),
+            }
+        };
+        while let Some(update) = updates.next().await {
+            let Ok(update) = update else { continue };
+            let active = update.cluster.as_ref().map_or(String::new(), |c| c.active_device_id.clone());
+            if tx.send(active).is_err() {
+                break;
+            }
         }
-        Err(e) => log::warn!("avisos do Spotify Connect: {e}"),
-    }
+    });
 }
 
 enum Flow {
@@ -1413,9 +1423,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 poll(&ctx, 0);
             }
             Some(state) = state_rx.recv() => match state {
-                // Só assume o estado de outro aparelho se ele estiver tocando (ou já estava sendo seguido).
-                Some(st) if !st.device_id.is_empty() && st.device_id != device_id && (st.playing || remote.is_some()) => {
+                // Só assume o estado de outro aparelho se ele estiver tocando (ou já estava sendo seguido). Com o
+                // Cyder tocando aqui, quem toca é ele: a conta só toca num aparelho. Sem isto, a consulta logo depois
+                // de religar o player (trocar a saída de áudio, sessão que caiu) podia tomar o próprio Cyder por outro
+                // aparelho, e o "próxima" ia pela Web API e pelo Spirc ao mesmo tempo: pulava duas.
+                Some(st) if !st.device_id.is_empty() && st.device_id != device_id && (st.playing || remote.is_some()) && (remote.is_some() || !playing) => {
                     if remote.as_deref() != Some(st.device.as_str()) {
+                        log::info!("seguindo outro aparelho: {} ({}); este é {device_id}", st.device, st.device_id);
                         remote = Some(st.device.clone());
                         ctx.send(AppEvent::Remote(Some(st.device.clone())));
                     }
@@ -1471,6 +1485,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         _ => None,
                     };
                     if let Some((method, path)) = call {
+                        log::info!("comando para {}: {path}", remote.as_deref().unwrap_or_default());
                         if matches!(cmd, Cmd::Toggle) {
                             // Responde já; a consulta seguinte confirma.
                             playing = !playing;
