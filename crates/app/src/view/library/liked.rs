@@ -115,7 +115,8 @@ impl Cyder {
         let state = self.page_lists.entry(LIST_KEY.into()).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
         super::resize_list(&state, 1, 1, count);
         let focused = self.liked_search_focus.is_focused(window);
-        list(state, cx.processor(move |this, i: usize, _window, cx| {
+        let bar = super::panel_bar("liked-bar", state.clone(), false);
+        let body = list(state, cx.processor(move |this, i: usize, _window, cx| {
             if i == 0 {
                 let compact = this.liked_order.compact;
                 let columns = super::column_header(if compact { &["Artista", "Álbum"] } else { &["Álbum"] }, !compact);
@@ -145,8 +146,8 @@ impl Cyder {
         .flex_1()
         .min_h_0()
         // O fundo da linha sai da coluna; o texto fica alinhado com o resto da tela.
-        .mx(px(-12.))
-        .into_any_element()
+        .mx(px(-12.));
+        super::super::scrollbar::scrolled(body, bar).into_any_element()
     }
 
     fn liked_header(&mut self, search_focused: bool, cx: &mut Context<Self>) -> AnyElement {

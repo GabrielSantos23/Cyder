@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use cyder_core::{Card, Cmd, Kind, SearchKind, SearchResults, Shelf, config};
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, ParentElement, SharedString, Styled, Window, div, img, prelude::*, px, rgba};
 
-use super::{CardSource, LIST_BOTTOM, SHELF_CARD, Screen, TrackSource, kind_label};
+use super::super::scrollbar::scrolled;
+use super::{CardSource, LIST_BOTTOM, panel_bar, SHELF_CARD, Screen, TrackSource, kind_label};
 use crate::theme;
 use crate::view::{Cyder, Tip, icon, loading};
 
@@ -277,18 +278,20 @@ impl Cyder {
         let shelves: Vec<AnyElement> = self.home.clone().unwrap_or_default().into_iter().enumerate()
             .map(|(i, shelf)| self.shelf(SHELF_BASE + START_SHELVES + i, shelf, cx))
             .collect();
-        div()
+        let handle = self.scroll_handle("search-start");
+        let body = div()
             .id("search-start")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&handle)
             .pb(px(LIST_BOTTOM))
             .flex()
             .flex_col()
             .gap_8()
             .child(recent)
-            .children(shelves)
-            .into_any_element()
+            .children(shelves);
+        scrolled(body, panel_bar("search-start-bar", handle, false)).into_any_element()
     }
 
     fn recent_searches_block(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -370,18 +373,20 @@ impl Cyder {
         let shelves: Vec<AnyElement> = shelves.into_iter().enumerate().filter(|(_, (_, cards))| !cards.is_empty())
             .map(|(i, (kind, cards))| self.shelf(SHELF_BASE + i, Shelf { title: label(kind).into(), cards: cards.clone() }, cx))
             .collect();
-        div()
+        let handle = self.scroll_handle("search-scroll");
+        let body = div()
             .id("search-scroll")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .track_scroll(&handle)
             .pb(px(LIST_BOTTOM))
             .flex()
             .flex_col()
             .gap(px(28.))
             .child(first)
-            .children(shelves)
-            .into_any_element()
+            .children(shelves);
+        scrolled(body, panel_bar("search-bar", handle, false)).into_any_element()
     }
 
     /// O melhor resultado: foto grande, nome e tipo. Com o mouse em cima aparece o tocar.

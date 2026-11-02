@@ -80,9 +80,14 @@ pub fn hover() -> u32 {
     wash(0x14)
 }
 
+/// Fundo do vidro, para quem pinta direto (a trilha da barra de rolagem).
+pub fn glass_fill() -> u32 {
+    pick(0x14141899, 0xffffffb8)
+}
+
 /// Superfície de vidro: cartão de letras, barra do player, avisos.
 pub fn glass(d: Div) -> Div {
-    d.bg(rgba(pick(0x14141899, 0xffffffb8))).border_1().border_color(rgba(wash(0x17))).backdrop_blur(px(40.))
+    d.bg(rgba(glass_fill())).border_1().border_color(rgba(wash(0x17))).backdrop_blur(px(40.))
 }
 
 /// Texto puxado levemente para a cor da capa, como a letra do Cider: branco tingido no escuro,

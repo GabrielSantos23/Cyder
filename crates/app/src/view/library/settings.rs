@@ -102,12 +102,16 @@ impl Cyder {
             .child(self.integrations_section(cx))
             .child(self.storage_section(cx))
             .child(self.about_section(cx));
+        let handle = self.scroll_handle("settings");
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(div().pb_4().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Configurações"))
-            .child(div().id("settings-scroll").flex_1().min_h_0().overflow_y_scroll().pb(px(super::LIST_BOTTOM)).child(body))
+            .child(super::super::scrollbar::scrolled(
+                div().id("settings-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&handle).pb(px(super::LIST_BOTTOM)).child(body),
+                super::panel_bar("settings-bar", handle, false),
+            ))
             .into_any_element()
     }
 

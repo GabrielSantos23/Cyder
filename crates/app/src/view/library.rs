@@ -17,6 +17,7 @@ pub(super) mod settings;
 pub(super) mod stats;
 
 use super::menus::{Menu, MenuTarget};
+use super::scrollbar::{Scrolls, scrollbar, scrolled};
 use super::{Cyder, Tip, fmt, icon, loading};
 use crate::theme;
 use cyder_core::local_offset_secs;
@@ -221,6 +222,11 @@ impl Cyder {
 
     fn scroll(&mut self, key: String) -> UniformListScrollHandle {
         self.scrolls.entry(key).or_default().clone()
+    }
+
+    /// Rolagem de um `div` que sobrevive entre quadros: a do handle de lista guardado com a mesma chave.
+    pub(super) fn scroll_handle(&mut self, key: &str) -> gpui::ScrollHandle {
+        self.scroll(key.into()).0.borrow().base_handle.clone()
     }
 
     fn source_tracks(&self, source: &TrackSource) -> &[Track] {
@@ -801,7 +807,8 @@ impl Cyder {
             .child(if count == 0 {
                 div().flex_1().px_3().pt_2().text_xs().text_color(rgba(theme::ink_3())).children(empty).into_any_element()
             } else {
-                rows.into_any_element()
+                // A sidebar tem px_3: a barra fica nessa margem.
+                scrolled(rows, scrollbar("sidebar-bar", handle).right(px(-11.)).bottom_3()).into_any_element()
             })
             .child(account)
     }
@@ -1001,14 +1008,14 @@ impl Cyder {
         let count = self.source_tracks(&source).len();
         let key = format!("tracks-{}", self.screen.key());
         let handle = self.scroll(key.clone());
-        uniform_list(key, count, cx.processor(move |this, range: Range<usize>, _window, cx| this.track_rows(&source, covers, range, cx)))
+        let list = uniform_list(key.clone(), count, cx.processor(move |this, range: Range<usize>, _window, cx| this.track_rows(&source, covers, range, cx)))
             .flex_1()
             .min_h_0()
             .pb(px(LIST_BOTTOM))
             // O fundo da linha sai da coluna; o texto fica alinhado com o título acima.
             .mx(px(-12.))
-            .track_scroll(&handle)
-            .into_any_element()
+            .track_scroll(&handle);
+        scrolled(list, panel_bar(format!("{key}-bar"), handle, false)).into_any_element()
     }
 
     fn track_rows(&mut self, source: &TrackSource, covers: bool, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1067,14 +1074,14 @@ impl Cyder {
         let rows = self.source_cards(&source).len().div_ceil(cols);
         let key = format!("grid-{}", self.screen.key());
         let handle = self.scroll(key.clone());
-        uniform_list(key, rows, cx.processor(move |this, range: Range<usize>, _window, cx| {
+        let list = uniform_list(key.clone(), rows, cx.processor(move |this, range: Range<usize>, _window, cx| {
             range.map(|r| this.card_row(&source, r, cols, card_w, cx)).collect::<Vec<_>>()
         }))
         .flex_1()
         .min_h_0()
         .pb(px(LIST_BOTTOM))
-        .track_scroll(&handle)
-        .into_any_element()
+        .track_scroll(&handle);
+        scrolled(list, panel_bar(format!("{key}-bar"), handle, false)).into_any_element()
     }
 
     fn card_row(&mut self, source: &CardSource, row: usize, cols: usize, card_w: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -1172,7 +1179,7 @@ impl Cyder {
         if state.item_count() != count {
             state.reset(count);
         }
-        let body = list(state, cx.processor(move |this, i: usize, _window, cx| match i {
+        let body = list(state.clone(), cx.processor(move |this, i: usize, _window, cx| match i {
             0 => this.recent_row(&recent, cx),
             _ if i == count - 1 => div().h(px(LIST_BOTTOM)).into_any_element(),
             _ => {
@@ -1183,7 +1190,7 @@ impl Cyder {
         }))
         .flex_1()
         .min_h_0();
-        div().size_full().flex().flex_col().child(header).child(body).into_any_element()
+        div().size_full().flex().flex_col().child(header).child(scrolled(body, panel_bar("home-bar", state, false))).into_any_element()
     }
 
     /// Álbuns, playlists e artistas tocados por último, do mais recente, com quando. O que está tocando agora
@@ -1389,7 +1396,8 @@ impl Cyder {
         if old != count {
             state.splice(3..old - 4, count - 7);
         }
-        list(state, cx.processor(move |this, i: usize, _window, cx| {
+        let bar = panel_bar("artist-bar", state.clone(), true);
+        let body = list(state, cx.processor(move |this, i: usize, _window, cx| {
             let source = CardSource::ArtistAlbums(id.clone());
             match i {
                 0 => this.artist_hero(&id, cx),
@@ -1408,8 +1416,8 @@ impl Cyder {
             }
         }))
         .flex_1()
-        .min_h_0()
-        .into_any_element()
+        .min_h_0();
+        scrolled(body, bar).into_any_element()
     }
 
     /// Playlists com o artista (o rádio dele e as que a busca acha), como o "Featuring" do Spotify.
@@ -1630,7 +1638,8 @@ impl Cyder {
         let count = loaded.max(1) + 2 + more as usize;
         let state = self.page_lists.entry(id.clone()).or_insert_with(|| ListState::new(count, ListAlignment::Top, px(600.))).clone();
         resize_list(&state, 1, 1, count);
-        list(state, cx.processor(move |this, i: usize, _window, cx| {
+        let bar = panel_bar("media-bar", state.clone(), false);
+        let body = list(state, cx.processor(move |this, i: usize, _window, cx| {
             if i == 0 {
                 this.media_header(&id, cx)
             } else if i == count - 1 {
@@ -1651,8 +1660,8 @@ impl Cyder {
         .flex_1()
         .min_h_0()
         // O fundo da linha sai da coluna; o texto fica alinhado com o resto da tela.
-        .mx(px(-12.))
-        .into_any_element()
+        .mx(px(-12.));
+        scrolled(body, bar).into_any_element()
     }
 
     fn media_header(&mut self, id: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -2344,9 +2353,12 @@ impl Cyder {
         let items = if upcoming == 1 { "1 item".to_string() } else { format!("{upcoming} itens") };
         let mode_color = |on: bool| if on { theme::ink_1() } else { theme::ink_3() };
         let heading = |text: &'static str| div().text_sm().font_weight(FontWeight::BOLD).child(text);
+        let handle = self.scroll("queue".into());
         let list = uniform_list("queue-list", upcoming, cx.processor(|this, range: Range<usize>, _window, cx| this.queue_rows(range, cx)))
             .flex_1()
-            .min_h_0();
+            .min_h_0()
+            .track_scroll(&handle);
+        let list = scrolled(list, scrollbar("queue-bar", handle).right(px(-11.)));
         div()
             .absolute()
             .top(px(theme::TITLEBAR_H))
@@ -2588,6 +2600,11 @@ fn index_cell(i: usize, now: bool, playing: bool, group: &'static str, accent: g
 /// Painéis, menus e diálogos aparecem com um fade curto em vez de surgir de uma vez. A camada cobre a tela
 /// sem receber cliques (não tem eventos), e o conteúdo, posicionado por conta própria, fica onde estava.
 /// Com "reduzir movimento" do sistema, o GPUI pula a animação.
+/// Barra das telas do painel: na margem direita dele (`bleed`: a tela já vai até a borda) e acima do player.
+pub(super) fn panel_bar(id: impl Into<gpui::ElementId>, handle: impl Scrolls, bleed: bool) -> impl IntoElement {
+    scrollbar(id, handle).right(px(if bleed { 4. } else { 4. - PAD })).bottom(px(DOCK_H + 24.))
+}
+
 pub(super) fn appear(id: &'static str, content: AnyElement) -> AnyElement {
     div()
         .absolute()

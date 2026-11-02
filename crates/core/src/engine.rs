@@ -1676,6 +1676,21 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     Cmd::Toggle => PlayerCmd::Toggle,
+                    // Pausado há muito tempo, o Spotify esquece o Soloist: a fila segue por ele. O player daqui ainda
+                    // tem a fila de quando o app abriu, e o "próxima" nele voltava a lista e esvaziava o player da tela.
+                    Cmd::Next | Cmd::Prev if soloist_ready && !playing && !tracks.is_empty() => {
+                        let i = match cmd {
+                            Cmd::Prev => index.saturating_sub(1),
+                            _ if index + 1 < tracks.len() => index + 1,
+                            _ if repeat == Repeat::All => 0,
+                            _ => continue,
+                        };
+                        let (body, end) = soloist_body(&tracks, i, context.as_deref(), 0);
+                        soloist_end = end;
+                        tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                        poll(&ctx, 1500);
+                        continue;
+                    }
                     Cmd::Next => PlayerCmd::Next,
                     Cmd::Prev => PlayerCmd::Prev,
                     Cmd::Seek(ms) => PlayerCmd::Seek(ms),

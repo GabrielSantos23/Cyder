@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "cyder"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "cyder-core",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "cyder-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "dirs",

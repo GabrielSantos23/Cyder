@@ -102,12 +102,16 @@ impl Cyder {
                     .into_any_element()
             }
         };
+        let handle = self.scroll_handle("stats");
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(div().id("stats-scroll").flex_1().min_h_0().overflow_y_scroll().pb(px(super::LIST_BOTTOM))
-                .child(div().w_full().max_w(px(MAX_W)).child(header).child(body)))
+            .child(super::super::scrollbar::scrolled(
+                div().id("stats-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&handle).pb(px(super::LIST_BOTTOM))
+                    .child(div().w_full().max_w(px(MAX_W)).child(header).child(body)),
+                super::panel_bar("stats-bar", handle, false),
+            ))
             .into_any_element()
     }
 

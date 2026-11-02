@@ -15,6 +15,7 @@ use crate::theme::{self, glass};
 mod canvas;
 mod discord;
 mod library;
+mod scrollbar;
 mod loading;
 mod media;
 mod menus;
@@ -1426,15 +1427,19 @@ impl Cyder {
                     })))
                     .into_any_element()
             }
-            Some(Lyrics::Plain(lines)) => div()
-                .id("plain-lyrics")
-                .size_full()
-                .overflow_y_scroll()
-                .px(px(style.pad_x))
-                .py_10()
-                .child(div().mb_4().text_xs().text_color(rgba(theme::ink_3())).child("Letra sem sincronia"))
-                .children(lines.into_iter().map(|l| div().min_h(px(style.line_h)).text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(l)))
-                .into_any_element(),
+            Some(Lyrics::Plain(lines)) => {
+                let handle = self.scroll_handle("plain-lyrics");
+                let body = div()
+                    .id("plain-lyrics")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&handle)
+                    .px(px(style.pad_x))
+                    .py_10()
+                    .child(div().mb_4().text_xs().text_color(rgba(theme::ink_3())).child("Letra sem sincronia"))
+                    .children(lines.into_iter().map(|l| div().min_h(px(style.line_h)).text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(l)));
+                scrollbar::scrolled(body, scrollbar::scrollbar("plain-lyrics-bar", handle).top(px(12.)).bottom(px(12.)).right(px(4.))).size_full().into_any_element()
+            }
             Some(Lyrics::Synced(lines)) => {
                 let width = px(card_w - style.pad_x * 2.);
                 let tops = self.lyric_tops(window, &lines, width, style);
