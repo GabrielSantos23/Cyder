@@ -71,6 +71,19 @@ impl Cyder {
                 Err(e) => log::warn!("botões da miniatura indisponíveis: {e}"),
             }
         }
+        #[cfg(windows)]
+        {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            self.toast_tx = Some(tx);
+            cx.spawn(async move |this, cx| {
+                while rx.recv().await.is_some() {
+                    if this.update(cx, |s, cx| { s.next_track(); s.sync_media(); cx.notify(); }).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         cx.spawn(async move |this, cx| {
             while let Some(ev) = rx.recv().await {
                 if this.update(cx, |s, cx| { s.media_event(ev); s.sync_media(); cx.notify(); }).is_err() {
@@ -86,15 +99,18 @@ impl Cyder {
     fn thumb_button(&mut self, button: super::thumbbar::Button) {
         use super::thumbbar::Button;
         match button {
-            Button::Like => {
-                if let Some(t) = self.tracks.get(self.current).cloned() {
-                    let liked = self.is_liked(&t.uri);
-                    self.set_liked(&t, !liked);
-                }
-            }
+            Button::Like => self.toggle_like_current(),
             Button::Prev => self.prev_track(),
             Button::Toggle => self.toggle_play(),
             Button::Next => self.next_track(),
+        }
+    }
+
+    /// Curte ou descurte a faixa atual (botão da miniatura e atalho global).
+    pub(super) fn toggle_like_current(&mut self) {
+        if let Some(t) = self.tracks.get(self.current).cloned() {
+            let liked = self.is_liked(&t.uri);
+            self.set_liked(&t, !liked);
         }
     }
 
@@ -152,11 +168,19 @@ impl Cyder {
         self.sync_discord();
         self.sync_canvas();
         #[cfg(windows)]
+        self.sync_toast();
+        #[cfg(windows)]
         super::thumbbar::update(super::thumbbar::Shown {
             track: self.tracks.get(self.current).is_some(),
             playing: self.playing,
             liked: self.tracks.get(self.current).is_some_and(|t| self.is_liked(&t.uri)),
         });
+        // Tocando em outro aparelho, o ícone não mostra progresso: a música não é deste computador.
+        #[cfg(windows)]
+        super::thumbbar::progress(
+            self.tracks.get(self.current).filter(|t| t.duration_ms > 0 && self.elsewhere().is_none())
+                .map(|t| (self.playing, (self.position() as u64 * 1000 / t.duration_ms as u64) as u32)),
+        );
         let position = self.position();
         let Some(controls) = self.media.as_mut() else { return };
         let track = self.tracks.get(self.current);

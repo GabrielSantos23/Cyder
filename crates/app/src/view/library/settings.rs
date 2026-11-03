@@ -2,10 +2,9 @@
 //! (mesma fila e posição) um pouco depois da última mudança; as outras valem na hora.
 use std::time::{Duration, Instant};
 
-use cyder_core::{Cmd, config::{self, Quality, Settings, Theme}, images};
+use cyder_core::{Cmd, config::{self, Accent, Quality, Settings, Theme}, images};
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, ParentElement, SharedString, Styled, Window, div, img, prelude::*, px, rgba};
 
-use super::LIKED_GREEN;
 use crate::theme;
 use crate::view::{Ask, Cyder, Dialog, Help, KEEP_PLAYING, Phase, Tip, icon};
 
@@ -58,12 +57,25 @@ impl Cyder {
                 return;
             }
         }
+        #[cfg(windows)]
+        if self.settings.spotify_links != before.spotify_links {
+            let done = if self.settings.spotify_links { crate::protocol::sync(true) } else { crate::protocol::release() };
+            if let Err(e) = done {
+                self.settings.spotify_links = before.spotify_links;
+                self.notify(format!("Não deu para mudar quem abre os links do Spotify: {e}"));
+                return;
+            }
+        }
         config::save_settings(&self.settings);
         if self.settings.send_errors != before.send_errors {
             crate::reports::set(self.settings.send_errors == Some(true));
         }
         cyder_core::fx::set(self.settings.fx());
         KEEP_PLAYING.store(self.settings.keep_playing_on_close, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(windows)]
+        if (self.settings.global_hotkeys, &self.settings.hotkeys) != (before.global_hotkeys, &before.hotkeys) {
+            self.apply_hotkeys();
+        }
         if restart {
             self.restart_due = Some(Instant::now());
             self.playback_note = Some("Vale em instantes; a música pode parar por um segundo.");
@@ -98,7 +110,10 @@ impl Cyder {
             .child(self.account_section(cx))
             .child(self.playback_section(window, cx))
             .child(self.sound_section(cx))
-            .child(self.appearance_section(cx))
+            .child(self.appearance_section(cx));
+        #[cfg(windows)]
+        let body = body.child(self.hotkeys_section(window, cx));
+        let body = body
             .child(self.integrations_section(cx))
             .child(self.storage_section(cx))
             .child(self.about_section(cx));
@@ -204,6 +219,12 @@ impl Cyder {
                     .child(self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx)),
             )),
         ];
+        // Sem o app oficial do Spotify, os links já abrem no Cyder; com ele, só se a pessoa pedir.
+        #[cfg(windows)]
+        if crate::protocol::other_app() {
+            rows.push(Self::row("Abrir links do Spotify no Cyder", "Links spotify: de sites e mensagens abrem aqui, e não no app do Spotify.".into(),
+                self.toggle("settings-spotify-links", s.spotify_links, |st| st.spotify_links = !st.spotify_links, false, cx)));
+        }
         // Com o Soloist, a linha dele já explica; com outro aparelho, explica aqui.
         if let Some(why) = why.filter(|_| self.soloist != cyder_core::soloist::Status::Ready) {
             rows.insert(2, div().text_sm().text_color(rgba(theme::ink_2())).child(why).into_any_element());
@@ -333,18 +354,90 @@ impl Cyder {
         let on = self.settings.cover_colors;
         let theme = self.segmented(
             "settings-theme",
-            [(Theme::Dark, "Escuro"), (Theme::Light, "Claro"), (Theme::System, "Sistema")],
+            [(Theme::Dark, "Escuro"), (Theme::Light, "Claro"), (Theme::System, "Igual ao sistema")],
             self.settings.theme,
             |st, t| st.theme = t,
             false,
             cx,
         );
+        let accent = self.segmented("settings-accent", [(Accent::Green, "Verde"), (Accent::System, "Do Windows")], self.settings.accent, |st, a| st.accent = a, false, cx);
         let canvas = self.toggle("settings-canvas", self.settings.canvas, |st| st.canvas = !st.canvas, false, cx);
-        Self::section("Aparência", vec![Self::row("Canvas", "Mostra no fundo do modo imersivo o vídeo curto que algumas músicas têm no Spotify.".into(), canvas), Self::row("Tema", "Sistema segue o modo claro ou escuro do Windows. O modo imersivo fica sempre escuro.".into(), theme), Self::row(
+        let mut rows = vec![
+            Self::row("Canvas", "Mostra no fundo do modo imersivo o vídeo curto que algumas músicas têm no Spotify.".into(), canvas),
+            Self::row("Tema", "Igual ao sistema segue o claro ou escuro do Windows. O modo imersivo fica sempre escuro.".into(), theme),
+            Self::row("Cor de destaque", "Curtidas, botões ligados e a faixa tocando. A do Windows é ajustada para ficar legível.".into(), accent),
+        ];
+        let cover_frame = self.toggle("settings-cover-frame", self.settings.cover_frame, |st| st.cover_frame = !st.cover_frame, false, cx);
+        rows.push(Self::row("Capa no fundo", "Mostra a capa da música, borrada, atrás da barra lateral.".into(), cover_frame));
+        rows.push(Self::row(
             "Cores da capa",
             "Pinta o fundo das páginas de álbum, playlist e podcast e o destaque do player com as cores da capa.".into(),
             self.toggle("settings-cover-colors", on, |st| st.cover_colors = !st.cover_colors, false, cx),
-        )])
+        ));
+        Self::section("Aparência", rows)
+    }
+
+    /// Atalhos globais: ligar e trocar a combinação de cada comando. Clicar num atalho espera a combinação nova.
+    #[cfg(windows)]
+    fn hotkeys_section(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        use crate::view::hotkeys::{NAMES, label};
+        // Saiu do atalho sem apertar nada (clicou fora): volta a valer o que estava.
+        if self.hotkeys.recording.is_some() && !self.hotkeys.focus.is_focused(window) {
+            self.hotkeys.error = None;
+            self.stop_recording_hotkey();
+        }
+        let on = self.settings.global_hotkeys;
+        let mut rows = vec![Self::row(
+            "Usar atalhos globais",
+            "Controlam a música com o Cyder escondido ou atrás de outras janelas, para teclados sem teclas de mídia.".into(),
+            self.toggle("settings-hotkeys", on, |st| st.global_hotkeys = !st.global_hotkeys, false, cx),
+        )];
+        if on {
+            for (i, name) in NAMES.into_iter().enumerate() {
+                let recording = self.hotkeys.recording == Some(i);
+                let taken = self.hotkeys.taken[i] && !recording;
+                let keys = label(&self.settings.hotkeys[i]);
+                let detail = if recording {
+                    "Aperte a combinação nova. Esc cancela."
+                } else if taken {
+                    "Outro programa já usa este atalho. Clique para trocar."
+                } else {
+                    ""
+                };
+                let chip = Self::focusable(("settings-hotkey", i))
+                    .min_w(px(150.))
+                    .h(px(32.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .bg(rgba(theme::wash(0x14)))
+                    .hover(|s| s.bg(rgba(theme::wash(0x1f))))
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .aria_label(SharedString::from(format!("{name}: {keys}. Trocar")))
+                    .when(taken, |d| d.border_color(rgba((theme::DANGER << 8) | 0xff)).text_color(rgba((theme::DANGER << 8) | 0xff)))
+                    .when(recording, |d| {
+                        d.track_focus(&self.hotkeys.focus)
+                            .key_context("TextField")
+                            .border_color(rgba(theme::ink_1()))
+                            .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.hotkey_key(e, window, cx)))
+                    })
+                    .on_click(cx.listener(move |t, _, window, cx| {
+                        if t.hotkeys.recording != Some(i) {
+                            t.record_hotkey(i, window, cx);
+                            cx.notify();
+                        }
+                    }))
+                    .child(if recording { "Aperte as teclas…".to_string() } else { keys });
+                rows.push(Self::row(name, detail.into(), chip));
+            }
+            if let Some(error) = self.hotkeys.error.clone() {
+                rows.push(div().text_sm().text_color(rgba((theme::DANGER << 8) | 0xff)).child(error).into_any_element());
+            }
+        }
+        Self::section("Atalhos globais", rows)
     }
 
     fn integrations_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -394,6 +487,21 @@ impl Cyder {
         Self::section("Integrações", vec![
             lastfm,
             self.help_row("Discord", Help::Discord, discord_detail.into(), discord_control, cx),
+            Self::row(
+                "Avisar a troca de música",
+                {
+                    #[cfg(windows)]
+                    let off = self.settings.toasts && crate::view::toast::blocked();
+                    #[cfg(not(windows))]
+                    let off = false;
+                    if off {
+                        "As notificações estão desligadas no Windows. Ligue em Configurações › Sistema › Notificações.".into()
+                    } else {
+                        "Mostra uma notificação do Windows com a capa e o botão Pular quando a música muda e o Cyder não está na frente.".into()
+                    }
+                },
+                self.toggle("settings-toasts", self.settings.toasts, |st| st.toasts = !st.toasts, false, cx),
+            ),
             Self::row(
                 "Mini player",
                 "Uma janela pequena por cima das outras com a capa e os controles. Também abre pelo ícone da bandeja.".into(),
@@ -513,6 +621,8 @@ impl Cyder {
     }
 
     fn toggle(&mut self, id: &'static str, on: bool, flip: fn(&mut Settings), restart: bool, cx: &mut Context<Self>) -> AnyElement {
+        // Sobre o destaque do Windows, a bolinha segue a cor que contrasta (escura num azul claro, como no Windows 11).
+        let knob = if on && self.settings.accent == Accent::System { theme::on_accent() } else { 0xffffffff };
         Self::focusable(id)
             .w(px(40.))
             .h(px(22.))
@@ -520,12 +630,12 @@ impl Cyder {
             .rounded_full()
             .flex()
             .items_center()
-            .when(on, |d| d.justify_end().bg(rgba(LIKED_GREEN)))
+            .when(on, |d| d.justify_end().bg(rgba(theme::accent())))
             .when(!on, |d| d.bg(rgba(theme::wash(0x26))).hover(|s| s.bg(rgba(theme::wash(0x38)))))
             .aria_label(if on { "Ligado" } else { "Desligado" })
             .aria_selected(on)
             .on_click(cx.listener(move |t, _, _, cx| { t.change(flip, restart); cx.notify(); }))
-            .child(div().size(px(18.)).rounded_full().bg(rgba(0xffffffff)).shadow_sm())
+            .child(div().size(px(18.)).rounded_full().bg(rgba(knob)).shadow_sm())
             .into_any_element()
     }
 

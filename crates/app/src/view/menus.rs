@@ -372,7 +372,7 @@ impl Cyder {
             }
             Action::Like { track, on } => self.set_liked(&track, on),
             Action::Queue(track) => self.send(Cmd::AddToQueue(track)),
-            Action::AddTo { playlist, uri } => self.send(Cmd::AddToPlaylist { playlist, uri }),
+            Action::AddTo { playlist, uri } => self.send(Cmd::AddToPlaylist { playlist, uris: vec![uri] }),
             Action::Sleep(choice) => {
                 self.sleep = match choice {
                     Some(SleepChoice::Minutes(m)) => Some(Sleep::At(Instant::now() + Duration::from_secs(m * 60))),

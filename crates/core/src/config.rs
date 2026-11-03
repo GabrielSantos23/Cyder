@@ -126,6 +126,14 @@ pub enum Theme {
     System,
 }
 
+/// Cor de destaque: o verde do Spotify ou a do Windows (ajustada para o contraste).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Accent {
+    #[default]
+    Green,
+    System,
+}
+
 /// Configurações da tela de configurações. Campos que faltam no arquivo ficam no padrão.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -140,11 +148,16 @@ pub struct Settings {
     pub keep_playing_on_close: bool,
     /// Abrir com o Windows (escondido na bandeja). O app grava no registro do Windows quando muda.
     pub open_at_login: bool,
+    /// Links `spotify:` abrem no Cyder mesmo com o app oficial do Spotify instalado (sem ele, abrem de qualquer jeito).
+    pub spotify_links: bool,
     pub audio_cache: bool,
     pub audio_cache_mb: u32,
     /// Cores da capa nas páginas e no destaque.
     pub cover_colors: bool,
     pub theme: Theme,
+    pub accent: Accent,
+    /// A capa da música tocando, borrada, na moldura em volta do painel (barra lateral e botões da janela).
+    pub cover_frame: bool,
     /// Canvas (o vídeo curto de algumas músicas) no fundo do modo imersivo.
     pub canvas: bool,
     /// Equalizador: ligado e o ganho de cada faixa em dB (`fx::BANDS`).
@@ -155,12 +168,18 @@ pub struct Settings {
     /// Mostra no Discord o que está tocando, pelo app que o usuário criou no Discord.
     pub discord: bool,
     pub discord_app_id: String,
+    /// Notificação do Windows ao trocar de faixa, com a janela fora de foco.
+    pub toasts: bool,
     /// Aleatório lembrado por tipo de lista, como no Spotify: ligar numa playlist (ou nas curtidas) liga para
     /// as próximas playlists; álbuns têm o deles.
     pub shuffle_playlists: bool,
     pub shuffle_albums: bool,
     /// Relatórios de erro ao desenvolvedor: None enquanto a pessoa não respondeu.
     pub send_errors: Option<bool>,
+    /// Atalhos globais (Windows), que valem com o Cyder escondido: tocar/pausar, próxima, anterior, volume +/− e curtir.
+    /// Cada um no formato do GPUI ("ctrl-alt-space").
+    pub global_hotkeys: bool,
+    pub hotkeys: [String; 6],
 }
 
 impl Default for Settings {
@@ -173,19 +192,25 @@ impl Default for Settings {
             gapless: true,
             keep_playing_on_close: false,
             open_at_login: false,
+            spotify_links: false,
             audio_cache: true,
             audio_cache_mb: 1024,
             cover_colors: true,
             theme: Theme::Dark,
+            accent: Accent::Green,
+            cover_frame: false,
             canvas: true,
             eq_on: false,
             eq: [0.; 6],
             fade_secs: 0,
             discord: false,
             discord_app_id: String::new(),
+            toasts: false,
             shuffle_playlists: false,
             shuffle_albums: false,
             send_errors: None,
+            global_hotkeys: false,
+            hotkeys: ["ctrl-alt-space", "ctrl-alt-right", "ctrl-alt-left", "ctrl-alt-up", "ctrl-alt-down", "ctrl-alt-l"].map(String::from),
         }
     }
 }

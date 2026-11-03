@@ -12,7 +12,12 @@ pub const TITLEBAR_H: f32 = 40.;
 
 thread_local! {
     static LIGHT: Cell<bool> = const { Cell::new(false) };
+    static COVER_FRAME: Cell<bool> = const { Cell::new(false) };
+    static ACCENT: Cell<Option<u32>> = const { Cell::new(None) };
 }
+
+/// O verde do Spotify, o destaque padrão.
+const GREEN: u32 = 0x1ed760;
 
 /// Tema da tela que está sendo montada. A UI roda numa thread só, então basta um valor por thread.
 pub fn set_light(on: bool) {
@@ -21,6 +26,73 @@ pub fn set_light(on: bool) {
 
 pub fn light() -> bool {
     LIGHT.with(Cell::get)
+}
+
+/// A capa da música na moldura: ela e o fundo ficam transparentes e a capa (`Cyder::background`) aparece.
+pub fn set_cover_frame(on: bool) {
+    COVER_FRAME.with(|m| m.set(on));
+}
+
+pub fn cover_frame() -> bool {
+    COVER_FRAME.with(Cell::get)
+}
+
+/// Destaque do sistema (0xRRGGBB) ou None para o verde.
+pub fn set_accent(rgb: Option<u32>) {
+    ACCENT.with(|a| a.set(rgb));
+}
+
+/// Cor de destaque (RGBA): ícones ativos, curtidas, interruptores. A do sistema vai clareando (no escuro) ou
+/// escurecendo (no claro) até ter contraste AA de texto, 4,5:1, com o painel e a moldura.
+pub fn accent() -> u32 {
+    let rgb = match ACCENT.with(Cell::get) {
+        Some(c) => readable(c, &[surface(), frame()], if light() { 0x000000 } else { 0xffffff }),
+        None => GREEN,
+    };
+    (rgb << 8) | 0xff
+}
+
+/// Texto e ícones sobre um fundo da cor de destaque: preto ou branco, o que contrastar mais.
+pub fn on_accent() -> u32 {
+    let a = accent() >> 8;
+    if contrast(a, 0x000000) >= contrast(a, 0xffffff) { 0x000000ff } else { 0xffffffff }
+}
+
+/// Luminância relativa do WCAG.
+fn luminance(rgb: u32) -> f32 {
+    let ch = |shift: u32| {
+        let c = ((rgb >> shift) & 0xff) as f32 / 255.;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * ch(16) + 0.7152 * ch(8) + 0.0722 * ch(0)
+}
+
+fn contrast(a: u32, b: u32) -> f32 {
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// Mistura `rgb` com `toward` em passos de 5% até ter 4,5:1 com todos os fundos.
+fn readable(rgb: u32, backgrounds: &[u32], toward: u32) -> u32 {
+    let mix = |t: f32| {
+        let ch = |shift: u32| {
+            let (a, b) = (((rgb >> shift) & 0xff) as f32, ((toward >> shift) & 0xff) as f32);
+            ((a + (b - a) * t).round() as u32) << shift
+        };
+        ch(16) | ch(8) | ch(0)
+    };
+    (0..=20).map(|i| mix(i as f32 / 20.)).find(|&c| backgrounds.iter().all(|&bg| contrast(c, bg) >= 4.5)).unwrap_or(toward)
+}
+
+/// Fundo atrás de tudo, já com a opacidade (RGBA). Com a capa no fundo, transparente.
+pub fn base_fill() -> u32 {
+    if cover_frame() { 0 } else { (base() << 8) | 0xff }
+}
+
+/// Moldura (RGBA). Com a capa no fundo, transparente: uma moldura translúcida somaria com a faixa dos cantos e
+/// desenharia uma linha mais escura em volta do painel.
+pub fn frame_fill() -> u32 {
+    if cover_frame() { 0 } else { (frame() << 8) | 0xff }
 }
 
 /// Escolhe a cor do tema (RGBA).
@@ -95,4 +167,20 @@ pub fn glass(d: Div) -> Div {
 pub fn tinted_ink(accent: [u8; 3]) -> Hsla {
     let mix = |c: u8| if light() { (c as f32 * 0.45).round() as u32 } else { (255.0 - (255.0 - c as f32) * 0.22).round() as u32 };
     rgb((mix(accent[0]) << 16) | (mix(accent[1]) << 8) | mix(accent[2])).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accent_reaches_aa() {
+        for (light_, accent_) in [(false, 0x0050a0), (true, 0x60cdff), (false, 0xffb900), (true, 0x1ed760)] {
+            set_light(light_);
+            set_accent(Some(accent_));
+            let a = accent() >> 8;
+            assert!(contrast(a, surface()) >= 4.5 && contrast(a, frame()) >= 4.5, "{accent_:06x} claro={light_}");
+            assert!(contrast(a, on_accent() >> 8) >= 4.5);
+        }
+    }
 }

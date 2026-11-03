@@ -1,5 +1,6 @@
 //! Botões na miniatura da barra de tarefas (a prévia que aparece com o mouse em cima do ícone), como no
 //! Spotify: curtir, anterior, tocar/pausar e próxima. Os cliques chegam pela janela como WM_COMMAND.
+//! O mesmo ITaskbarList3 pinta o progresso da música no ícone.
 use std::{cell::RefCell, ffi::c_void};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -9,7 +10,7 @@ use windows::{
         Graphics::Gdi::{BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS, DeleteObject},
         System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx},
         UI::{
-            Shell::{DefSubclassProc, ITaskbarList3, SetWindowSubclass, TaskbarList, THB_FLAGS, THB_ICON, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED, THBN_CLICKED, THUMBBUTTON, THUMBBUTTONMASK},
+            Shell::{DefSubclassProc, ITaskbarList3, SetWindowSubclass, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED, TaskbarList, THB_FLAGS, THB_ICON, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED, THBN_CLICKED, THUMBBUTTON, THUMBBUTTONMASK},
             WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetSystemMetrics, HICON, ICONINFO, RegisterWindowMessageW, SM_CXSMICON, WM_COMMAND},
         },
     },
@@ -41,6 +42,8 @@ struct Bar {
     created: u32,
     added: bool,
     shown: Shown,
+    /// Progresso já mandado; `None` = mandar de novo (o botão da barra pode ter sido recriado).
+    progress: Option<Option<(bool, u32)>>,
     icons: Icons,
     tx: UnboundedSender<Button>,
 }
@@ -86,7 +89,7 @@ pub fn attach(hwnd: *mut c_void, tx: UnboundedSender<Button>) -> Result<(), Stri
             pause: rasterize(include_str!("../../assets/icons/pause.svg"), "white")?,
             next: rasterize(include_str!("../../assets/icons/fast-forward.svg"), "white")?,
         };
-        BAR.with_borrow_mut(|b| *b = Some(Bar { hwnd, list, created, added: false, shown: Shown::default(), icons, tx }));
+        BAR.with_borrow_mut(|b| *b = Some(Bar { hwnd, list, created, added: false, shown: Shown::default(), progress: None, icons, tx }));
         if !SetWindowSubclass(hwnd, Some(subclass), 1, 0).as_bool() {
             return Err("SetWindowSubclass falhou".into());
         }
@@ -108,6 +111,29 @@ pub fn update(shown: Shown) {
         if let Err(e) = unsafe { list.ThumbBarUpdateButtons(hwnd, &buttons) } {
             log::warn!("botões da miniatura: {e}");
         }
+    }
+}
+
+/// Progresso no ícone: `None` some com a barra; senão, tocando (verde) ou pausada (amarela) e quanto já tocou,
+/// em milésimos. Só fala com o Windows quando algo mudou.
+pub fn progress(now: Option<(bool, u32)>) {
+    let call = BAR.with_borrow_mut(|b| {
+        let bar = b.as_mut().filter(|bar| bar.progress != Some(now))?;
+        bar.progress = Some(now);
+        Some((bar.list.clone(), bar.hwnd))
+    });
+    let Some((list, hwnd)) = call else { return };
+    // SAFETY: a lista e o HWND são os do `attach`.
+    let done = unsafe {
+        match now {
+            None => list.SetProgressState(hwnd, TBPF_NOPROGRESS),
+            Some((playing, done)) => list
+                .SetProgressState(hwnd, if playing { TBPF_NORMAL } else { TBPF_PAUSED })
+                .and_then(|_| list.SetProgressValue(hwnd, done as u64, 1000)),
+        }
+    };
+    if let Err(e) = done {
+        log::debug!("progresso no ícone ainda não: {e}");
     }
 }
 
@@ -162,6 +188,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         _ => false,
     });
     if created {
+        BAR.with(|b| b.try_borrow_mut().map(|mut b| b.as_mut().map(|bar| bar.progress = None)).ok());
         add();
     }
     // SAFETY: repassa a mensagem para a janela do GPUI, como pede o subclass.

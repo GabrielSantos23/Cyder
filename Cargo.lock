@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "cyder"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "cyder-core",
@@ -1097,16 +1097,18 @@ dependencies = [
  "sentry-log",
  "serde_json",
  "souvlaki",
+ "tauri-winrt-notification",
  "tokio",
  "tray-icon",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "windows-sys 0.59.0",
  "winresource",
 ]
 
 [[package]]
 name = "cyder-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",

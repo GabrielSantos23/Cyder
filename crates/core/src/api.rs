@@ -250,8 +250,12 @@ impl WebApi {
         Ok(out)
     }
 
-    pub async fn add_to_playlist(&self, playlist_id: &str, uri: &str) -> Result<(), String> {
-        self.write(reqwest::Method::POST, &format!("/playlists/{playlist_id}/items"), json!({ "uris": [uri] })).await
+    /// O Spotify aceita até 100 faixas por pedido.
+    pub async fn add_to_playlist(&self, playlist_id: &str, uris: &[String]) -> Result<(), String> {
+        for chunk in uris.chunks(100) {
+            self.write(reqwest::Method::POST, &format!("/playlists/{playlist_id}/items"), json!({ "uris": chunk })).await?;
+        }
+        Ok(())
     }
 
     pub async fn add_to_queue(&self, uri: &str) -> Result<(), String> {
@@ -397,6 +401,16 @@ impl WebApi {
             playlists: items("playlists").iter().filter_map(playlist_card).collect(),
             shows: items("shows").iter().filter_map(show_card).collect(),
         })
+    }
+
+    /// Álbum da faixa ou podcast do episódio de `uri` (`spotify:track:ID`, `spotify:episode:ID`).
+    pub async fn link_page(&self, uri: &str) -> Result<Card, String> {
+        match uri.split(':').collect::<Vec<_>>()[..] {
+            ["spotify", "track", id] => album_card(&self.get(&format!("/tracks/{id}")).await?["album"]),
+            ["spotify", "episode", id] => show_card(&self.get(&format!("/episodes/{id}")).await?["show"]),
+            _ => None,
+        }
+        .ok_or_else(|| "o Spotify não achou".to_string())
     }
 
     pub async fn page(&self, card: &Card) -> Result<Page, String> {

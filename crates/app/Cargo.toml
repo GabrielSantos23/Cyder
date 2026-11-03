@@ -29,7 +29,11 @@ winresource = "0.1"
 
 [target."cfg(windows)".dependencies]
 tray-icon = { version = "0.26", default-features = false }
-# Botões na miniatura da barra de tarefas (ITaskbarList3) e os ícones deles: as mesmas versões do GPUI.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Barra de tarefas (botões, progresso, Jump List), arrastar/colar links e notificações: as mesmas versões do GPUI.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "UI_Notifications"] }
+# Notificação na troca de faixa (toast.rs); já estava no Cargo.lock, com o mesmo `windows`.
+tauri-winrt-notification = "0.8"
+# O `#[implement]` do alvo de soltar links (links.rs) pede o crate pelo nome.
+windows-core = "0.62"
 resvg = { version = "0.46", default-features = false }
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry"] }

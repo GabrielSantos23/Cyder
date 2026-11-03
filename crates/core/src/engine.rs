@@ -32,6 +32,8 @@ pub enum Cmd {
     Play { tracks: Vec<Track>, index: usize, context: Option<String>, label: String, shuffle_start: bool },
     /// Abre a página de um álbum, artista ou playlist.
     Open(Card),
+    /// Link de faixa ou episódio (`spotify:track:ID`): o core acha o álbum ou o podcast e responde com `AppEvent::Link`.
+    OpenLink(String),
     /// Lista os aparelhos Connect.
     Devices,
     /// Fixa (ou desafixa) uma playlist no topo da sidebar.
@@ -40,7 +42,7 @@ pub enum Cmd {
     Library { card: Card, save: bool },
     /// Curte ou descurte uma faixa.
     Like { track: Track, on: bool },
-    AddToPlaylist { playlist: Card, uri: String },
+    AddToPlaylist { playlist: Card, uris: Vec<String> },
     AddToQueue(Track),
     /// Arrasta uma faixa da fila de `from` para `to` (índices da fila, depois da que está tocando).
     MoveQueue { from: usize, to: usize },
@@ -171,6 +173,8 @@ pub enum AppEvent {
     RateLimited { secs: u64 },
     /// Playlist criada: a UI abre a página dela.
     PlaylistCreated(Card),
+    /// Resposta do `Cmd::OpenLink`: a página que tem a faixa `uri`.
+    Link { card: Card, uri: String },
     /// None: tocando por aqui está ok; Some: sem conexão, e o motivo.
     PlayerStatus(Option<String>),
     /// Plano da conta ("premium", "free"), pela sessão.
@@ -375,10 +379,10 @@ fn remember_episode(episodes: &mut HashMap<String, u32>, track: &Track, position
 }
 
 const RECENT_SHELF: &str = "Tocadas recentemente";
-/// Álbuns tocados por aqui que ficam guardados (o Spotify devolve 50 faixas dos outros aparelhos).
+/// Álbuns e playlists tocados por aqui que ficam guardados (o Spotify devolve 50 faixas dos outros aparelhos).
 const RECENT_LOCAL_MAX: usize = 50;
 
-/// Álbuns do Spotify e deste computador, do mais recente para o mais antigo, sem repetir.
+/// Álbuns e playlists do Spotify e deste computador, do mais recente para o mais antigo, sem repetir.
 /// Edições diferentes do mesmo álbum têm ids diferentes: compara também nome e artista.
 fn recent_albums(spotify: &[(Card, u64)], local: &[(Card, u64)]) -> Vec<Card> {
     let mut all: Vec<&(Card, u64)> = spotify.iter().chain(local).collect();
@@ -389,6 +393,21 @@ fn recent_albums(spotify: &[(Card, u64)], local: &[(Card, u64)]) -> Vec<Card> {
             out.push(a.clone());
         }
     }
+    out
+}
+
+/// O que entra em "Tocadas recentemente" por uma faixa: a playlist ou o álbum de onde ela tocou. Fora deles
+/// (curtidas, artista, busca) ou com a playlist ainda sem capa e nome guardados, o álbum da faixa.
+fn recent_card(context: Option<&str>, album: Option<Card>, playlists: &HashMap<String, Card>) -> Option<Card> {
+    context.and_then(|c| c.strip_prefix("spotify:playlist:")).and_then(|id| playlists.get(id).cloned()).or(album)
+}
+
+/// Capa e nome das playlists já conhecidas: as da biblioteca e as da tela inicial.
+fn known_playlists() -> HashMap<String, Card> {
+    let editorial: HashMap<String, (Option<Card>, u64)> = cache::load("editorial").unwrap_or_default();
+    let mut out: HashMap<String, Card> = editorial.into_iter().filter_map(|(id, (c, _))| Some((id, c?))).collect();
+    let library: Library = cache::load("library").unwrap_or_default();
+    out.extend(library.playlists.into_iter().map(|c| (c.id.clone(), c)));
     out
 }
 
@@ -499,7 +518,14 @@ impl Ctx {
         rest.extend(moods.iter().skip(2).map(mood_shelf));
         if let Ok(played) = played {
             // Guardada à parte para juntar de novo com o que toca por aqui sem pedir ao Spotify.
-            let spotify: Vec<(Card, u64)> = played.iter().filter_map(|p| Some((p.album.clone()?, p.at))).collect();
+            // As playlists tocadas que ainda não temos (de outras pessoas, do Spotify) vêm uma vez e ficam guardadas.
+            let mut playlists = known_playlists();
+            let missing: Vec<String> = played.iter().filter_map(|p| p.context.as_deref()?.strip_prefix("spotify:playlist:"))
+                .filter(|id| !playlists.contains_key(*id)).map(String::from).collect();
+            if !missing.is_empty() {
+                playlists.extend(self.editorial(missing).await);
+            }
+            let spotify: Vec<(Card, u64)> = played.iter().filter_map(|p| Some((recent_card(p.context.as_deref(), p.album.clone(), &playlists)?, p.at))).collect();
             cache::save("recent-spotify", &spotify);
             let albums = recent_albums(&spotify, &cache::load::<Vec<(Card, u64)>>("recent-local").unwrap_or_default());
             if !albums.is_empty() {
@@ -612,15 +638,13 @@ impl Ctx {
         wanted.into_iter().filter_map(|id| Some((id.clone(), known.get(&id)?.0.clone()?))).collect()
     }
 
-    /// O Spotify não registra o que toca pelo Cyder (doc 07): o álbum da faixa entra no histórico deste
-    /// computador e em "Tocadas recentemente" na hora, junto com o que o Spotify conta dos outros aparelhos.
-    fn note_played(&self, track: &Track) {
-        if track.album_id.is_empty() {
-            return;
-        }
+    /// O Spotify não registra o que toca pelo Cyder (doc 07): a playlist ou o álbum da faixa entra no histórico
+    /// deste computador e em "Tocadas recentemente" na hora, junto com o que o Spotify conta dos outros aparelhos.
+    fn note_played(&self, track: &Track, context: Option<&str>) {
         let artist = track.artists.first().map_or_else(|| track.artist.clone(), |a| a.1.clone());
         let image = track.cover_large.clone().or_else(|| track.cover_small.clone());
-        let card = Card { kind: Kind::Album, id: track.album_id.clone(), uri: format!("spotify:album:{}", track.album_id), title: track.album.clone(), subtitle: artist, image };
+        let album = (!track.album_id.is_empty()).then(|| Card { kind: Kind::Album, id: track.album_id.clone(), uri: format!("spotify:album:{}", track.album_id), title: track.album.clone(), subtitle: artist, image });
+        let Some(card) = recent_card(context, album, &known_playlists()) else { return };
         let mut local: Vec<(Card, u64)> = cache::load("recent-local").unwrap_or_default();
         local.retain(|(c, _)| c.id != card.id);
         local.insert(0, (card.clone(), now_secs()));
@@ -1256,6 +1280,38 @@ fn watch_cluster(session: &librespot::core::Session, tx: UnboundedSender<String>
     });
 }
 
+/// Playlist ou álbum salvo (ou tirado) em outro aparelho: o Spotify avisa pelo dealer e a sidebar atualiza.
+fn watch_library(session: &librespot::core::Session, tx: UnboundedSender<()>) {
+    let session = session.clone();
+    tokio::spawn(async move {
+        let mut tries = 0;
+        let mut updates = loop {
+            // Rootlist (playlists) e coleção (álbuns, artistas, podcasts).
+            let subscribed = session.dealer().listen_for("hm://playlist/v2/user/", |m| Ok(m.uri))
+                .and_then(|a| Ok(futures_util::stream::select(a, session.dealer().listen_for("hm://collection/", |m| Ok(m.uri))?)));
+            match subscribed {
+                Ok(updates) => break updates,
+                Err(e) if tries < 20 && !session.is_invalid() => {
+                    tries += 1;
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    log::debug!("avisos da biblioteca, tentativa {tries}: {e}");
+                }
+                Err(e) => return log::warn!("avisos da biblioteca: {e}"),
+            }
+        };
+        while let Some(uri) = updates.next().await {
+            let Ok(uri) = uri else { continue };
+            log::debug!("biblioteca mudou em outro aparelho: {uri}");
+            // Salvar várias coisas seguidas manda vários avisos: espera juntar e atualiza uma vez.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            while futures_util::FutureExt::now_or_never(updates.next()).flatten().is_some() {}
+            if tx.send(()).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 enum Flow {
     Exit,
     Restart,
@@ -1323,6 +1379,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // O Spotify Connect avisa pela sessão quando qualquer aparelho da conta muda o que toca; só então
     // pergunta à Web API o que é (a consulta a cada 8 s estourava o limite de pedidos do Client ID).
     let (cluster_tx, mut cluster_rx) = unbounded_channel::<String>();
+    let (library_tx, mut library_rx) = unbounded_channel::<()>();
     // Recomendações do smart shuffle prontas (vêm de uma tarefa à parte).
     let (smart_tx, mut smart_rx) = unbounded_channel::<Vec<Track>>();
     let mut smart: Vec<String> = Vec::new();
@@ -1546,6 +1603,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
                 }
             }
+            Some(()) = library_rx.recv() => {
+                tokio::spawn(ctx.clone().refresh_library());
+            }
             Some(active) = cluster_rx.recv() => {
                 // Com o próprio Cyder tocando, o Spirc já conta tudo.
                 if remote.is_some() || (!active.is_empty() && active != device_id) {
@@ -1618,7 +1678,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         }
                         if let Some(t) = tracks.get(index).filter(|t| st.playing && t.uri != noted) {
                             noted = t.uri.clone();
-                            ctx.note_played(t);
+                            ctx.note_played(t, context.as_deref());
                         }
                     }
                     let _ = pcmd_tx.send(PlayerCmd::Follow { index, context: context.clone(), position_ms: st.position_ms });
@@ -1733,6 +1793,16 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(ctx.clone().open(card));
                         continue;
                     }
+                    Cmd::OpenLink(uri) => {
+                        let ctx = ctx.clone();
+                        tokio::spawn(async move {
+                            match ctx.api.link_page(&uri).await {
+                                Ok(card) => ctx.send(AppEvent::Link { card, uri }),
+                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para abrir o link: {e}"))),
+                            }
+                        });
+                        continue;
+                    }
                     Cmd::RefreshHome => {
                         tokio::spawn(ctx.clone().refresh_home());
                         continue;
@@ -1754,10 +1824,11 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(ctx.clone().like(track, on));
                         continue;
                     }
-                    Cmd::AddToPlaylist { playlist, uri } => {
+                    Cmd::AddToPlaylist { playlist, uris } => {
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
-                            let text = match ctx.api.add_to_playlist(&playlist.id, &uri).await {
+                            let text = match ctx.api.add_to_playlist(&playlist.id, &uris).await {
+                                Ok(()) if uris.len() > 1 => format!("{} faixas adicionadas a \"{}\".", uris.len(), playlist.title),
                                 Ok(()) => format!("Adicionada a \"{}\".", playlist.title),
                                 Err(e) => format!("Não deu para adicionar a \"{}\": {e}", playlist.title),
                             };
@@ -2145,6 +2216,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     PlayerOut::Connected(session) => {
                         device_id = session.device_id().to_string();
                         watch_cluster(&session, cluster_tx.clone());
+                        watch_library(&session, library_tx.clone());
                         ctx.send(AppEvent::PlayerStatus(None));
                         if let Some(plan) = session.get_user_attribute("type") {
                             ctx.send(AppEvent::Plan(plan));
@@ -2298,7 +2370,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         // Conta quando a faixa começa a tocar de fato por aqui, não quando a fila é só carregada.
                         if let Some(t) = tracks.get(index).filter(|t| p && t.uri != noted) {
                             noted = t.uri.clone();
-                            ctx.note_played(t);
+                            ctx.note_played(t, context.as_deref());
                         }
                         AppEvent::Playback { playing: p, position_ms }
                     }
@@ -2389,5 +2461,25 @@ mod soloist_tests {
         assert_eq!(b["uris"][b["offset"]["position"].as_u64().unwrap() as usize], "spotify:track:290");
         let (b, _) = super::soloist_body(&tracks[..3], 2, None, 0);
         assert_eq!(b["offset"]["position"], 2);
+    }
+}
+
+#[cfg(test)]
+mod recent_card_tests {
+    use crate::{Card, Kind};
+
+    fn card(kind: Kind, id: &str) -> Card {
+        Card { kind, id: id.into(), uri: String::new(), title: id.into(), subtitle: String::new(), image: None }
+    }
+
+    #[test]
+    fn playlist_over_album() {
+        let playlists = [("p1".to_string(), card(Kind::Playlist, "p1"))].into_iter().collect();
+        let album = || Some(card(Kind::Album, "a1"));
+        assert_eq!(super::recent_card(Some("spotify:playlist:p1"), album(), &playlists).unwrap().id, "p1");
+        // Playlist sem capa guardada, curtidas ou artista: o álbum.
+        assert_eq!(super::recent_card(Some("spotify:playlist:p2"), album(), &playlists).unwrap().id, "a1");
+        assert_eq!(super::recent_card(Some("spotify:collection:tracks"), album(), &playlists).unwrap().id, "a1");
+        assert!(super::recent_card(None, None, &playlists).is_none());
     }
 }

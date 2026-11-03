@@ -6,7 +6,7 @@ use gpui::{
     SharedString, Styled, Window, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, rgba,
 };
 
-use super::{LIKED_COLOR, LIST_BOTTOM, ROW_H, TrackSource, fmt, icon, index_cell};
+use super::{DragGhost, LIKED_COLOR, LIST_BOTTOM, ROW_H, TrackDrag, TrackSource, fmt, icon, index_cell, uris_of};
 use crate::theme;
 use crate::view::{Cyder, Tip};
 use crate::view::menus::MenuTarget;
@@ -366,7 +366,10 @@ impl Cyder {
         let column = |text: String| div().flex_1().min_w_0().text_sm().text_color(rgba(theme::ink_2())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(text);
         let name = t.name.clone();
         let title = move || div().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().whitespace_nowrap().text_ellipsis().when(now, |d| d.text_color(accent)).child(name.clone());
+        let (uris, label) = self.dragged(&t);
+        let picked = self.picked.contains(&t.uri);
         Self::focusable(("liked-track", i))
+            .on_drag(TrackDrag { uris, label }, |d, _, _, cx| cx.new(|_| DragGhost(d.label.clone())))
             .group("track-row")
             .w_full()
             .h(px(if compact { COMPACT_H } else { ROW_H }))
@@ -378,9 +381,16 @@ impl Cyder {
             .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x0a))))
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
             .hover(|s| s.bg(rgba(theme::wash(0x17))))
+            .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
+            .aria_selected(picked)
             .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
-            .on_click(cx.listener(move |this, _, _, cx| { if now { this.toggle_play() } else { this.play_from(&TrackSource::Liked, i) } cx.notify(); }))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                if !this.pick(e, i, |t| uris_of(&t.liked_view)) {
+                    if now { this.toggle_play() } else { this.play_from(&TrackSource::Liked, i) }
+                }
+                cx.notify();
+            }))
             .child(index_cell(i, now, playing, "track-row", accent))
             .when(!compact, |d| d
                 .child(match thumb {

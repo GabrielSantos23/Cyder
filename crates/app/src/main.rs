@@ -5,6 +5,8 @@ mod autostart;
 #[cfg(windows)]
 mod icon;
 mod image_lru;
+#[cfg(windows)]
+mod protocol;
 mod reports;
 mod theme;
 mod view;
@@ -16,7 +18,7 @@ use gpui::{
     size,
 };
 
-use view::{Cyder, ExitImmersive, FocusNext, FocusPrev, FocusSearch, NextTrack, PrevTrack, SeekBack, SeekForward, Quit, ToggleLyrics, TogglePlay, VolumeDown, VolumeUp};
+use view::{Cyder, ExitImmersive, PasteLink, FocusNext, FocusPrev, FocusSearch, NextTrack, PrevTrack, SeekBack, SeekForward, Quit, ToggleLyrics, TogglePlay, VolumeDown, VolumeUp};
 
 /// "Mostrar animações no Windows" desligado = movimento reduzido.
 #[cfg(windows)]
@@ -123,7 +125,12 @@ impl AssetSource for Assets {
     }
 }
 
-/// Já tem um Cyder aberto? Então traz a janela dele para a frente (mesmo escondida na bandeja).
+/// Link do Spotify na linha de comando (o Windows abre o Cyder assim pelo protocolo `spotify:`).
+fn link_arg() -> Option<String> {
+    std::env::args().skip(1).find(|a| view::links::parse(a).is_some())
+}
+
+/// Já tem um Cyder aberto? Então traz a janela dele para a frente (mesmo escondida na bandeja), com o link, se veio um.
 /// Dois abertos viravam dois aparelhos "Cyder" no Spotify Connect, brigando pela reprodução.
 /// Depois de uma atualização, a versão nova abre enquanto a antiga ainda está fechando: espera ela sair.
 #[cfg(windows)]
@@ -145,7 +152,14 @@ fn already_running() -> bool {
         }
     }
     if let Some(hwnd) = view::running_window() {
-        view::show_window(hwnd);
+        // Da Jump List: os comandos vão para o aberto, sem trazer a janela.
+        let args: Vec<String> = std::env::args().skip(1).filter(|a| a != view::update::RESTARTED && view::links::parse(a).is_none()).collect();
+        if let Some(link) = link_arg() {
+            view::show_window(hwnd);
+            view::links::send(hwnd, &link);
+        } else if args.is_empty() || !view::forward_args(hwnd, &args) {
+            view::show_window(hwnd);
+        }
     }
     true
 }
@@ -199,8 +213,10 @@ fn init_log() {
         .build();
     let max = logger.filter();
     // Os erros viram relatório quando a pessoa deixou (sem o Sentry ligado, não sai nada).
+    // Só os do Cyder: os do librespot são tentativas que ele mesmo refaz (conexão que caiu) ou viram um erro
+    // nosso mais claro (faixa que não carregou, chave de áudio recusada). Continuam no cyder.log.
     let logger = sentry_log::SentryLogger::with_dest(logger).filter(|md| match md.level() {
-        log::Level::Error => sentry_log::LogFilter::Event,
+        log::Level::Error if md.target().starts_with("cyder") => sentry_log::LogFilter::Event,
         _ => sentry_log::LogFilter::Ignore,
     });
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
@@ -243,6 +259,12 @@ fn main() {
             log::warn!("abrir com o Windows: {e}");
         }
     }
+    // Links `spotify:` abrem aqui; com o app oficial instalado, só se a pessoa pediu nas configurações.
+    #[cfg(windows)]
+    if let Err(e) = protocol::sync(cyder_core::config::settings().spotify_links) {
+        log::warn!("protocolo spotify: {e}");
+    }
+    let link = link_arg();
     let (cmds, events) = cyder_core::start();
     gpui_platform::application().with_assets(Assets).run(move |cx: &mut App| {
         cx.set_reduce_motion(os_reduce_motion());
@@ -262,6 +284,7 @@ fn main() {
             KeyBinding::new("escape", ExitImmersive, PLAYER_KEYS),
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("ctrl-k", FocusSearch, None),
+            KeyBinding::new("ctrl-v", PasteLink, PLAYER_KEYS),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.open_window(
@@ -293,8 +316,13 @@ fn main() {
                     v.attach_media(window, cx);
                     v.watch_window_place(window, cx);
                     v.watch_window_activation(window, cx);
+                    v.attach_links(window, link, cx);
                     #[cfg(windows)]
                     v.attach_tray(window, cx);
+                    #[cfg(windows)]
+                    v.attach_jumplist(cx);
+                    #[cfg(windows)]
+                    v.attach_hotkeys(cx);
                 });
                 window.focus(&view.read(cx).focus.clone(), cx);
                 view

@@ -51,8 +51,6 @@ const FEATURING_SHELF: usize = 201;
 const DISCOGRAPHY_ROWS: usize = 2;
 /// Cor da capa de "Músicas curtidas", que não tem imagem no Spotify.
 const LIKED_COLOR: u32 = 0x6d4aff;
-/// Verde do coração das faixas curtidas, o do Spotify.
-pub(super) const LIKED_GREEN: u32 = 0x1ed760ff;
 const PAD: f32 = 32.;
 const ROW_H: f32 = 48.;
 const CARD_MIN: f32 = 168.;
@@ -196,6 +194,7 @@ impl Cyder {
         }
         self.history.push(std::mem::replace(&mut self.screen, screen));
         self.forward.clear();
+        self.picked.clear();
         self.release_filter = Releases::All;
         self.discography_open = false;
         self.refocus = true;
@@ -204,6 +203,7 @@ impl Cyder {
     pub(super) fn nav_back(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.forward.push(std::mem::replace(&mut self.screen, prev));
+            self.picked.clear();
             self.refocus = true;
         }
     }
@@ -216,6 +216,7 @@ impl Cyder {
     pub(super) fn nav_forward(&mut self) {
         if let Some(next) = self.forward.pop() {
             self.history.push(std::mem::replace(&mut self.screen, next));
+            self.picked.clear();
             self.refocus = true;
         }
     }
@@ -235,6 +236,51 @@ impl Cyder {
             TrackSource::Page(id) => self.pages.get(id).map_or(&[], |p| &p.tracks),
             TrackSource::Search => self.search.as_ref().map_or(&[], |s| &s.tracks),
         }
+    }
+
+    /// Ctrl+clique marca ou desmarca a faixa `i` de `list`; Shift+clique marca do último Ctrl+clique até ela.
+    /// Devolve se o clique foi de seleção (aí ele não toca). O clique simples desfaz a seleção.
+    pub(super) fn pick(&mut self, e: &ClickEvent, i: usize, list: impl FnOnce(&Self) -> Vec<String>) -> bool {
+        let m = e.modifiers();
+        if !m.control && !m.shift {
+            self.picked.clear();
+            return false;
+        }
+        let list = list(self);
+        let Some(uri) = list.get(i).cloned() else { return true };
+        let anchor = self.pick_anchor.as_ref().and_then(|a| list.iter().position(|u| u == a)).filter(|_| m.shift);
+        match anchor {
+            Some(a) => {
+                for u in &list[a.min(i)..=a.max(i)] {
+                    if !self.picked.contains(u) {
+                        self.picked.push(u.clone());
+                    }
+                }
+            }
+            None => {
+                match self.picked.iter().position(|u| *u == uri) {
+                    Some(p) => drop(self.picked.remove(p)),
+                    None => self.picked.push(uri.clone()),
+                }
+                self.pick_anchor = Some(uri);
+            }
+        }
+        true
+    }
+
+    /// O que vai junto ao arrastar a faixa: as marcadas, se ela é uma delas, ou só ela; e o texto da prévia.
+    fn dragged(&self, t: &Track) -> (Vec<String>, SharedString) {
+        if self.picked.len() > 1 && self.picked.contains(&t.uri) {
+            (self.picked.clone(), format!("{} faixas", self.picked.len()).into())
+        } else {
+            (vec![t.uri.clone()], t.name.clone().into())
+        }
+    }
+
+    /// Faixas soltas numa playlist sua da sidebar.
+    fn drop_on_playlist(&mut self, playlist: Card, uris: Vec<String>) {
+        self.picked.clear();
+        self.send(Cmd::AddToPlaylist { playlist, uris });
     }
 
     fn source_cards(&self, source: &CardSource) -> &[Card] {
@@ -266,7 +312,7 @@ impl Cyder {
     }
 
     /// Toca a lista a partir de `index`. Álbuns e playlists vão com a URI, para o Spotify saber o contexto.
-    fn play_from(&mut self, source: &TrackSource, index: usize) {
+    pub(super) fn play_from(&mut self, source: &TrackSource, index: usize) {
         self.play_list(source, index, false);
     }
 
@@ -380,7 +426,7 @@ impl Cyder {
             return Self::bar_button(toggle_id, if on { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), size, on)
                 .flex_none()
                 .on_click(cx.listener(move |t, _, _, cx| { t.save_shuffle(kind, !on); cx.notify(); }))
-                .child(icon("shuffle", icon_size, if on { LIKED_GREEN } else { theme::ink_2() }))
+                .child(icon("shuffle", icon_size, if on { theme::accent() } else { theme::ink_2() }))
                 .into_any_element();
         }
         let label = match (self.shuffle, self.smart) {
@@ -398,8 +444,8 @@ impl Cyder {
     /// Ícone do modo: ligado fica verde, como no Spotify; `off` é a cor do botão desligado.
     pub(super) fn shuffle_icon(&self, size: f32, off: u32) -> gpui::Svg {
         match (self.shuffle, self.smart) {
-            (_, true) => icon("shuffle-smart", size, LIKED_GREEN),
-            (true, false) => icon("shuffle", size, LIKED_GREEN),
+            (_, true) => icon("shuffle-smart", size, theme::accent()),
+            (true, false) => icon("shuffle", size, theme::accent()),
             (false, _) => icon("shuffle", size, off),
         }
     }
@@ -489,7 +535,7 @@ impl Cyder {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .child(if liked { icon("heart-filled", 15., LIKED_GREEN) } else { icon("heart", 15., theme::ink_2()) })
+            .child(if liked { icon("heart-filled", 15., theme::accent()) } else { icon("heart", 15., theme::ink_2()) })
             .into_any_element()
     }
 
@@ -556,7 +602,7 @@ impl Cyder {
         div()
             .absolute()
             .inset_0()
-            .bg(rgba((theme::frame() << 8) | 0xff))
+            .bg(rgba(theme::frame_fill()))
             // Faixa de cima da moldura: dá para arrastar a janela por ela.
             .child(div().absolute().top_0().left_0().right(px(CONTROLS_W)).h(px(GAP)).window_control_area(WindowControlArea::Drag))
             .when(self.sidebar_open, |d| d.child(self.sidebar(window, cx)))
@@ -572,7 +618,7 @@ impl Cyder {
                     .right(px(right - CORNER_W))
                     .rounded(px(PANEL_R + CORNER_W))
                     .border(px(CORNER_W))
-                    .border_color(rgba((theme::frame() << 8) | 0xff)),
+                    .border_color(rgba(theme::frame_fill())),
             )
             .child(div().absolute().top(px(V_GAP)).bottom(px(V_GAP)).left(px(left)).right(px(right)).rounded(px(PANEL_R)).border_1().border_color(rgba(theme::wash(0x17))))
             .children(match self.side {
@@ -580,7 +626,7 @@ impl Cyder {
                 Some(Side::Lyrics) => Some(appear("side-lyrics", self.lyrics_side(window, vh, cx).into_any_element())),
                 None => None,
             })
-            .child(self.window_controls())
+            .child(self.window_controls(vw, vh))
             .when(self.devices_open, |d| d.child(appear("devices", self.devices_popover(cx).into_any_element())))
             .children(self.menu_layer(vw, vh, cx).map(|m| appear("menu", m)))
             .into_any_element()
@@ -638,12 +684,12 @@ impl Cyder {
                 .when(!active, |d| d.text_color(rgba(theme::ink_2())).hover(|s| s.bg(rgba(theme::wash(0x0f))).text_color(rgba(theme::ink_1()))))
         };
         let liked_playing = self.is_current(None);
-        let accent = rgba(LIKED_GREEN);
+        let accent = rgba(theme::accent());
         let liked = side_row(("side-liked", 0), liked_active)
             .on_click(cx.listener(|t, _, _, cx| { t.go(Screen::Section(Section::Songs)); cx.notify(); }))
             .child(div().size(px(28.)).flex_none().rounded(px(5.)).bg(rgba((LIKED_COLOR << 8) | 0xff)).flex().items_center().justify_center().child(icon("heart", 14., theme::ink_1())))
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child("Músicas curtidas"))
-            .when(liked_playing, |d| d.child(self.playing_mark(15., LIKED_GREEN)));
+            .when(liked_playing, |d| d.child(self.playing_mark(15., theme::accent())));
         let handle = self.scroll("sidebar".into());
         // Virtualizada: só as linhas visíveis existem, e as capas são as de 64 px.
         let rows = uniform_list("sidebar-items", count, cx.processor(move |this, range: Range<usize>, _window, cx| {
@@ -655,13 +701,16 @@ impl Cyder {
                 let active = open_id.as_deref() == Some(card.id.as_str());
                 let pinned = this.pins.contains(&card.uri);
                 let playing_here = this.is_current(Some(&card.uri));
-                let accent = rgba(LIKED_GREEN);
+                let accent = rgba(theme::accent());
                 let thumb = card.image.as_ref().and_then(|u| this.thumbs_small.get(u)).cloned();
                 let round = card.kind == Kind::Artist;
                 let title = card.title.clone();
                 let menu_card = card.clone();
                 let (drag, target_uri) = (SideDrag { uri: card.uri.clone(), title: card.title.clone() }, card.uri.clone());
+                // Faixas arrastadas de qualquer lista entram nas playlists que a pessoa pode editar.
+                let takes = this.owns(&card).then(|| card.clone());
                 side_row(("side-item", i), active)
+                    .when_some(takes, |d, p| takes_tracks::<PlaylistDrag>(takes_tracks::<QueueDrag>(takes_tracks::<TrackDrag>(d, &p, cx), &p, cx), &p, cx))
                     // Arrastar para reorganizar; a ordem fica salva neste computador.
                     .on_drag(drag, |d, _, _, cx| cx.new(|_| DragGhost(d.title.clone().into())))
                     .drag_over::<SideDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
@@ -677,7 +726,7 @@ impl Cyder {
                     })
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(playing_here, |d| d.text_color(accent)).child(title))
                     .when(pinned, |d| d.child(icon("pin", 12., theme::ink_3())))
-                    .when(playing_here, |d| d.child(this.playing_mark(15., LIKED_GREEN)))
+                    .when(playing_here, |d| d.child(this.playing_mark(15., theme::accent())))
                     .into_any_element()
             }).collect::<Vec<_>>()
         }))
@@ -1034,7 +1083,10 @@ impl Cyder {
                 let source = source.clone();
                 let menu_track = t.clone();
                 let playing = self.playing;
+                let (uris, label) = self.dragged(&t);
+                let picked = self.picked.contains(&t.uri);
                 Self::focusable(("track", i))
+                    .on_drag(TrackDrag { uris, label }, |d, _, _, cx| cx.new(|_| DragGhost(d.label.clone())))
                     .group("track-row")
                     .w_full()
                     .h(px(ROW_H))
@@ -1045,9 +1097,16 @@ impl Cyder {
                     .gap_3()
                     .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
                     .hover(|s| s.bg(rgba(theme::wash(0x14))))
+                    .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
+                    .aria_selected(picked)
                     .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
                     .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
-                    .on_click(cx.listener(move |this, _, _, cx| { if now { this.toggle_play() } else { this.play_from(&source, i) } cx.notify(); }))
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
+                            if now { this.toggle_play() } else { this.play_from(&source, i) }
+                        }
+                        cx.notify();
+                    }))
                     .child(index_cell(i, now, playing, "track-row", accent))
                     .when(covers, |d| d.child(match thumb {
                         Some(p) => img(p).size(px(36.)).rounded(px(6.)).object_fit(ObjectFit::Cover).into_any_element(),
@@ -1126,15 +1185,15 @@ impl Cyder {
         let playing_here = !card.uri.is_empty() && self.is_current(Some(&card.uri));
         let inset = if card.kind == Kind::Artist { card_w * 0.1 } else { 10. };
         let badge = playing_here.then(|| {
-            div().absolute().left(px(inset)).bottom(px(inset)).size(px(36.)).rounded_full().bg(rgba(LIKED_GREEN)).shadow_lg()
-                .flex().items_center().justify_center().child(self.playing_mark(18., 0x000000ff))
+            div().absolute().left(px(inset)).bottom(px(inset)).size(px(36.)).rounded_full().bg(rgba(theme::accent())).shadow_lg()
+                .flex().items_center().justify_center().child(self.playing_mark(18., theme::on_accent()))
         });
         // Por fora da capa, com folga: em cima da borda dela, o contorno e o canto da imagem não coincidiam.
         let ring = playing_here.then(|| {
-            let ring = div().absolute().top(px(-4.)).left(px(-4.)).right(px(-4.)).bottom(px(-4.)).border_2().border_color(rgba(LIKED_GREEN));
+            let ring = div().absolute().top(px(-4.)).left(px(-4.)).right(px(-4.)).bottom(px(-4.)).border_2().border_color(rgba(theme::accent()));
             if card.kind == Kind::Artist { ring.rounded_full() } else { ring.rounded(px(16.)) }
         });
-        let accent = rgba(LIKED_GREEN);
+        let accent = rgba(theme::accent());
         let art = div().relative().child(art).children(ring).child(more).children(badge);
         Self::focusable(id)
             .group("card")
@@ -1195,7 +1254,7 @@ impl Cyder {
 
     /// Álbuns, playlists e artistas tocados por último, do mais recente, com quando. O que está tocando agora
     /// entra na frente na hora; o resto vem do histórico da conta, que chega com a tela inicial.
-    fn recent_contexts(&self, max: usize) -> Vec<(Card, u64)> {
+    pub(super) fn recent_contexts(&self, max: usize) -> Vec<(Card, u64)> {
         let mut known: HashMap<&str, &Card> = HashMap::new();
         let library = self.library.iter().flat_map(|l| l.playlists.iter().chain(&l.albums).chain(&l.artists));
         for card in library.chain(self.home.iter().flatten().flat_map(|s| &s.cards)) {
@@ -1241,7 +1300,7 @@ impl Cyder {
                 .child(art)
                 .child(
                     div().flex_1().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().whitespace_nowrap().text_ellipsis()
-                        .when(playing_here, |d| d.text_color(rgba(LIKED_GREEN)))
+                        .when(playing_here, |d| d.text_color(rgba(theme::accent())))
                         .child(card.title.clone()),
                 )
                 .child(div().flex_none().text_xs().text_color(rgba(theme::ink_2())).child(if playing_here && self.playing { "agora".to_string() } else { since(*at, now) }))
@@ -1480,7 +1539,7 @@ impl Cyder {
                 None => div().absolute().inset_0().bg(rgba(theme::wash(0x0a))).into_any_element(),
             })
             // Escurece em cima, para os botões do cabeçalho, e funde com o fundo embaixo, onde fica o nome.
-            .child(div().absolute().inset_0().bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x80), 0.), linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.3))))
+            .child(div().absolute().inset_0().rounded_t(px(PANEL_R)).bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x80), 0.), linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.3))))
             .child(div().absolute().inset_0().bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.35), linear_color_stop(rgba((theme::surface() << 8) | 0xff), 1.))))
             .child(
                 div().absolute().left(px(PAD)).right(px(PAD)).bottom_0().flex().flex_col().gap_4()
@@ -1556,7 +1615,10 @@ impl Cyder {
         let thumb = t.cover_small.as_ref().and_then(|u| self.thumbs.get(u)).cloned();
         let source = source.clone();
         let menu_track = t.clone();
+        let (uris, label) = self.dragged(t);
+        let picked = self.picked.contains(&t.uri);
         Self::focusable(("top-song", i))
+            .on_drag(TrackDrag { uris, label }, |d, _, _, cx| cx.new(|_| DragGhost(d.label.clone())))
             .group("top-song")
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
             .h(px(52.))
@@ -1567,8 +1629,15 @@ impl Cyder {
             .gap_3()
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
             .hover(|s| s.bg(rgba(theme::wash(0x14))))
+            .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
+            .aria_selected(picked)
             .aria_label(SharedString::from(format!("Tocar {}", t.name)))
-            .on_click(cx.listener(move |this, _, _, cx| { if now { this.toggle_play() } else { this.play_from(&source, i) } cx.notify(); }))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
+                    if now { this.toggle_play() } else { this.play_from(&source, i) }
+                }
+                cx.notify();
+            }))
             .child(
                 // Com o mouse em cima, a capa mostra tocar (ou pausar, se é a que está tocando).
                 div().relative().size(px(40.)).flex_none()
@@ -1840,11 +1909,17 @@ impl Cyder {
             None => t.album.clone(),
         };
         let hidden = self.hidden.contains(&super::hidden_key(&page.card.uri, &t.uri));
+        let (uris, label) = self.dragged(&t);
+        let tracks = TrackDrag { uris, label };
+        let picked = self.picked.contains(&t.uri);
         Self::focusable(("track", i))
-            .when_some(reorder, |d, card| d
-                .on_drag(PlaylistDrag { from: i, title: t.name.clone() }, |q, _, _, cx| cx.new(|_| DragGhost(q.title.clone().into())))
-                .drag_over::<PlaylistDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
-                .on_drop(cx.listener(move |this, q: &PlaylistDrag, _, cx| { this.move_in_playlist(&card, q.from, i); cx.notify(); })))
+            .map(|d| match reorder {
+                Some(card) => d
+                    .on_drag(PlaylistDrag { from: i, tracks }, |q, _, _, cx| cx.new(|_| DragGhost(q.tracks.label.clone())))
+                    .drag_over::<PlaylistDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
+                    .on_drop(cx.listener(move |this, q: &PlaylistDrag, _, cx| { this.move_in_playlist(&card, q.from, i); cx.notify(); })),
+                None => d.on_drag(tracks, |d, _, _, cx| cx.new(|_| DragGhost(d.label.clone()))),
+            })
             .group("track-row")
             .w_full()
             .h(px(ROW_H))
@@ -1857,9 +1932,16 @@ impl Cyder {
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
             .when(hidden, |d| d.opacity(0.4))
             .hover(|s| s.bg(rgba(theme::wash(0x17))))
+            .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
+            .aria_selected(picked)
             .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
-            .on_click(cx.listener(move |this, _, _, cx| { if now { this.toggle_play() } else { this.play_from(&source, i) } cx.notify(); }))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
+                    if now { this.toggle_play() } else { this.play_from(&source, i) }
+                }
+                cx.notify();
+            }))
             .child(index_cell(i, now, playing, "track-row", accent))
             .when(playlist, |d| d.child(match thumb {
                 Some(p) => img(p).size(px(36.)).rounded(px(6.)).object_fit(ObjectFit::Cover).into_any_element(),
@@ -1897,12 +1979,13 @@ impl Cyder {
             self.bg_gen += 1;
         }
         // Escurece mais embaixo, onde fica a lista, para o texto branco seguir legível em capas claras.
+        // Arredondado como o painel: com a capa no fundo, a faixa da moldura que cobria os cantos fica transparente.
         let layer = |p: PathBuf| {
             div()
                 .absolute()
                 .inset_0()
-                .child(img(p).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
-                .child(div().absolute().inset_0().bg(linear_gradient(
+                .child(img(p).absolute().inset_0().size_full().object_fit(ObjectFit::Cover).rounded(px(PANEL_R)))
+                .child(div().absolute().inset_0().rounded(px(PANEL_R)).bg(linear_gradient(
                     180.,
                     linear_color_stop(rgba((theme::surface() << 8) | 0xb8), 0.),
                     linear_color_stop(rgba((theme::surface() << 8) | 0xeb), 0.7),
@@ -1924,7 +2007,7 @@ impl Cyder {
     /// Player flutuante dentro do painel, como no Cider: progresso em cima; controles, faixa e volume embaixo.
     /// A lista rola por baixo dele e aparece borrada através do vidro.
     fn dock(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let bar = theme::glass(div())
+        let bar = Self::slider_drags(theme::glass(div()), cx)
             // A lista rola por baixo do player; sem isto, um clique no player também clicava no cartão de trás.
             .block_mouse_except_scroll()
             .absolute()
@@ -2145,8 +2228,8 @@ impl Cyder {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .bg(rgba(LIKED_GREEN))
-                    .text_color(rgba(0x000000ff))
+                    .bg(rgba(theme::accent()))
+                    .text_color(rgba(theme::on_accent()))
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .shadow_2xl()
@@ -2248,8 +2331,8 @@ impl Cyder {
                 // Verde enquanto outro aparelho toca, como no Spotify.
                 if self.elsewhere().is_some() {
                     Self::focusable("toolbar-devices").size(px(36.)).rounded_full().flex().items_center().justify_center()
-                        .bg(rgba(LIKED_GREEN)).hover(|s| s.opacity(0.9)).tip("Aparelhos")
-                        .child(icon("headphones", 16., 0x000000ff))
+                        .bg(rgba(theme::accent())).hover(|s| s.opacity(0.9)).tip("Aparelhos")
+                        .child(icon("headphones", 16., theme::on_accent()))
                 } else {
                     Self::chip("toolbar-devices", "Aparelhos", "headphones", self.devices_open, true)
                 }
@@ -2266,17 +2349,16 @@ impl Cyder {
     /// Minimizar, maximizar e fechar num bloco da cor da moldura, com o canto de baixo à esquerda arredondado:
     /// parece um recorte no canto do painel. Encostado no painel, a borda dele contorna o bloco em onda:
     /// curva para fora, para dentro e para fora de novo (a altura do recorte, 28, é 2 × PANEL_R).
-    fn window_controls(&self) -> impl IntoElement {
+    fn window_controls(&self, vw: f32, vh: f32) -> impl IntoElement {
         let r = PANEL_R;
         let edge = rgba(theme::wash(0x17));
         // Canto convexo do painel (centro embaixo à esquerda): moldura por fora do arco e a borda no arco.
-        // O GPUI só recorta em retângulo, então a moldura é uma faixa grossa arredondada por dentro.
-        let fillet = || {
-            div()
-                .absolute()
-                .size(px(r))
-                .overflow_hidden()
-                .child(div().absolute().top(px(-r)).right(px(-r)).size(px(4. * r)).rounded(px(2. * r)).border(px(r)).border_color(rgba((theme::frame() << 8) | 0xff)))
+        // O GPUI só recorta em retângulo, então a moldura é uma faixa grossa arredondada por dentro; com a capa na
+        // moldura, da cor da capa naquele ponto. `right`/`top`: onde o canto fica, contado das bordas da janela.
+        let fillet = |right: f32, top: f32| {
+            let frame = self.frame_color(vw, vh, vw - right - r / 2., top + r / 2.).unwrap_or(theme::frame_fill());
+            div().absolute().right(px(right)).top(px(top)).size(px(r)).overflow_hidden()
+                .child(div().absolute().top(px(-r)).right(px(-r)).size(px(4. * r)).rounded(px(2. * r)).border(px(r)).border_color(rgba(frame)))
                 .child(div().absolute().top_0().right_0().size(px(2. * r)).rounded_tr(px(r)).border_t_1().border_r_1().border_color(edge))
         };
         let touches = self.side.is_none();
@@ -2286,8 +2368,8 @@ impl Cyder {
             .right_0()
             .w(px(CONTROLS_W + r))
             .h(px(theme::TITLEBAR_H + r))
-            .when(touches, |d| d.child(fillet().left_0().top(px(V_GAP))).child(fillet().right(px(GAP)).top(px(theme::TITLEBAR_H))))
-            .child(self.window_buttons())
+            .when(touches, |d| d.child(fillet(CONTROLS_W, V_GAP)).child(fillet(GAP, theme::TITLEBAR_H)))
+            .child(self.window_buttons(vw, vh))
             .when(touches, |d| {
                 d
                     // Canto côncavo, embaixo à esquerda do bloco, e a linha de baixo até o canto da direita.
@@ -2299,7 +2381,7 @@ impl Cyder {
             })
     }
 
-    fn window_buttons(&self) -> impl IntoElement {
+    fn window_buttons(&self, vw: f32, vh: f32) -> impl IntoElement {
         let control = |id: &'static str, label: &'static str, icon_name: &'static str, area: WindowControlArea, hover: u32| {
             div()
                 .id(id)
@@ -2322,7 +2404,18 @@ impl Cyder {
             .flex()
             .rounded_bl(px(PANEL_R))
             .overflow_hidden()
-            .bg(rgba((theme::frame() << 8) | 0xff))
+            .bg(rgba(theme::frame_fill()))
+            .children(self.frame_art(vw, vh, 0., 0.).map(|top| {
+                // O GPUI só recorta em retângulo: o `rounded_bl` não arredonda a capa. Ela fica fora do quadradinho
+                // de baixo à esquerda, que leva a cor da capa ali com o canto arredondado (o painel aparece em volta).
+                let (r, h) = (PANEL_R, theme::TITLEBAR_H);
+                let corner = self.frame_color(vw, vh, vw - CONTROLS_W + r / 2., h - r / 2.).unwrap_or(theme::frame_fill());
+                div().absolute().inset_0()
+                    .child(div().absolute().top_0().left_0().right_0().bottom(px(r)).overflow_hidden().child(top))
+                    .child(div().absolute().left(px(r)).right_0().bottom_0().h(px(r)).overflow_hidden().children(self.frame_art(vw, vh, 0., h - r)))
+                    // 1 px para dentro: a borda do painel é desenhada por dentro do arco, e o canto cheio passava dela.
+                    .child(div().absolute().left(px(1.)).bottom(px(1.)).size(px(r - 1.)).rounded_bl(px(r - 1.)).bg(rgba(corner)))
+            }))
             .child(control("win-min", "Minimizar", "minus", WindowControlArea::Min, theme::hover()))
             .child(control("win-max", "Maximizar", "square", WindowControlArea::Max, theme::hover()))
             .child(control("win-close", "Fechar", "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
@@ -2441,14 +2534,21 @@ impl Cyder {
         } else {
             index.map(|i| (i, false))
         };
+        let (uris, label) = self.dragged(t);
+        let tracks = TrackDrag { uris, label };
+        let picked = self.picked.contains(&t.uri);
         let row = Self::focusable(("queue-row", spotify.or(index).unwrap_or(usize::MAX)))
-            .when_some(drag, |d, (i, from_spotify)| d
-                .on_drag(QueueDrag { from: i, title: t.name.clone() }, |q, _, _, cx| cx.new(|_| DragGhost(q.title.clone().into())))
-                .drag_over::<QueueDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
-                .on_drop(cx.listener(move |this, q: &QueueDrag, _, cx| {
-                    if from_spotify { this.move_up_next(q.from, i) } else { this.move_queue(q.from, i) }
-                    cx.notify();
-                })))
+            .map(|d| match drag {
+                Some((i, from_spotify)) => d
+                    .on_drag(QueueDrag { from: i, tracks }, |q, _, _, cx| cx.new(|_| DragGhost(q.tracks.label.clone())))
+                    .drag_over::<QueueDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
+                    .on_drop(cx.listener(move |this, q: &QueueDrag, _, cx| {
+                        if from_spotify { this.move_up_next(q.from, i) } else { this.move_queue(q.from, i) }
+                        cx.notify();
+                    })),
+                // A que toca (ou a fila de outro aparelho) não muda de lugar, mas ainda vai para uma playlist.
+                None => d.on_drag(tracks, |d, _, _, cx| cx.new(|_| DragGhost(d.label.clone()))),
+            })
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
             .w_full()
             .h(px(52.))
@@ -2459,6 +2559,8 @@ impl Cyder {
             .gap_3()
             .when(current, |d| d.bg(rgba(theme::wash(0x14))))
             .when(!current, |d| d.hover(|s| s.bg(rgba(theme::wash(0x0f)))))
+            .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
+            .aria_selected(picked)
             .when(index.is_some() && self.spotify_queue().is_none(), |d| d.child(div().w(px(22.)).flex().justify_end().text_xs().text_color(rgba(theme::ink_3())).child((index.unwrap_or(0) + 1).to_string())))
             .child(cover)
             .child(
@@ -2473,7 +2575,13 @@ impl Cyder {
         match index {
             Some(i) => row
                 .aria_label(SharedString::from(format!("Tocar {}", t.name)))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    // A posição na lista que aparece: a do Spotify, com o aleatório, ou a nossa.
+                    let shown = |t: &Self| uris_of(t.spotify_queue().map_or(&t.tracks, |l| l));
+                    if this.pick(e, spotify.unwrap_or(i), shown) {
+                        cx.notify();
+                        return;
+                    }
                     let (tracks, context, label) = (this.tracks.clone(), this.queue_context.clone(), this.queue_label.clone());
                     this.send(Cmd::Play { tracks, index: i, context, label, shuffle_start: false });
                     cx.notify();
@@ -2553,19 +2661,60 @@ impl Cyder {
 /// O que está sendo arrastado na fila: a posição de origem.
 struct QueueDrag {
     from: usize,
-    title: String,
+    tracks: TrackDrag,
 }
 
 /// Faixa de uma playlist sua sendo arrastada: a posição de origem.
 struct PlaylistDrag {
     from: usize,
-    title: String,
+    tracks: TrackDrag,
+}
+
+/// Faixas sendo arrastadas, que uma playlist sua na sidebar recebe; `label` é a prévia.
+#[derive(Clone)]
+struct TrackDrag {
+    uris: Vec<String>,
+    label: SharedString,
+}
+
+/// Os três arrastes de faixa levam as faixas; a sidebar aceita qualquer um.
+trait CarriesTracks: 'static {
+    fn tracks(&self) -> &TrackDrag;
+}
+
+impl CarriesTracks for TrackDrag {
+    fn tracks(&self) -> &TrackDrag {
+        self
+    }
+}
+
+impl CarriesTracks for QueueDrag {
+    fn tracks(&self) -> &TrackDrag {
+        &self.tracks
+    }
+}
+
+impl CarriesTracks for PlaylistDrag {
+    fn tracks(&self) -> &TrackDrag {
+        &self.tracks
+    }
+}
+
+/// Playlist da sidebar como alvo de `T`: destaca com o mouse em cima e adiciona as faixas ao soltar.
+fn takes_tracks<T: CarriesTracks>(row: gpui::Stateful<gpui::Div>, playlist: &Card, cx: &mut Context<Cyder>) -> gpui::Stateful<gpui::Div> {
+    let playlist = playlist.clone();
+    row.drag_over::<T>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))).text_color(rgba(theme::ink_1())))
+        .on_drop(cx.listener(move |t, d: &T, _, cx| { t.drop_on_playlist(playlist.clone(), d.tracks().uris.clone()); cx.notify(); }))
 }
 
 /// Item da sidebar sendo arrastado.
 struct SideDrag {
     uri: String,
     title: String,
+}
+
+fn uris_of(tracks: &[Track]) -> Vec<String> {
+    tracks.iter().map(|t| t.uri.clone()).collect()
 }
 
 /// O que acompanha o mouse durante o arraste.

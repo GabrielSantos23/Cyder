@@ -14,7 +14,12 @@ use crate::theme::{self, glass};
 
 mod canvas;
 mod discord;
+#[cfg(windows)]
+mod hotkeys;
+#[cfg(windows)]
+mod jumplist;
 mod library;
+pub(crate) mod links;
 mod scrollbar;
 mod loading;
 mod media;
@@ -22,7 +27,11 @@ mod menus;
 mod mini;
 mod onboarding;
 #[cfg(windows)]
+mod backdrop;
+#[cfg(windows)]
 mod thumbbar;
+#[cfg(windows)]
+mod toast;
 #[cfg(windows)]
 mod tray;
 pub(crate) mod update;
@@ -30,6 +39,8 @@ pub(crate) mod update;
 pub use tray::hide as hide_window;
 #[cfg(windows)]
 pub use tray::{running_window, show as show_window};
+#[cfg(windows)]
+pub use jumplist::forward as forward_args;
 use library::{Screen, Section, Side, SideFilter};
 use menus::{Menu, Sleep};
 
@@ -120,6 +131,9 @@ impl Ask {
     }
 }
 
+/// Quanto a "Capa no fundo" escurece a capa: clara, ela brigava com o texto da barra lateral.
+const COVER_SHADE: u32 = 0xa8;
+
 /// O que os relatórios de erro levam, na pergunta e nas configurações.
 pub(crate) const REPORTS_TEXT: &str = "Manda ao desenvolvedor os erros do Cyder, com as versões do app e do Windows. Sem o nome da conta, o que você ouve ou os seus arquivos.";
 
@@ -128,7 +142,7 @@ pub(crate) fn hidden_key(context_uri: &str, track_uri: &str) -> String {
     format!("{context_uri}|{track_uri}")
 }
 
-actions!(cyder, [TogglePlay, SeekForward, SeekBack, NextTrack, PrevTrack, FocusNext, FocusPrev, VolumeUp, VolumeDown, ToggleLyrics, ExitImmersive, FocusSearch, Quit]);
+actions!(cyder, [PasteLink, TogglePlay, SeekForward, SeekBack, NextTrack, PrevTrack, FocusNext, FocusPrev, VolumeUp, VolumeDown, ToggleLyrics, ExitImmersive, FocusSearch, Quit]);
 
 /// "Continuar tocando ao fechar a janela": o fechar da janela (em main.rs) só minimiza.
 pub static KEEP_PLAYING: AtomicBool = AtomicBool::new(false);
@@ -308,6 +322,9 @@ pub struct Cyder {
     /// Smart shuffle ligado; as recomendadas que ele pôs na fila (marcadas com um brilho na fila).
     smart: bool,
     smart_added: HashSet<String>,
+    /// Faixas marcadas com Ctrl/Shift+clique, para arrastar juntas; `pick_anchor` é a do último Ctrl+clique.
+    picked: Vec<String>,
+    pick_anchor: Option<String>,
     /// Músicas curtidas como a tela mostra (busca e ordem aplicadas: `liked_changed`).
     liked_view: Vec<Track>,
     liked_query: String,
@@ -327,9 +344,24 @@ pub struct Cyder {
     listen: Option<media::Listen>,
     presence: Option<discord::Presence>,
     #[cfg(windows)]
+    toasted: toast::Toasted,
+    /// "Pular" no toast, de volta à thread da UI.
+    #[cfg(windows)]
+    toast_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    #[cfg(windows)]
+    toast_registered: bool,
+    #[cfg(windows)]
     tray: Option<tray::Tray>,
+    #[cfg(windows)]
+    hotkeys: hotkeys::State,
     /// Janela principal, para a bandeja e o mini player a mostrarem de novo.
     hwnd: isize,
+    /// Cor de destaque do Windows, relida ao voltar para a janela e quando o tema do sistema muda.
+    win_accent: Option<u32>,
+    /// Link do Spotify que chegou antes do login terminar.
+    pending_link: Option<String>,
+    /// Link de faixa: página (id) e a faixa (URI) que toca quando a página chegar.
+    link_play: Option<(String, String)>,
     mini: Option<gpui::AnyWindowHandle>,
     /// Novidades: todos, álbuns, singles (`news::cards`).
     news: Option<[Vec<cyder_core::Card>; 3]>,
@@ -358,6 +390,8 @@ pub struct Cyder {
     art: HashMap<usize, Art>,
     /// Última arte mostrada, para o fundo não piscar enquanto a nova carrega.
     shown_art: Option<Art>,
+    /// O fundo borrado da capa já lido, para a cor dos cantinhos da moldura (`frame_color`).
+    frame_px: std::cell::RefCell<Option<(PathBuf, image::RgbImage)>>,
     notice: Option<(String, Instant)>,
     layout: Option<LyricLayout>,
     shuffle: bool,
@@ -449,6 +483,8 @@ impl Cyder {
                 if this.update(cx, |s, cx| {
                     s.apply(ev);
                     s.sync_media();
+                    #[cfg(windows)]
+                    s.sync_jumplist();
                     if let Some(url) = s.open_url.take() {
                         cx.open_url(&url);
                     }
@@ -589,6 +625,8 @@ impl Cyder {
             stats_loading: false,
             smart: false,
             smart_added: HashSet::new(),
+            picked: Vec::new(),
+            pick_anchor: None,
             liked_view: Vec::new(),
             liked_query: String::new(),
             liked_search_open: false,
@@ -603,8 +641,19 @@ impl Cyder {
             listen: None,
             presence: None,
             #[cfg(windows)]
+            toasted: Default::default(),
+            #[cfg(windows)]
+            toast_tx: None,
+            #[cfg(windows)]
+            toast_registered: false,
+            #[cfg(windows)]
             tray: None,
+            #[cfg(windows)]
+            hotkeys: hotkeys::State::new(cx),
             hwnd: 0,
+            win_accent: system_accent(),
+            pending_link: None,
+            link_play: None,
             mini: None,
             news: None,
             news_loading: false,
@@ -624,6 +673,7 @@ impl Cyder {
             lyrics: HashMap::new(),
             art: HashMap::new(),
             shown_art: None,
+            frame_px: Default::default(),
             notice: crate::take_crash_notice().map(|n| (n, Instant::now())),
             layout: None,
             shuffle: false,
@@ -674,6 +724,9 @@ impl Cyder {
                 self.queue_label = label;
                 self.queue_context = context;
                 self.phase = Phase::Ready;
+                if let Some(link) = self.pending_link.take() {
+                    self.open_link(&link);
+                }
                 if std::mem::take(&mut self.welcome_pending) {
                     self.dialog = Some(Dialog::Welcome);
                 } else {
@@ -701,6 +754,7 @@ impl Cyder {
             AppEvent::Page(page) => {
                 self.page_errors.remove(&page.card.id);
                 self.pages.insert(page.card.id.clone(), page);
+                self.play_link();
             }
             AppEvent::PageFailed { id, error } => drop(self.page_errors.insert(id, error)),
             AppEvent::Thumb { url, path, small } => {
@@ -858,6 +912,7 @@ impl Cyder {
             }
             AppEvent::Plan(plan) => self.plan = Some(plan),
             AppEvent::PlaylistCreated(card) => self.go(Screen::Page(card)),
+            AppEvent::Link { card, uri } => self.open_link_page(card, uri),
             AppEvent::RateLimited { secs } => self.limited_until = Some(Instant::now() + Duration::from_secs(secs)),
             AppEvent::LikedMore { from: _, tracks, more, error } => self.liked_more(tracks, more, error),
             AppEvent::Credits(c) => self.dialog = Some(Dialog::Credits(c)),
@@ -1000,11 +1055,49 @@ impl Cyder {
 
     /// Voltar para a janela do Cyder confere se outro aparelho está tocando: o aviso do Spotify Connect pode ter
     /// se perdido (o PC dormiu, a conexão caiu). O core limita a uma conferência a cada 20 s.
-    pub fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        cx.observe_window_activation(window, |t, window, _| {
-            if window.is_window_active() && matches!(t.phase, Phase::Ready) {
-                t.send(Cmd::RefreshRemote);
+    /// Links de outras aberturas do Cyder e soltos na janela; `first` veio na linha de comando desta.
+    pub fn attach_links(&mut self, window: &Window, first: Option<String>, cx: &mut Context<Self>) {
+        if let Some(link) = first {
+            self.open_link(&link);
+        }
+        #[cfg(windows)]
+        {
+            let Ok(raw_window_handle::RawWindowHandle::Win32(h)) = raw_window_handle::HasWindowHandle::window_handle(window).map(|h| h.as_raw()) else { return };
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            if let Err(e) = links::attach(h.hwnd.get() as *mut std::ffi::c_void, tx) {
+                return log::warn!("links do Spotify: {e}");
             }
+            cx.spawn(async move |this, cx| {
+                while let Some(link) = rx.recv().await {
+                    if this.update(cx, |s, cx| { s.open_link(&link); cx.notify(); }).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+    }
+
+    pub fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.observe_window_activation(window, |t, window, cx| {
+            if window.is_window_active() {
+                // shortcut: a cor de destaque só é relida ao voltar para a janela; trocar com o Cyder na frente espera o próximo foco.
+                let accent = system_accent();
+                if accent != t.win_accent {
+                    t.win_accent = accent;
+                    cx.notify();
+                }
+                if matches!(t.phase, Phase::Ready) {
+                    t.send(Cmd::RefreshRemote);
+                }
+            }
+        })
+        .detach();
+        // O GPUI lê o tema do sistema (WM_SETTINGCHANGE "ImmersiveColorSet") mas não redesenha sozinho; ele
+        // também devolve o modo escuro da janela ao do sistema, então o do Cyder vai de novo.
+        cx.observe_window_appearance(window, |t, _, cx| {
+            t.win_accent = system_accent();
+            cx.notify();
         })
         .detach();
     }
@@ -1100,6 +1193,35 @@ impl Cyder {
         if f32::from(b.size.width) > 0. {
             self.set_volume(f32::from(x - b.origin.x) / f32::from(b.size.width));
         }
+    }
+
+    /// Arraste do progresso e do volume: segue o mouse fora do slider e acaba ao soltar. Vai na janela e também
+    /// nos players, que bloqueiam o mouse para o que está atrás (a janela inclusive): sem isto, soltar em cima
+    /// do player não chegava, e a música só pulava no clique seguinte fora dele.
+    fn slider_drags<E: InteractiveElement>(el: E, cx: &mut Context<Self>) -> E {
+        el.on_mouse_move(cx.listener(|t, e: &MouseMoveEvent, _, cx| {
+            if e.pressed_button == Some(MouseButton::Left) {
+                if t.dragging_volume {
+                    t.volume_from_mouse(e.position.x);
+                    cx.notify();
+                } else if t.seek_drag.is_some() {
+                    t.seek_drag = Some(t.progress_from_mouse(e.position.x));
+                    cx.notify();
+                }
+            }
+        }))
+        .on_mouse_up(MouseButton::Left, cx.listener(|t, _: &MouseUpEvent, _, cx| {
+            t.dragging_volume = false;
+            if t.volume_dirty {
+                t.send_volume();
+            }
+            // Só pede o seek ao soltar: arrastar não fica pulando o áudio.
+            if let Some(f) = t.seek_drag.take() {
+                let duration = t.tracks.get(t.current).map_or(0, |tr| tr.duration_ms);
+                t.seek((f * duration as f32) as u32);
+                cx.notify();
+            }
+        }))
     }
 
     fn progress_from_mouse(&self, x: Pixels) -> f32 {
@@ -1241,10 +1363,42 @@ impl Cyder {
                 .absolute()
                 .inset_0()
                 .child(img(art.background.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
-                .child(div().absolute().inset_0().bg(rgba(theme::shade(0x73))))
+                .child(div().absolute().inset_0().bg(rgba(theme::shade(if theme::cover_frame() { COVER_SHADE } else { 0x73 }))))
                 .into_any_element(),
-            None => div().absolute().inset_0().bg(rgba((theme::base() << 8) | 0xff)).into_any_element(),
+            None => div().absolute().inset_0().bg(rgba(theme::base_fill())).into_any_element(),
         }
+    }
+
+    /// A mesma capa do fundo num pedaço da moldura que fica por cima do painel (os botões da janela), a `right` e
+    /// `top` px das bordas da janela. Sem a "Capa no fundo", nada.
+    /// Cor (RGBA) da capa da moldura no ponto (`x`, `y`) da janela, já escurecida. O GPUI só recorta em retângulo:
+    /// os cantinhos arredondados da moldura em volta dos botões são pintados com uma cor só, e a capa borrada
+    /// quase não muda num espaço tão pequeno. Sem a "Capa no fundo", None.
+    pub(super) fn frame_color(&self, vw: f32, vh: f32, x: f32, y: f32) -> Option<u32> {
+        let art = self.shown_art.as_ref().filter(|_| theme::cover_frame())?;
+        let mut px = self.frame_px.borrow_mut();
+        if px.as_ref().is_none_or(|(p, _)| *p != art.background) {
+            *px = Some((art.background.clone(), image::open(&art.background).ok()?.to_rgb8()));
+        }
+        let img = &px.as_ref()?.1;
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
+        // Como o ObjectFit::Cover do fundo: escala para cobrir a janela e centraliza.
+        let s = (vw / iw).max(vh / ih);
+        let at = |p: f32, view: f32, size: f32| (((p - (view - size * s) / 2.) / s) as u32).min(size as u32 - 1);
+        let c = img.get_pixel(at(x, vw, iw), at(y, vh, ih)).0;
+        let a = COVER_SHADE as f32 / 255.;
+        let over = if theme::light() { 255. } else { 0. };
+        let ch = |v: u8| ((v as f32 * (1. - a) + over * a).round() as u32).min(255);
+        Some((ch(c[0]) << 24) | (ch(c[1]) << 16) | (ch(c[2]) << 8) | 0xff)
+    }
+
+    pub(super) fn frame_art(&self, vw: f32, vh: f32, right: f32, top: f32) -> Option<gpui::Div> {
+        let art = self.shown_art.as_ref().filter(|_| theme::cover_frame())?;
+        Some(
+            div().absolute().right(px(-right)).top(px(-top)).w(px(vw)).h(px(vh))
+                .child(img(art.background.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
+                .child(div().absolute().inset_0().bg(rgba(theme::shade(COVER_SHADE)))),
+        )
     }
 
     /// Botão alcançável por Tab, acionado por clique ou Enter, com anel de foco só no teclado.
@@ -1545,7 +1699,7 @@ impl Cyder {
         let (title_link, artist_links) = self.track_links(track, "bar", cx);
         let album = track.album.clone();
 
-        let bar = glass(div())
+        let bar = Self::slider_drags(glass(div()), cx)
             .id("player-bar")
             // A letra fica por baixo da barra: o clique não pode pular para a linha de trás.
             .block_mouse_except_scroll()
@@ -1752,6 +1906,7 @@ impl Cyder {
                 this.seek_drag = Some(this.progress_from_mouse(e.position.x));
                 cx.notify();
             }))
+
             .child(
                 div().relative().w_full().h(px(4.)).rounded_full().bg(rgba(theme::wash(0x26)))
                     .child(canvas(move |b, _, _| progress_bounds.set(b), |_, _, _, _| {}).absolute().inset_0())
@@ -2091,6 +2246,13 @@ impl Cyder {
     }
 }
 
+fn system_accent() -> Option<u32> {
+    #[cfg(windows)]
+    return backdrop::accent();
+    #[cfg(not(windows))]
+    None
+}
+
 impl Render for Cyder {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // O imersivo e as telas de entrada ficam sempre escuras (texto claro sobre a capa borrada).
@@ -2100,6 +2262,8 @@ impl Render for Cyder {
             config::Theme::System => matches!(window.appearance(), gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight),
         };
         theme::set_light(light && !self.immersive && matches!(self.phase, Phase::Ready));
+        theme::set_cover_frame(self.settings.cover_frame && self.shown_art.is_some() && !self.immersive);
+        theme::set_accent(self.win_accent.filter(|_| self.settings.accent == config::Accent::System));
         if std::mem::take(&mut self.refocus) {
             window.focus(&self.focus, cx);
         }
@@ -2121,13 +2285,14 @@ impl Render for Cyder {
             .size_full()
             .relative()
             .overflow_hidden()
-            .bg(rgba((theme::base() << 8) | 0xff))
+            .bg(rgba(theme::base_fill()))
             .text_color(rgba(theme::ink_1()))
             .font_family(theme::FONT)
             .track_focus(&self.focus)
             // Sem contexto nenhum, o "!TextField" dos atalhos nunca casa (o GPUI exige uma pilha não vazia).
             .key_context("Cyder")
             .on_action(cx.listener(|t, _: &TogglePlay, _, cx| { t.toggle_play(); cx.notify(); }))
+            .on_action(cx.listener(|t, _: &PasteLink, _, cx| { t.paste_link(cx); cx.notify(); }))
             .on_action(cx.listener(|t, _: &FocusSearch, window, cx| {
                 t.set_immersive(false);
                 t.open_search(window, cx);
@@ -2159,37 +2324,14 @@ impl Render for Cyder {
                 }
                 cx.notify();
             }))
-            // Arraste do volume na janela inteira: soltar fora do slider também encerra.
-            .on_mouse_move(cx.listener(|t, e: &MouseMoveEvent, _, cx| {
-                t.activity(cx);
-                if e.pressed_button == Some(MouseButton::Left) {
-                    if t.dragging_volume {
-                        t.volume_from_mouse(e.position.x);
-                        cx.notify();
-                    } else if t.seek_drag.is_some() {
-                        t.seek_drag = Some(t.progress_from_mouse(e.position.x));
-                        cx.notify();
-                    }
-                }
-            }))
+            .on_mouse_move(cx.listener(|t, _: &MouseMoveEvent, _, cx| t.activity(cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(|t, _: &MouseDownEvent, _, cx| t.activity(cx)))
             // Botões laterais do mouse: voltar e avançar entre as telas.
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Back), cx.listener(|t, _: &MouseDownEvent, _, cx| { t.nav_back(); cx.notify(); }))
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Forward), cx.listener(|t, _: &MouseDownEvent, _, cx| { t.nav_forward(); cx.notify(); }))
             .on_key_down(cx.listener(|t, _: &gpui::KeyDownEvent, _, cx| t.activity(cx)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|t, _: &MouseUpEvent, _, cx| {
-                t.dragging_volume = false;
-                if t.volume_dirty {
-                    t.send_volume();
-                }
-                // Só pede o seek ao soltar: arrastar não fica pulando o áudio.
-                if let Some(f) = t.seek_drag.take() {
-                    let duration = t.tracks.get(t.current).map_or(0, |tr| tr.duration_ms);
-                    t.seek((f * duration as f32) as u32);
-                    cx.notify();
-                }
-            }))
             .child(self.background(window));
+        let root = Self::slider_drags(root, cx);
 
         let root = if !matches!(self.phase, Phase::Ready) {
             root.child(self.gate(window, cx))

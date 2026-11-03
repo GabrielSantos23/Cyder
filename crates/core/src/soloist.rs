@@ -195,7 +195,20 @@ async fn session(key: &str, tx: &UnboundedSender<Status>) -> Result<i32, String>
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     let port = port.ok_or("a API local não respondeu")?;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}")).await.map_err(|e| e.to_string())?;
+    // O arquivo sai um pouco antes de a porta aceitar conexão: sem tentar de novo, o Soloist fechava e
+    // reabria 15 s depois.
+    let mut tries = 0;
+    let mut ws = loop {
+        match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}")).await {
+            Ok((ws, _)) => break ws,
+            Err(e) if tries < 20 => {
+                tries += 1;
+                log::debug!("soloist: API local ainda fechada ({e})");
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
     loop {
         tokio::select! {
             s = child.wait() => return Ok(code(s.map_err(|e| e.to_string())?)),
