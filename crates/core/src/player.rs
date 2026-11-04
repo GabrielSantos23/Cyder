@@ -60,8 +60,6 @@ pub enum PlayerOut {
     Playback { playing: bool, position_ms: u32 },
     Modes { shuffle: bool, repeat: Repeat, volume: u16 },
     Error(String),
-    /// O player não conseguiu subir (login ou Connect); sem ele o app não funciona.
-    Fatal(String),
     /// Parou ou pausou: talvez outro aparelho tenha assumido. O engine confere na Web API.
     Idle,
     /// Sem conexão com o Spotify: o que está acontecendo (reconectando, o erro da última tentativa).
@@ -432,13 +430,93 @@ async fn connect(session: Session, credentials: Credentials, volume: u16) -> Res
     Ok((spirc, task, mixer, player))
 }
 
-pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials, volume: u16, mut cmds: UnboundedReceiver<PlayerCmd>, out: UnboundedSender<PlayerOut>) {
-    let (spirc, task, mixer, player) = match connect(session.clone(), credentials, volume).await {
-        Ok(parts) => parts,
-        Err(e) => {
-            let _ = out.send(PlayerOut::Fatal(e));
-            return;
+/// A tarefa do Spirc, de qualquer um dos dois caminhos (conectou na hora ou depois de esperar).
+type SpircTask = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Espera entre as tentativas de conectar na abertura: começa curta e vai até `OFFLINE_RETRY_MAX`.
+const OFFLINE_RETRY_FIRST: Duration = Duration::from_secs(5);
+const OFFLINE_RETRY_MAX: Duration = Duration::from_secs(60);
+const OFFLINE_PLAY: &str = "Sem conexão com o servidor de áudio do Spotify, então não dá para tocar agora. A biblioteca e a busca continuam funcionando; o Cyder tenta conectar sozinho.";
+
+/// O Connect não subiu na abertura (firewall, proxy, servidor fora do ar). Sem ele não toca nada, mas a
+/// biblioteca, a busca e as páginas vêm pela Web API: o app abre do mesmo jeito e o player tenta de novo em
+/// segundo plano, cada vez mais espaçado (ou já, pelo "Tentar de novo" das configurações).
+/// O que a pessoa escolher nesse meio tempo vira a fila mostrada, sem começar a tocar quando conectar.
+/// None quando o engine saiu (saiu da conta, fechou o app).
+#[allow(clippy::type_complexity)]
+async fn wait_online(
+    cache_dir: &std::path::Path,
+    first_error: String,
+    mut volume: u16,
+    cmds: &mut UnboundedReceiver<PlayerCmd>,
+    out: &UnboundedSender<PlayerOut>,
+) -> Option<(Session, Spirc, SpircTask, Arc<SoftMixer>, Arc<Player>, Vec<PlayerCmd>)> {
+    log::warn!("player sem conexão na abertura: {first_error}");
+    let _ = out.send(PlayerOut::Offline(first_error));
+    let mut pending: Vec<PlayerCmd> = Vec::new();
+    // Onde a faixa mostrada está parada: a janela já pôs o botão em "tocando" e precisa voltar.
+    let mut position_ms = 0;
+    let refuse = |position_ms: u32| {
+        let _ = out.send(PlayerOut::Error(OFFLINE_PLAY.into()));
+        let _ = out.send(PlayerOut::Playback { playing: false, position_ms });
+    };
+    let mut wait = OFFLINE_RETRY_FIRST;
+    loop {
+        let retry = tokio::time::sleep(wait);
+        tokio::pin!(retry);
+        // Espera a próxima tentativa recebendo os comandos; "Tentar de novo" encurta a espera.
+        loop {
+            tokio::select! {
+                _ = &mut retry => break,
+                cmd = cmds.recv() => match cmd? {
+                    PlayerCmd::Restart => {
+                        wait = OFFLINE_RETRY_FIRST;
+                        break;
+                    }
+                    PlayerCmd::SetVolume(v) => {
+                        volume = v;
+                        pending.push(PlayerCmd::SetVolume(v));
+                    }
+                    PlayerCmd::Load { queue, index, context, position_ms: at } => {
+                        position_ms = at;
+                        pending.push(PlayerCmd::Load { queue, index, context, position_ms: at });
+                    }
+                    cmd @ (PlayerCmd::SetShuffle(_) | PlayerCmd::SetRepeat(_)) => pending.push(cmd),
+                    PlayerCmd::Play { queue, index, context, start_ms, .. } => {
+                        position_ms = start_ms;
+                        pending.push(PlayerCmd::Load { queue, index, context, position_ms: start_ms });
+                        refuse(position_ms);
+                    }
+                    PlayerCmd::Toggle | PlayerCmd::Next | PlayerCmd::Prev => refuse(position_ms),
+                    // Mexem no que está tocando: sem player, não há o quê.
+                    _ => {}
+                },
+            }
         }
+        let attempt = async {
+            let (session, credentials) = crate::auth::audio_session(cache_dir).await?;
+            let (spirc, task, mixer, player) = connect(session.clone(), credentials, volume).await?;
+            Ok::<_, String>((session, spirc, task, mixer, player))
+        };
+        match attempt.await {
+            Ok((session, spirc, task, mixer, player)) => return Some((session, spirc, Box::pin(task), mixer, player, pending)),
+            Err(e) => {
+                log::warn!("player continua sem conexão: {e}");
+                let _ = out.send(PlayerOut::Offline(e));
+                wait = (wait * 2).min(OFFLINE_RETRY_MAX);
+            }
+        }
+    }
+}
+
+pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials, volume: u16, mut cmds: UnboundedReceiver<PlayerCmd>, out: UnboundedSender<PlayerOut>) {
+    let (session, spirc, task, mixer, player, pending) = match connect(session.clone(), credentials, volume).await {
+        Ok((spirc, task, mixer, player)) => (session, spirc, Box::pin(task) as SpircTask, mixer, player, Vec::new()),
+        Err(e) => match wait_online(&cache_dir, e, volume, &mut cmds, &out).await {
+            Some(parts) => parts,
+            // O engine saiu antes de o player conectar.
+            None => return,
+        },
     };
     let mut task = tokio::spawn(task);
     let _ = out.send(PlayerOut::Connected(session.clone()));
@@ -446,6 +524,10 @@ pub async fn run(cache_dir: PathBuf, session: Session, credentials: Credentials,
     let mut _player = player;
     let mut state = State { spirc, mixer, queue: Vec::new(), index: 0, context: None, start_ms: 0, shuffle_start: false, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, anchor: (0, Instant::now()), fading: false, settling: false, session, failed: 0, out };
     state.send_modes();
+    // O que foi pedido enquanto estava sem conexão: a fila e os modos, sem começar a tocar sozinho.
+    for cmd in pending {
+        state.cmd(cmd);
+    }
     let started = Instant::now();
     let mut fade_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     loop {

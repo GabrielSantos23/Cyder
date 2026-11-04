@@ -983,6 +983,7 @@ impl Cyder {
                 };
                 let source = CardSource::Section(section);
                 let body = match &self.library {
+                    None if self.library_error.is_some() => self.load_error("library-retry", "Não deu para carregar a sua biblioteca.", self.library_error.clone().unwrap_or_default(), cx),
                     None => {
                         let cols = (((width + GRID_GAP) / (CARD_MIN + GRID_GAP)).floor() as usize).max(2);
                         let card_w = (width - GRID_GAP * (cols - 1) as f32) / cols as f32;
@@ -1006,7 +1007,20 @@ impl Cyder {
     }
 
     /// Tela vazia: o que falta, por quê ou como encher, e o próximo passo (quando há um).
-    pub(super) fn empty_state(title: &'static str, detail: &'static str, action: Option<gpui::Stateful<gpui::Div>>) -> AnyElement {
+    /// No lugar do esqueleto quando a biblioteca ou a tela inicial não vieram: o motivo e "Tentar de novo",
+    /// que pede as duas outra vez (a tela inicial também mostra as playlists da biblioteca).
+    fn load_error(&mut self, id: &'static str, title: &'static str, why: String, cx: &mut Context<Self>) -> AnyElement {
+        let retry = Self::primary_button(id, "Tentar de novo").on_click(cx.listener(|t, _, _, cx| {
+            t.library_error = None;
+            t.home_error = None;
+            t.send(Cmd::RefreshLibrary);
+            t.send(Cmd::RefreshHome);
+            cx.notify();
+        }));
+        Self::empty_state(title, why, Some(retry))
+    }
+
+    pub(super) fn empty_state(title: &'static str, detail: impl Into<gpui::SharedString>, action: Option<gpui::Stateful<gpui::Div>>) -> AnyElement {
         div()
             .pt_8()
             .flex()
@@ -1014,7 +1028,7 @@ impl Cyder {
             .items_start()
             .gap_1()
             .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-            .child(div().text_sm().text_color(rgba(theme::ink_3())).child(detail))
+            .child(div().text_sm().text_color(rgba(theme::ink_3())).child(detail.into()))
             .children(action.map(|a| div().pt_3().child(a)))
             .into_any_element()
     }
@@ -1228,8 +1242,13 @@ impl Cyder {
             .child(div().flex_1().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Início"))
             .child(Self::chip("home-refresh", "Atualizar a tela inicial", "rotate-cw", false, true)
                 .on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::RefreshHome); cx.notify(); })));
-        let Some(shelves) = self.home_shelves() else {
-            return div().size_full().flex().flex_col().child(header).child(loading::home(SHELF_CARD)).into_any_element();
+        let shelves = self.home_shelves().filter(|s| !s.is_empty() || self.home_error.is_none());
+        let Some(shelves) = shelves else {
+            let body = match self.home_error.clone() {
+                Some(e) => self.load_error("home-retry", "Não deu para carregar a tela inicial.", e, cx),
+                None => loading::home(SHELF_CARD),
+            };
+            return div().size_full().flex().flex_col().child(header).child(body).into_any_element();
         };
         let recent = self.recent_contexts(RECENT_MAX);
         // Os atalhos, as prateleiras e o respiro embaixo do player.

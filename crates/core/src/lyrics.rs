@@ -135,7 +135,7 @@ async fn lookup(http: &reqwest::Client, t: &Track) -> Result<Option<Value>, Stri
 /// Reserva quando o LRCLIB falha ou não tem: a letra que o próprio Spotify mostra, pela sessão do áudio.
 /// Não vai para o cache em disco; o LRCLIB continua sendo a fonte principal.
 pub async fn from_spotify(session: &librespot::core::Session, t: &Track) -> Option<Lyrics> {
-    if !t.uri.starts_with("spotify:track:") {
+    if !t.uri.starts_with("spotify:track:") || !crate::internal::connected(session) {
         return None;
     }
     let id = librespot::core::SpotifyId::from_base62(&t.id).ok()?;

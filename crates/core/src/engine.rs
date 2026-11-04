@@ -88,6 +88,8 @@ pub enum Cmd {
     /// Sai da conta e volta para o login.
     Logout,
     RefreshHome,
+    /// Pede a biblioteca de novo (depois de um erro ao carregar).
+    RefreshLibrary,
     /// Passa a reprodução para o aparelho com este id.
     Transfer(String),
     /// Música tocada da busca: depois dela, recomendadas parecidas com ela e com o que a pessoa ouve, como no Spotify.
@@ -177,6 +179,10 @@ pub enum AppEvent {
     Link { card: Card, uri: String },
     /// None: tocando por aqui está ok; Some: sem conexão, e o motivo.
     PlayerStatus(Option<String>),
+    /// A biblioteca (álbuns, artistas, playlists) não carregou: a UI troca o esqueleto pelo erro.
+    LibraryFailed(String),
+    /// A tela inicial não carregou.
+    HomeFailed(String),
     /// Plano da conta ("premium", "free"), pela sessão.
     Plan(String),
     SearchFailed { query: String, error: String },
@@ -452,6 +458,29 @@ impl Ctx {
         fetch_thumbs(&self.http, &self.out, &self.thumbs, urls);
     }
 
+    /// O player não conectou na abertura: carrega o que a Web API alcança (curtidas, biblioteca, tela inicial,
+    /// perfil). As leituras pela sessão falham sem travar e voltam quando ela conectar.
+    fn load_without_session(&self, liked_from_cache: bool) {
+        if liked_from_cache {
+            tokio::spawn(self.clone().refresh_liked());
+        }
+        tokio::spawn(self.clone().refresh_library());
+        tokio::spawn(self.clone().refresh_home());
+        if cache::load::<(String, Option<String>)>("profile").is_none() {
+            let ctx = self.clone();
+            tokio::spawn(async move {
+                match ctx.api.me().await {
+                    Ok((name, image)) => {
+                        cache::save("profile", &(name.clone(), image.clone()));
+                        ctx.thumbs(image.clone().into_iter().collect());
+                        ctx.send(AppEvent::Profile { name, image });
+                    }
+                    Err(e) => log::warn!("perfil: {e}"),
+                }
+            });
+        }
+    }
+
     async fn refresh_liked(self) {
         match self.api.liked_tracks(LIBRARY_LIMIT).await {
             Ok(tracks) => {
@@ -468,7 +497,7 @@ impl Ctx {
     async fn refresh_library(self) {
         let mut lib = match self.api.library().await {
             Ok(l) => l,
-            Err(e) => return self.send(AppEvent::Notice(format!("Não deu para atualizar a biblioteca: {e}"))),
+            Err(e) => return self.send(AppEvent::LibraryFailed(e)),
         };
         match internal::rootlist(&self.session).await {
             Ok(uris) => {
@@ -546,7 +575,8 @@ impl Ctx {
         shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: top_artists });
         shelves.retain(|s| !s.cards.is_empty());
         if shelves.is_empty() {
-            return self.send(AppEvent::Notice("Não deu para montar a tela inicial agora.".into()));
+            let why = if internal::connected(&self.session) { "O Spotify não respondeu." } else { "Sem conexão com o servidor do Spotify." };
+            return self.send(AppEvent::HomeFailed(why.into()));
         }
         cache::save("home", &shelves);
         self.thumbs(shelf_images(&shelves));
@@ -1225,7 +1255,7 @@ async fn run(mut cmds: UnboundedReceiver<Cmd>, out: UnboundedSender<AppEvent>) {
         .build()
         .expect("http client");
 
-    // Laço externo: se o player cair na inicialização, mostra o erro e recomeça do login no "Tentar de novo".
+    // Laço externo: sair da conta volta para o login.
     loop {
         let ready = loop {
             match bootstrap(&http, &out).await {
@@ -1242,11 +1272,6 @@ async fn run(mut cmds: UnboundedReceiver<Cmd>, out: UnboundedSender<AppEvent>) {
             Flow::Exit => return,
             // Saiu da conta: o próximo login abre o navegador.
             Flow::Relogin => continue,
-            Flow::Restart => {
-                if !wait_retry(&mut cmds).await {
-                    return;
-                }
-            }
         }
     }
 }
@@ -1314,7 +1339,6 @@ fn watch_library(session: &librespot::core::Session, tx: UnboundedSender<()>) {
 
 enum Flow {
     Exit,
-    Restart,
     Relogin,
 }
 
@@ -1449,6 +1473,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // Teste da chave de áudio ao abrir (uma vez): sem o Soloist, a recusa já aparece antes do primeiro play.
     let (refused_tx, mut refused_rx) = unbounded_channel::<bool>();
     let mut probed = false;
+    // A sessão já conectou alguma vez; e o que carregou antes disso, só pela Web API (player sem conexão).
+    let mut connected_once = false;
+    let mut loaded_without_session = false;
     ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
     // O app pode fechar a qualquer momento (o processo morre junto com a janela): salva com frequência.
     let mut autosave = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -1805,6 +1832,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                     Cmd::RefreshHome => {
                         tokio::spawn(ctx.clone().refresh_home());
+                        continue;
+                    }
+                    Cmd::RefreshLibrary => {
+                        tokio::spawn(ctx.clone().refresh_library());
                         continue;
                     }
                     Cmd::Pin { uri, on } => {
@@ -2214,6 +2245,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 let ev = match ev {
                     // A sessão conectou: as leituras internas (rootlist, playlists) já funcionam.
                     PlayerOut::Connected(session) => {
+                        connected_once = true;
+                        // Carregado antes sem a sessão: faltam as playlists do Spotify e as prateleiras da tela inicial.
+                        let partial = std::mem::take(&mut loaded_without_session);
                         device_id = session.device_id().to_string();
                         watch_cluster(&session, cluster_tx.clone());
                         watch_library(&session, library_tx.clone());
@@ -2254,10 +2288,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         if std::mem::take(&mut liked_from_cache) && !cache::fresh("liked", REFRESH_EVERY) {
                             tokio::spawn(ctx.clone().refresh_liked());
                         }
-                        if !cache::fresh("library", REFRESH_EVERY) {
+                        if partial || !cache::fresh("library", REFRESH_EVERY) {
                             tokio::spawn(ctx.clone().refresh_library());
                         }
-                        if !cache::fresh("home", REFRESH_EVERY) {
+                        if partial || !cache::fresh("home", REFRESH_EVERY) {
                             tokio::spawn(ctx.clone().refresh_home());
                         }
                         continue;
@@ -2386,10 +2420,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     PlayerOut::Error(e) => AppEvent::Notice(e),
-                    PlayerOut::Offline(why) => AppEvent::PlayerStatus(Some(why)),
-                    PlayerOut::Fatal(e) => {
-                        let _ = out.send(AppEvent::Failed(e));
-                        return Flow::Restart;
+                    PlayerOut::Offline(why) => {
+                        // Sem a sessão na abertura: o que vem pela Web API carrega já, sem esperar o player.
+                        if !connected_once && !std::mem::replace(&mut loaded_without_session, true) {
+                            ctx.load_without_session(std::mem::take(&mut liked_from_cache));
+                        }
+                        AppEvent::PlayerStatus(Some(why))
                     }
                 };
                 if out.send(ev).is_err() {

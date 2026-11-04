@@ -22,8 +22,21 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// A sessão já conectou ao Spotify (o player subiu). Antes disso, ou sem conexão com o servidor de áudio,
+/// não há como pedir nada por ela.
+pub fn connected(session: &Session) -> bool {
+    !session.is_invalid() && !session.username().is_empty()
+}
+
+/// O cliente das leituras internas, ou um erro na hora quando a sessão não conectou (em vez de esperar).
+fn spclient(session: &Session) -> Result<&librespot::core::spclient::SpClient, String> {
+    if connected(session) { Ok(session.spclient()) } else { Err(NOT_CONNECTED.into()) }
+}
+
+pub const NOT_CONNECTED: &str = "sem conexão com o servidor do Spotify";
+
 async fn list(session: &Session, endpoint: &str) -> Result<SelectedListContent, String> {
-    let bytes = session.spclient().request(&http::Method::GET, endpoint, None, None).await.map_err(err)?;
+    let bytes = spclient(session)?.request(&http::Method::GET, endpoint, None, None).await.map_err(err)?;
     SelectedListContent::parse_from_bytes(&bytes).map_err(err)
 }
 
@@ -34,7 +47,7 @@ pub async fn rootlist(session: &Session) -> Result<Vec<(String, u64)>, String> {
     // Marcadores de pasta (start-group/end-group) também contam na paginação.
     let mut from = 0;
     loop {
-        let bytes = session.spclient().get_rootlist(from, Some(500)).await.map_err(err)?;
+        let bytes = spclient(session)?.get_rootlist(from, Some(500)).await.map_err(err)?;
         let content = SelectedListContent::parse_from_bytes(&bytes).map_err(err)?;
         let items = &content.contents.items;
         uris.extend(items.iter().filter(|i| i.uri().starts_with("spotify:playlist:") && i.uri() != DJ_URI)
@@ -65,7 +78,7 @@ pub async fn followed_artists(session: &Session) -> Result<Vec<(String, u64)>, S
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static(PROTO));
         headers.insert(http::header::ACCEPT, http::HeaderValue::from_static(PROTO));
-        let body = session.spclient().request(&http::Method::POST, "/collection/v2/paging", Some(headers), Some(&req)).await.map_err(err)?;
+        let body = spclient(session)?.request(&http::Method::POST, "/collection/v2/paging", Some(headers), Some(&req)).await.map_err(err)?;
         let (items, next) = collection_page(&body).ok_or("resposta da coleção em formato inesperado")?;
         out.extend(items);
         if next.is_empty() || out.len() >= 5000 {
@@ -239,7 +252,7 @@ pub async fn playlist(session: &Session, id: &str, from: usize, max: usize) -> R
 /// Nome de exibição e foto de um usuário. A Web API tirou `/users/{id}` em 2026 (doc 01).
 pub async fn user_profile(session: &Session, username: &str) -> Result<(String, Option<String>), String> {
     let path = format!("/user-profile-view/v3/profile/{username}?playlist_limit=0&artist_limit=0&episode_limit=0");
-    let bytes = session.spclient().request(&http::Method::GET, &path, None, None).await.map_err(err)?;
+    let bytes = spclient(session)?.request(&http::Method::GET, &path, None, None).await.map_err(err)?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(err)?;
     let name = v["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(username).to_string();
     Ok((name, v["image_url"].as_str().filter(|u| !u.is_empty()).map(String::from)))
@@ -335,7 +348,7 @@ pub(crate) async fn track_metadata(session: &Session, uris: &[String]) -> Result
             ..Default::default()
         });
     }
-    let response = session.spclient().get_extended_metadata(request).await.map_err(err)?;
+    let response = spclient(session)?.get_extended_metadata(request).await.map_err(err)?;
     let mut by_uri = std::collections::HashMap::new();
     for array in response.extended_metadata {
         for data in array.extension_data {
@@ -429,7 +442,7 @@ async fn batch(session: &Session, uris: &[String], kind: ExtensionKind) -> Resul
             ..Default::default()
         });
     }
-    let response = session.spclient().get_extended_metadata(request).await.map_err(err)?;
+    let response = spclient(session)?.get_extended_metadata(request).await.map_err(err)?;
     let mut out = std::collections::HashMap::new();
     for array in response.extended_metadata {
         for data in array.extension_data {
@@ -528,7 +541,7 @@ pub async fn credits(session: &Session, track_uri: &str) -> Result<crate::Credit
 /// Playlist de rádio a partir de uma faixa (a mesma do "Ir para o rádio da música" do Spotify).
 pub async fn radio_for(session: &Session, track_uri: &str) -> Result<String, String> {
     let uri = librespot::core::SpotifyUri::from_uri(track_uri).map_err(err)?;
-    let bytes = session.spclient().get_radio_for_track(&uri).await.map_err(err)?;
+    let bytes = spclient(session)?.get_radio_for_track(&uri).await.map_err(err)?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(err)?;
     v["mediaItems"][0]["uri"].as_str().filter(|u| u.starts_with("spotify:playlist:")).map(String::from).ok_or_else(|| "o Spotify não tem rádio para esta música".into())
 }
@@ -547,7 +560,7 @@ pub async fn canvas(session: &Session, track_uri: &str) -> Result<Option<String>
     body.extend(entity);
     let mut headers = http::HeaderMap::new();
     headers.insert(http::header::CONTENT_TYPE, http::HeaderValue::from_static("application/x-protobuf"));
-    let bytes = session.spclient().request(&http::Method::POST, "/canvaz-cache/v0/canvases", Some(headers), Some(&body)).await.map_err(err)?;
+    let bytes = spclient(session)?.request(&http::Method::POST, "/canvaz-cache/v0/canvases", Some(headers), Some(&body)).await.map_err(err)?;
     // A resposta tem `repeated Canvaz canvases = 1`, que o .proto também não traz: lê o campo 1 à mão.
     let mut input = protobuf::CodedInputStream::from_bytes(&bytes);
     while let Some(tag) = input.read_raw_tag_or_eof().map_err(err)? {

@@ -202,6 +202,9 @@ pub struct Cyder {
     library: Option<Library>,
     pages: HashMap<String, Page>,
     page_errors: HashMap<String, String>,
+    /// A biblioteca e a tela inicial não carregaram (e ainda não há uma versão guardada para mostrar).
+    library_error: Option<String>,
+    home_error: Option<String>,
     /// URL da imagem → miniatura em disco.
     thumbs: HashMap<String, PathBuf>,
     /// Mesma imagem em 64 px, para listas.
@@ -551,6 +554,8 @@ impl Cyder {
             library: None,
             pages: HashMap::new(),
             page_errors: HashMap::new(),
+            library_error: None,
+            home_error: None,
             thumbs: HashMap::new(),
             thumbs_small: HashMap::new(),
             screen: Screen::Section(Section::Home),
@@ -739,6 +744,7 @@ impl Cyder {
             }
             AppEvent::Update(state) => self.on_update(state),
             AppEvent::Library(lib) => {
+                self.library_error = None;
                 // A daylist e os mixes mudam de nome e de faixas ao longo do dia: a página guardada não vale mais.
                 if let Some(old) = &self.library {
                     for c in &lib.playlists {
@@ -777,7 +783,15 @@ impl Cyder {
                 self.liked.extend(older);
                 self.liked_changed();
             }
-            AppEvent::Home(shelves) => self.home = Some(shelves),
+            AppEvent::Home(shelves) => {
+                self.home_error = None;
+                self.home = Some(shelves);
+            }
+            // Com uma versão já na tela, só avisa; sem nenhuma, a tela troca o esqueleto pelo erro.
+            AppEvent::LibraryFailed(e) if self.library.is_some() => self.notify(format!("Não deu para atualizar a biblioteca: {e}")),
+            AppEvent::LibraryFailed(e) => self.library_error = Some(e),
+            AppEvent::HomeFailed(e) if self.home.is_some() => self.notify(format!("Não deu para atualizar a tela inicial: {e}")),
+            AppEvent::HomeFailed(e) => self.home_error = Some(e),
             AppEvent::Recent(recent) => self.recent = recent,
             AppEvent::Pins(pins) => self.pins = pins,
             AppEvent::Queue(tracks) => {
