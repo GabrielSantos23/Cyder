@@ -215,7 +215,7 @@ impl Cyder {
             .flex()
             .flex_col()
             .gap_4()
-            .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
+            .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
             .children(self.search.as_ref().filter(|s| !query.is_empty() && !s.is_empty()).map(|s| self.search_filters(s, cx)));
         let body = if query.is_empty() {
             self.search_start(cx)
@@ -442,8 +442,9 @@ impl Cyder {
                     .justify_center()
                     .bg(rgba(theme::ink_1()))
                     .shadow_lg()
-                    .opacity(0.)
-                    .group_hover("search-top", |s| s.opacity(1.))
+                    // Sempre à vista: tocar o melhor resultado é a ação mais comum da busca.
+                    .hover(|s| s.opacity(0.9))
+                    .tip("Tocar")
                     .aria_label(SharedString::from(format!("Tocar {}", card.title)))
                     .on_click(cx.listener(move |t, _, _, cx| {
                         t.remember_search();

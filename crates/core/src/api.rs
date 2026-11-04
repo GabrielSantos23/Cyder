@@ -425,7 +425,15 @@ impl WebApi {
                 let album = json!({ "id": a["id"], "name": a["name"], "images": a["images"] });
                 let tracks: Vec<Track> = items.into_iter().filter_map(|mut t| { t["album"] = album.clone(); parse_track(&t) }).collect();
                 let year = a["release_date"].as_str().unwrap_or_default().get(..4).unwrap_or_default();
-                Ok(Page { card: album_card(&a).unwrap_or_else(|| card.clone()), meta: join_meta(year, tracks.len()), tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0 })
+                // A foto do artista principal ao lado do nome, no lugar do ícone genérico. Um pedido a mais, mas a
+                // página fica guardada; sem ela, o ícone continua.
+                let owner_image = match a["artists"][0]["id"].as_str() {
+                    Some(id) => self.get(&format!("/artists/{id}")).await.ok().and_then(|ar| {
+                        ar["images"].as_array().and_then(|imgs| imgs.last().or(imgs.first()).and_then(|i| i["url"].as_str().map(String::from)))
+                    }),
+                    None => None,
+                };
+                Ok(Page { card: album_card(&a).unwrap_or_else(|| card.clone()), meta: join_meta(year, tracks.len()), tracks, albums: Vec::new(), note: None, artist: None, owner_image, more_from: None, total: 0 })
             }
             Kind::Artist => {
                 let a = self.get(&format!("/artists/{}", card.id)).await?;

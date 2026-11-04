@@ -8,7 +8,7 @@ use gpui::{
 use super::{Cyder, Tip, icon};
 use crate::theme;
 
-const W: f32 = 380.;
+const W: f32 = 412.;
 const H: f32 = 84.;
 /// Distância do canto da tela, acima da barra de tarefas.
 const MARGIN: f32 = 24.;
@@ -20,6 +20,10 @@ pub(super) struct MiniPlayer {
 
 impl MiniPlayer {
     fn button(id: &'static str, label: &'static str, name: &'static str, size: f32) -> gpui::Stateful<gpui::Div> {
+        Self::button_in(id, label, name, size, theme::ink_1())
+    }
+
+    fn button_in(id: &'static str, label: &'static str, name: &'static str, size: f32, color: u32) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
             .size(px(32.))
@@ -32,7 +36,7 @@ impl MiniPlayer {
             .tip(label)
             // Não arrasta a janela ao clicar num botão.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(icon(name, size, theme::ink_1()))
+            .child(icon(name, size, color))
     }
 }
 
@@ -42,6 +46,7 @@ impl Render for MiniPlayer {
         let track = c.tracks.get(c.current).cloned();
         let cover = track.as_ref().and_then(|t| t.cover_small.as_ref()).and_then(|u| c.thumbs.get(u)).cloned();
         let playing = c.playing;
+        let liked = track.as_ref().is_some_and(|t| c.is_liked(&t.uri));
         let progress = track.as_ref().map_or(0., |t| c.position() as f32 / t.duration_ms.max(1) as f32);
         let cyder = self.cyder.clone();
         let act = move |f: fn(&mut Cyder, &mut Context<Cyder>)| {
@@ -74,6 +79,9 @@ impl Render for MiniPlayer {
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).overflow_hidden().whitespace_nowrap().text_ellipsis().child(title))
                     .child(div().text_xs().text_color(rgba(theme::ink_2())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(artist)),
             )
+            // Curtir sem voltar à janela; o coração cheio na cor de destaque.
+            .child(Self::button_in("mini-like", if liked { "Remover das curtidas" } else { "Curtir" }, if liked { "heart-filled" } else { "heart" }, 15., if liked { theme::accent() } else { theme::ink_2() })
+                .on_click(act(|c, _| c.toggle_like_current())))
             .child(Self::button("mini-prev", "Anterior", "rewind", 15.).on_click(act(|c, _| c.prev_track())))
             .child(Self::button("mini-play", if playing { "Pausar" } else { "Tocar" }, if playing { "pause" } else { "play" }, 18.)
                 .on_click(act(|c, _| c.toggle_play())))

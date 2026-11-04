@@ -162,11 +162,12 @@ impl Cyder {
             .flex_none()
             .rounded(px(14.))
             .shadow_2xl()
-            .bg(linear_gradient(135., linear_color_stop(rgba((LIKED_COLOR << 8) | 0xff), 0.), linear_color_stop(rgba(0x9fd6ffff), 1.)))
+            .bg(linear_gradient(135., linear_color_stop(rgba((LIKED_COLOR << 8) | 0xff), 0.), linear_color_stop(rgba((super::LIKED_COLOR_END << 8) | 0xff), 1.)))
             .flex()
             .items_center()
             .justify_center()
-            .child(icon("heart-filled", 84., theme::ink_1()));
+            // Branco nos dois temas: no claro o coração virava preto sobre o gradiente.
+            .child(icon("heart-filled", 84., 0xffffffff));
         let (name, image) = self.profile.clone().unwrap_or_else(|| ("Você".into(), None));
         let avatar = match image.and_then(|u| self.thumbs_small.get(&u).cloned()) {
             Some(p) => img(p).size(px(26.)).flex_none().rounded_full().object_fit(ObjectFit::Cover).into_any_element(),
@@ -218,7 +219,7 @@ impl Cyder {
             .child(
                 div().flex_1().min_w_0().flex().flex_col().gap_2()
                     .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("PLAYLIST"))
-                    .child(div().text_size(px(32.)).line_height(px(38.)).font_weight(FontWeight::BOLD).child("Músicas curtidas"))
+                    .child(div().text_size(px(40.)).line_height(px(46.)).font_weight(FontWeight::EXTRA_BOLD).child("Músicas curtidas"))
                     .child(div().flex().items_center().gap_2().child(avatar).child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(name)))
                     .child(div().flex().child(chip))
                     .child(div().mt_3().flex().items_center().gap_3()
@@ -378,9 +379,10 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_3()
-            .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x0a))))
+            // Zebra bem leve e hover bem mais forte que ela: com os dois parecidos, o hover se perdia.
+            .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x05))))
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
-            .hover(|s| s.bg(rgba(theme::wash(0x17))))
+            .hover(|s| s.bg(rgba(theme::wash(0x1c))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
             .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))

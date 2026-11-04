@@ -143,7 +143,17 @@ impl Cyder {
             .child(div().mt_8().mb_2().text_sm().font_weight(FontWeight::SEMIBOLD).child("Client ID"))
             .child(self.client_id_field(window, cx))
             // Linha do erro sempre reservada: a tela não pula quando ele aparece.
-            .child(div().mt_2().h(px(20.)).text_sm().text_color(rgba((theme::DANGER << 8) | 0xff)).children(self.client_id_error.clone()))
+            .child(match self.client_id_error.clone() {
+                Some(e) => div().mt_2().h(px(20.)).text_sm().text_color(rgba((theme::DANGER << 8) | 0xff)).child(e),
+                // Enquanto digita: quantos caracteres faltam, ou um sinal de que o formato está certo.
+                None => {
+                    let id = self.client_id.trim();
+                    let valid = id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit());
+                    div().mt_2().h(px(20.)).flex().items_center().gap_1p5().text_sm()
+                        .when(valid, |d| d.text_color(rgba(theme::accent())).child(icon("check", 14., theme::accent())).child("Formato certo."))
+                        .when(!valid && !id.is_empty(), |d| d.text_color(rgba(theme::ink_3())).child(format!("{} de 32 caracteres.", id.chars().count())))
+                }
+            })
             .child(div().mt_2().flex().gap_2().text_sm().text_color(rgba(theme::ink_3()))
                 .child(div().pt(px(2.)).child(icon("info", 14., theme::ink_3())))
                 .child(div().flex_1().min_w_0().child("Ao salvar, o navegador abre para você entrar no Spotify.")))

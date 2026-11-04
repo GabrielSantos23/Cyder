@@ -141,6 +141,18 @@ impl SearchResults {
         self.albums.extend(more.albums);
         self.playlists.extend(more.playlists);
         self.shows.extend(more.shows);
+        self.dedup();
+    }
+
+    /// Tira as repetidas: o Spotify devolve a mesma música de vários álbuns (o single, a coletânea, o remaster)
+    /// e, nos lotes seguintes, itens que já vieram. Fica a primeira, a mais relevante.
+    pub fn dedup(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        self.tracks.retain(|t| seen.insert(t.uri.clone()) && seen.insert(format!("{}\u{0}{}", t.name.to_lowercase(), t.artist.to_lowercase())));
+        for cards in [&mut self.artists, &mut self.albums, &mut self.playlists, &mut self.shows] {
+            let mut ids = std::collections::HashSet::new();
+            cards.retain(|c| ids.insert(c.id.clone()));
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -233,4 +245,20 @@ pub fn local_offset_secs() -> i64 {
 #[cfg(not(windows))]
 pub fn local_offset_secs() -> i64 {
     0
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn track(uri: &str, name: &str, artist: &str) -> Track {
+        Track { id: uri.into(), uri: uri.into(), name: name.into(), artist: artist.into(), album: String::new(), album_id: String::new(), duration_ms: 0, cover_small: None, cover_large: None, artists: Vec::new() }
+    }
+
+    #[test]
+    fn dedup_keeps_first_of_each_song() {
+        let mut found = SearchResults { query: "q".into(), tracks: vec![track("a", "Instant Crush", "Daft Punk"), track("b", "Get Lucky", "Daft Punk"), track("c", "instant crush", "Daft Punk"), track("a", "Instant Crush", "Daft Punk")], artists: Vec::new(), albums: Vec::new(), playlists: Vec::new(), shows: Vec::new() };
+        found.dedup();
+        assert_eq!(found.tracks.iter().map(|t| t.uri.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    }
 }

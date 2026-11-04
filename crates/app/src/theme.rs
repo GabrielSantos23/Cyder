@@ -4,7 +4,13 @@ use std::cell::Cell;
 
 use gpui::{Div, Hsla, Styled, px, rgb, rgba};
 
+/// A fonte do Windows. Fora dele (o Segoe UI não existe), a Inter, de métricas parecidas.
+#[cfg(windows)]
 pub const FONT: &str = "Segoe UI";
+#[cfg(not(windows))]
+pub const FONT: &str = "Inter";
+/// Reserva para emojis e bandeiras nos nomes.
+pub const EMOJI_FONTS: [&str; 3] = ["Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji"];
 pub const DANGER: u32 = 0xe81123;
 
 pub const RADIUS_CARD: f32 = 28.;
@@ -47,6 +53,8 @@ pub fn set_accent(rgb: Option<u32>) {
 pub fn accent() -> u32 {
     let rgb = match ACCENT.with(Cell::get) {
         Some(c) => readable(c, &[surface(), frame()], if light() { 0x000000 } else { 0xffffff }),
+        // No claro o verde do Spotify fica com ~1,9:1 sobre o branco: escurece até o AA, como o do sistema.
+        None if light() => readable(GREEN, &[surface(), frame()], 0x000000),
         None => GREEN,
     };
     (rgb << 8) | 0xff
@@ -175,11 +183,11 @@ mod tests {
 
     #[test]
     fn accent_reaches_aa() {
-        for (light_, accent_) in [(false, 0x0050a0), (true, 0x60cdff), (false, 0xffb900), (true, 0x1ed760)] {
+        for (light_, accent_) in [(false, Some(0x0050a0)), (true, Some(0x60cdff)), (false, Some(0xffb900)), (true, Some(0x1ed760)), (true, None)] {
             set_light(light_);
-            set_accent(Some(accent_));
+            set_accent(accent_);
             let a = accent() >> 8;
-            assert!(contrast(a, surface()) >= 4.5 && contrast(a, frame()) >= 4.5, "{accent_:06x} claro={light_}");
+            assert!(contrast(a, surface()) >= 4.5 && contrast(a, frame()) >= 4.5, "{accent_:?} claro={light_}");
             assert!(contrast(a, on_accent() >> 8) >= 4.5);
         }
     }

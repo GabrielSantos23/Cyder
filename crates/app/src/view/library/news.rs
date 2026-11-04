@@ -32,9 +32,10 @@ pub(in crate::view) fn cards(list: &[NewRelease]) -> [Vec<Card>; 3] {
 }
 
 impl Cyder {
-    /// Pede as Novidades na primeira vez que a tela abre.
+    /// Pede as Novidades na primeira vez que a tela abre. Depois de um erro, só pelo "Tentar de novo": pedir de
+    /// novo a cada render repetia o pedido sem parar e a tela nunca saía do esqueleto.
     pub(super) fn load_news(&mut self) {
-        if self.news.is_none() && !self.news_loading {
+        if self.news.is_none() && !self.news_loading && self.news_error.is_none() {
             self.news_loading = true;
             self.news_error = None;
             self.send(Cmd::NewReleases { force: false });
@@ -82,15 +83,19 @@ impl Cyder {
             .gap_4()
             .child(
                 div().flex_1().flex().flex_col().gap_0p5()
-                    .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Novidades"))
+                    .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Novidades"))
                     .child(div().text_sm().text_color(rgba(theme::ink_3())).child(subtitle)),
             )
             .child(refresh);
         let body = match (&self.news, &self.news_error) {
-            (_, Some(e)) => div().pt_8().flex().flex_col().gap_1()
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("Não deu para carregar as novidades."))
-                .child(div().text_sm().text_color(rgba(theme::ink_3())).child(e.clone()))
-                .into_any_element(),
+            (_, Some(e)) => {
+                let e = e.clone();
+                self.error_state("news-retry", "Não deu para carregar as novidades", &e, |t, _| {
+                    t.news_error = None;
+                    t.news_loading = true;
+                    t.send(Cmd::NewReleases { force: true });
+                }, cx)
+            }
             (None, _) => {
                 let cols = (((width + GRID_GAP) / (CARD_MIN + GRID_GAP)).floor() as usize).max(2);
                 loading::grid(cols, (width - GRID_GAP * (cols - 1) as f32) / cols as f32, false)

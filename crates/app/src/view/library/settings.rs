@@ -101,32 +101,53 @@ impl Cyder {
         if self.storage.is_none() {
             self.measure_storage(cx);
         }
+        // Cada seção é um filho direto da rolagem: o índice no topo rola até ela (`scroll_to_item`).
+        let mut sections: Vec<(&'static str, AnyElement)> = vec![
+            ("Conta", self.account_section(cx)),
+            ("Reprodução", self.playback_section(window, cx)),
+            ("Som", self.sound_section(cx)),
+            ("Aparência", self.appearance_section(cx)),
+        ];
+        #[cfg(windows)]
+        sections.push(("Atalhos", self.hotkeys_section(window, cx)));
+        sections.extend([
+            ("Integrações", self.integrations_section(cx)),
+            ("Armazenamento", self.storage_section(cx)),
+            ("Sobre", self.about_section(cx)),
+        ]);
+        let handle = self.scroll_handle("settings");
+        let index = div().pb_4().flex().flex_wrap().gap_2().children(sections.iter().enumerate().map(|(i, (name, _))| {
+            let handle = handle.clone();
+            Self::focusable(("settings-index", i))
+                .h(px(30.))
+                .px_3()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .text_sm()
+                .bg(rgba(theme::wash(0x12)))
+                .hover(|s| s.bg(rgba(theme::wash(0x24))))
+                .on_click(move |_, _, _| handle.scroll_to_top_of_item(i))
+                .child(*name)
+        }));
         let body = div()
-            .w_full()
-            .max_w(px(MAX_W))
+            .id("settings-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&handle)
+            .pb(px(super::LIST_BOTTOM))
             .flex()
             .flex_col()
             .gap_8()
-            .child(self.account_section(cx))
-            .child(self.playback_section(window, cx))
-            .child(self.sound_section(cx))
-            .child(self.appearance_section(cx));
-        #[cfg(windows)]
-        let body = body.child(self.hotkeys_section(window, cx));
-        let body = body
-            .child(self.integrations_section(cx))
-            .child(self.storage_section(cx))
-            .child(self.about_section(cx));
-        let handle = self.scroll_handle("settings");
+            .children(sections.into_iter().map(|(_, el)| div().w_full().max_w(px(MAX_W)).child(el)));
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(div().pb_4().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Configurações"))
-            .child(super::super::scrollbar::scrolled(
-                div().id("settings-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&handle).pb(px(super::LIST_BOTTOM)).child(body),
-                super::panel_bar("settings-bar", handle, false),
-            ))
+            .child(div().pb_3().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Configurações"))
+            .child(index)
+            .child(super::super::scrollbar::scrolled(body, super::panel_bar("settings-bar", handle, false)))
             .into_any_element()
     }
 
@@ -177,7 +198,8 @@ impl Cyder {
             None => Self::row("Status: conectado", format!("Aparece como “{}” no Spotify Connect.", s.device_name()), div()),
             Some(why) => Self::row(
                 "Status: sem conexão",
-                why,
+                // "Reconectando…" é nosso; o resto vem do librespot, em inglês: a frase amigável no lugar.
+                if why.is_ascii() || why.contains('{') || why.contains("Connect") { crate::view::friendly_error(&why).1.to_string() } else { why },
                 Self::primary_button("settings-retry", "Tentar de novo").on_click(cx.listener(|t, _, _, cx| {
                     t.playback_note = Some("Aplicando…");
                     t.send(Cmd::RestartPlayer);
@@ -214,11 +236,13 @@ impl Cyder {
             dimmed(off, Self::row(
                 "Cache de áudio",
                 "Guarda o áudio baixado para não baixar de novo ao repetir.".into(),
-                div().flex().items_center().gap_3()
-                    .when(s.audio_cache, |d| d.child(cache_sizes))
-                    .child(self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx)),
+                self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx),
             )),
         ];
+        // O tamanho numa linha própria, só com o cache ligado: o seletor e o interruptor juntos confundiam.
+        if s.audio_cache {
+            rows.push(dimmed(off, Self::row("Tamanho do cache", "O áudio mais antigo sai quando o cache enche.".into(), cache_sizes)));
+        }
         // Sem o app oficial do Spotify, os links já abrem no Cyder; com ele, só se a pessoa pedir.
         #[cfg(windows)]
         if crate::protocol::other_app() {
@@ -247,7 +271,7 @@ impl Cyder {
                     "Toca pelo player oficial do Spotify quando ele recusa o áudio desta conta ao Cyder. Precisa de uma chave sua (Premium).".into(),
                     div().flex().gap_2()
                         .child(Self::secondary_button("settings-soloist-page", "Gerar chave").on_click(|_, _, cx| cx.open_url(KEY_PAGE)))
-                        .child(Self::primary_button("settings-soloist-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(crate::view::Ask::SoloistKey, String::new()); cx.notify(); }))),
+                        .child(Self::secondary_button("settings-soloist-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(crate::view::Ask::SoloistKey, String::new()); cx.notify(); }))),
                     cx,
                 );
             }
@@ -374,6 +398,13 @@ impl Cyder {
             "Pinta o fundo das páginas de álbum, playlist e podcast e o destaque do player com as cores da capa.".into(),
             self.toggle("settings-cover-colors", on, |st| st.cover_colors = !st.cover_colors, false, cx),
         ));
+        // É uma janela do app, não uma integração: fica com o resto da aparência.
+        let mini_on = self.mini.is_some();
+        rows.push(Self::row(
+            "Mini player",
+            "Uma janela pequena por cima das outras com a capa e os controles. Também abre pelo ícone da bandeja.".into(),
+            Self::secondary_button("settings-mini", if mini_on { "Fechar" } else { "Abrir" }).on_click(cx.listener(|t, _, _, cx| { t.toggle_mini(cx); cx.notify(); })),
+        ));
         Self::section("Aparência", rows)
     }
 
@@ -458,7 +489,7 @@ impl Cyder {
                 "O que toca pelo Cyder não entra no histórico do Spotify; o Last.fm guarda o que você ouve. Precisa de uma chave de API do Last.fm, de graça.".into(),
                 div().flex().gap_2()
                     .child(Self::secondary_button("settings-lastfm-create", "Criar chave").on_click(|_, _, cx| cx.open_url("https://www.last.fm/api/account/create")))
-                    .child(Self::primary_button("settings-lastfm-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::LastfmKey, String::new()); cx.notify(); }))),
+                    .child(Self::secondary_button("settings-lastfm-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::LastfmKey, String::new()); cx.notify(); }))),
                 cx,
             ),
         };
@@ -475,7 +506,7 @@ impl Cyder {
         } else {
             div().flex().gap_2()
                 .child(Self::secondary_button("settings-discord-portal", "Abrir portal").on_click(|_, _, cx| cx.open_url("https://discord.com/developers/applications")))
-                .child(Self::primary_button("settings-discord-on", "Configurar").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::DiscordApp, String::new()); cx.notify(); })))
+                .child(Self::secondary_button("settings-discord-on", "Configurar").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::DiscordApp, String::new()); cx.notify(); })))
                 .into_any_element()
         };
         let discord_detail = if has_app {
@@ -483,7 +514,6 @@ impl Cyder {
         } else {
             "Mostra no seu perfil do Discord o que está tocando. Precisa de um aplicativo seu no portal do Discord (o nome dele aparece como “Ouvindo …”)."
         };
-        let mini_on = self.mini.is_some();
         Self::section("Integrações", vec![
             lastfm,
             self.help_row("Discord", Help::Discord, discord_detail.into(), discord_control, cx),
@@ -501,11 +531,6 @@ impl Cyder {
                     }
                 },
                 self.toggle("settings-toasts", self.settings.toasts, |st| st.toasts = !st.toasts, false, cx),
-            ),
-            Self::row(
-                "Mini player",
-                "Uma janela pequena por cima das outras com a capa e os controles. Também abre pelo ícone da bandeja.".into(),
-                Self::secondary_button("settings-mini", if mini_on { "Fechar" } else { "Abrir" }).on_click(cx.listener(|t, _, _, cx| { t.toggle_mini(cx); cx.notify(); })),
             ),
         ])
     }
@@ -543,8 +568,7 @@ impl Cyder {
             self.toggle("settings-reports", self.settings.send_errors == Some(true), |st| st.send_errors = Some(st.send_errors != Some(true)), false, cx)));
         let mut rows = vec![
             div().flex().items_center().gap_4()
-                .child(div().size(px(44.)).flex_none().rounded(px(12.)).bg(rgba(theme::ink_1())).flex().items_center().justify_center()
-                    .child(icon("play", 20., theme::on_ink())))
+                .child(crate::view::logo(48.))
                 .child(
                     div().flex().flex_col()
                         .child(div().text_base().font_weight(FontWeight::BOLD).child(concat!("Cyder ", env!("CARGO_PKG_VERSION"))))
@@ -631,7 +655,8 @@ impl Cyder {
             .flex()
             .items_center()
             .when(on, |d| d.justify_end().bg(rgba(theme::accent())))
-            .when(!on, |d| d.bg(rgba(theme::wash(0x26))).hover(|s| s.bg(rgba(theme::wash(0x38)))))
+            // Desligado com trilho mais forte: o 0x26 ficava com ~1,3:1 contra o cartão e o controle sumia.
+            .when(!on, |d| d.bg(rgba(theme::wash(0x47))).hover(|s| s.bg(rgba(theme::wash(0x5c)))))
             .aria_label(if on { "Ligado" } else { "Desligado" })
             .aria_selected(on)
             .on_click(cx.listener(move |t, _, _, cx| { t.change(flip, restart); cx.notify(); }))
@@ -649,13 +674,19 @@ impl Cyder {
         restart: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Num trilho, como o seletor segmentado do Windows: as opções não escolhidas não parecem texto solto.
         div()
             .flex()
-            .gap_1()
+            .gap_0p5()
+            .p(px(3.))
+            .rounded_full()
+            .bg(rgba(theme::wash(0x12)))
+            .border_1()
+            .border_color(rgba(theme::wash(0x14)))
             .children(options.into_iter().enumerate().map(|(i, (value, label))| {
                 let on = value == selected;
                 Self::focusable((id, i))
-                    .h(px(30.))
+                    .h(px(28.))
                     .px_3()
                     .rounded_full()
                     .flex()

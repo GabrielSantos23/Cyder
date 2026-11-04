@@ -59,7 +59,7 @@ impl Cyder {
         }).collect();
         let header = div().pb_6().flex().flex_col().gap_4()
             .child(div().flex().flex_col().gap_0p5()
-                .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Estatísticas"))
+                .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Estatísticas"))
                 .child(div().text_sm().text_color(rgba(theme::ink_3())).child("O que você ouviu pelo Cyder neste computador.")))
             .child(div().flex().gap_2().children(chips));
         let body = match self.stats.clone() {

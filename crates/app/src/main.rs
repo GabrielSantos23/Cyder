@@ -18,7 +18,7 @@ use gpui::{
     size,
 };
 
-use view::{Cyder, ExitImmersive, PasteLink, FocusNext, FocusPrev, FocusSearch, NextTrack, PrevTrack, SeekBack, SeekForward, Quit, ToggleLyrics, TogglePlay, VolumeDown, VolumeUp};
+use view::{Cyder, ExitImmersive, GoBack, GoForward, OpenSettings, PasteLink, FocusNext, FocusPrev, FocusSearch, NextTrack, PrevTrack, SeekBack, SeekForward, Quit, ToggleLyrics, TogglePlay, VolumeDown, VolumeUp};
 
 /// "Mostrar animações no Windows" desligado = movimento reduzido.
 #[cfg(windows)]
@@ -40,6 +40,7 @@ struct Assets;
 
 const ICONS: &[(&str, &[u8])] = &[
     ("icons/play.svg", include_bytes!("../assets/icons/play.svg")),
+    ("icons/cyder-mark.svg", include_bytes!("../assets/icons/cyder-mark.svg")),
     ("icons/pause.svg", include_bytes!("../assets/icons/pause.svg")),
     ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
     ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
@@ -284,6 +285,9 @@ fn main() {
             KeyBinding::new("escape", ExitImmersive, PLAYER_KEYS),
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("ctrl-k", FocusSearch, None),
+            KeyBinding::new("ctrl-,", OpenSettings, None),
+            KeyBinding::new("alt-left", GoBack, PLAYER_KEYS),
+            KeyBinding::new("alt-right", GoForward, PLAYER_KEYS),
             KeyBinding::new("ctrl-v", PasteLink, PLAYER_KEYS),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());

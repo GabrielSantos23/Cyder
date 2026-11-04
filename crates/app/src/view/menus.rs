@@ -76,6 +76,7 @@ enum Action {
     Filter(SideFilter),
     /// Volta a sidebar para "mais novos primeiro", descartando a ordem arrastada à mão.
     LibraryByAdded,
+    LibrarySort(super::library::SideSort),
     /// Escolher a ordem já escolhida inverte a direção.
     LikedSort(LikedSort),
     LikedCompact(bool),
@@ -157,7 +158,11 @@ impl Cyder {
                 let custom = !self.library_order.is_empty();
                 out.push(Entry::Sep);
                 out.push(Entry::Heading("Ordenar por"));
-                out.push(Entry::Item(Item { label: "Adicionados recentemente".into(), icon: "clock", action: Some(Action::LibraryByAdded), sub: Vec::new(), checked: !custom, mark: "check" }));
+                use super::library::SideSort;
+                for (sort, label, icon) in [(SideSort::Added, "Adicionados recentemente", "clock"), (SideSort::Name, "Nome", "music"), (SideSort::Creator, "Criador", "user-round")] {
+                    let action = if sort == SideSort::Added { Action::LibraryByAdded } else { Action::LibrarySort(sort) };
+                    out.push(Entry::Item(Item { label: label.into(), icon, action: Some(action), sub: Vec::new(), checked: !custom && self.side_sort == sort, mark: "check" }));
+                }
                 if custom {
                     out.push(Entry::Item(Item { label: "Ordem personalizada".into(), icon: "grip-vertical", action: None, sub: Vec::new(), checked: true, mark: "check" }));
                 }
@@ -398,8 +403,17 @@ impl Cyder {
                 self.refocus = true;
             }
             Action::LibraryByAdded => {
+                self.side_sort = super::library::SideSort::Added;
                 self.library_order.clear();
                 self.send(Cmd::SaveLibraryOrder(Vec::new()));
+            }
+            Action::LibrarySort(sort) => {
+                // Por nome ou criador substitui a ordem arrastada.
+                self.side_sort = sort;
+                if !self.library_order.is_empty() {
+                    self.library_order.clear();
+                    self.send(Cmd::SaveLibraryOrder(Vec::new()));
+                }
             }
             Action::Settings => self.go(Screen::Settings),
             Action::Rename(card) => self.ask_playlist_name(Some(card)),

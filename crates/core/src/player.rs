@@ -436,7 +436,7 @@ type SpircTask = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Espera entre as tentativas de conectar na abertura: começa curta e vai até `OFFLINE_RETRY_MAX`.
 const OFFLINE_RETRY_FIRST: Duration = Duration::from_secs(5);
 const OFFLINE_RETRY_MAX: Duration = Duration::from_secs(60);
-const OFFLINE_PLAY: &str = "Sem conexão com o servidor de áudio do Spotify, então não dá para tocar agora. A biblioteca e a busca continuam funcionando; o Cyder tenta conectar sozinho.";
+const OFFLINE_PLAY: &str = "Sem conexão com o áudio do Spotify. O Cyder tenta de novo sozinho.";
 
 /// O Connect não subiu na abertura (firewall, proxy, servidor fora do ar). Sem ele não toca nada, mas a
 /// biblioteca, a busca e as páginas vêm pela Web API: o app abre do mesmo jeito e o player tenta de novo em

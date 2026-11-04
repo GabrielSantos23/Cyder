@@ -50,7 +50,10 @@ const FEATURING_SHELF: usize = 201;
 /// Linhas da discografia antes do "Ver mais".
 const DISCOGRAPHY_ROWS: usize = 2;
 /// Cor da capa de "Músicas curtidas", que não tem imagem no Spotify.
-const LIKED_COLOR: u32 = 0x6d4aff;
+/// Capa das Músicas curtidas: um gradiente quente, de sidra (âmbar para coral), próprio do Cyder; o roxo para
+/// azul era o do Spotify.
+const LIKED_COLOR: u32 = 0xf2643d;
+const LIKED_COLOR_END: u32 = 0xd92d6b;
 const PAD: f32 = 32.;
 const ROW_H: f32 = 48.;
 const CARD_MIN: f32 = 168.;
@@ -73,6 +76,15 @@ pub enum Section {
 
 /// Altura da foto do artista no topo da página.
 const HERO_H: f32 = 440.;
+
+/// Ordem da lista da sidebar (fora a personalizada, arrastando).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SideSort {
+    #[default]
+    Added,
+    Name,
+    Creator,
+}
 
 /// O que a lista da sidebar mostra.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -193,6 +205,7 @@ impl Cyder {
             self.remember_search();
         }
         self.history.push(std::mem::replace(&mut self.screen, screen));
+        self.sync_search_field();
         self.forward.clear();
         self.picked.clear();
         self.release_filter = Releases::All;
@@ -205,6 +218,21 @@ impl Cyder {
             self.forward.push(std::mem::replace(&mut self.screen, prev));
             self.picked.clear();
             self.refocus = true;
+            self.sync_search_field();
+        }
+    }
+
+    /// O campo de busca mostra o termo só na busca e nas páginas abertas dela: numa seção ou nas configurações
+    /// ele limpa (o termo antigo ali parecia um filtro valendo). Voltar para a busca traz o termo de volta.
+    fn sync_search_field(&mut self) {
+        match &self.screen {
+            Screen::Section(_) | Screen::Settings => self.search_query.clear(),
+            Screen::Search if self.search_query.is_empty() => {
+                if let Some(found) = &self.search {
+                    self.search_query = found.query.clone();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -218,6 +246,7 @@ impl Cyder {
             self.history.push(std::mem::replace(&mut self.screen, next));
             self.picked.clear();
             self.refocus = true;
+            self.sync_search_field();
         }
     }
 
@@ -527,7 +556,7 @@ impl Cyder {
             .flex()
             .items_center()
             .justify_center()
-            .when(!liked && !group.is_empty(), |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)))
+            .when(!liked && !group.is_empty(), |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)).focus_visible(|s| s.opacity(1.).border_color(rgba(theme::ink_1()))))
             .hover(|s| s.bg(rgba(theme::wash(0x1f))))
             .tip(if liked { "Remover das Músicas curtidas" } else { "Adicionar às Músicas curtidas" })
             .on_click(cx.listener(move |t, _: &ClickEvent, _, cx| {
@@ -550,6 +579,8 @@ impl Cyder {
             .justify_center()
             .opacity(0.)
             .group_hover(group, |s| s.opacity(1.))
+            // Pelo Tab também aparece (antes só com o mouse em cima).
+            .focus_visible(|s| s.opacity(1.).border_color(rgba(theme::ink_1())))
             .hover(|s| s.bg(rgba(theme::wash(0x1f))))
             .tip("Mais opções")
             .on_click(cx.listener(move |t, e: &ClickEvent, _, cx| {
@@ -593,6 +624,14 @@ impl Cyder {
                     .flex_col()
                     .child(self.content(window, content_w, cx)),
             )
+            // O conteúdo esmaece antes de passar por baixo do player, em vez de ser cortado seco por ele.
+            .when(!self.tracks.is_empty(), |d| d.child(
+                div().absolute().left_0().right_0().bottom_0().h(px(DOCK_H + 56.)).bg(linear_gradient(
+                    180.,
+                    linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.),
+                    linear_color_stop(rgba((theme::surface() << 8) | 0xd9), 0.75),
+                )),
+            ))
             .child(self.toolbar(cx))
             // Sem nada tocado ainda (primeira abertura), sem player: ele aparece no primeiro play.
             .children((!self.tracks.is_empty()).then(|| self.dock(cx)))
@@ -650,10 +689,10 @@ impl Cyder {
                 .child(icon(icon_name, 16., if active { theme::ink_1() } else { theme::ink_2() }))
                 .child(label)
         };
-        let heading = |text: &'static str| div().px_3().mb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(text);
+        let heading = |text: &'static str| div().px_3().mb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(text);
         let small_button = |id: &'static str, label: &'static str, icon_name: &'static str, on: bool| {
             Self::focusable(id)
-                .size(px(28.))
+                .size(px(32.))
                 .flex_none()
                 .rounded_full()
                 .flex()
@@ -672,7 +711,7 @@ impl Cyder {
         let side_row = |id: (&'static str, usize), active: bool| {
             Self::focusable(id)
                 .w_full()
-                .h(px(38.))
+                .h(px(46.))
                 .px_2()
                 .rounded(px(8.))
                 .flex()
@@ -687,8 +726,10 @@ impl Cyder {
         let accent = rgba(theme::accent());
         let liked = side_row(("side-liked", 0), liked_active)
             .on_click(cx.listener(|t, _, _, cx| { t.go(Screen::Section(Section::Songs)); cx.notify(); }))
-            .child(div().size(px(28.)).flex_none().rounded(px(5.)).bg(rgba((LIKED_COLOR << 8) | 0xff)).flex().items_center().justify_center().child(icon("heart", 14., theme::ink_1())))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child("Músicas curtidas"))
+            .child(div().size(px(34.)).flex_none().rounded(px(5.)).bg(rgba((LIKED_COLOR << 8) | 0xff)).flex().items_center().justify_center().child(icon("heart-filled", 15., 0xffffffff)))
+            .child(div().flex_1().min_w_0().flex().flex_col()
+                .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child("Músicas curtidas"))
+                .child(div().text_xs().text_color(rgba(theme::ink_3())).child("Playlist")))
             .when(liked_playing, |d| d.child(self.playing_mark(15., theme::accent())));
         let handle = self.scroll("sidebar".into());
         // Virtualizada: só as linhas visíveis existem, e as capas são as de 64 px.
@@ -705,6 +746,12 @@ impl Cyder {
                 let thumb = card.image.as_ref().and_then(|u| this.thumbs_small.get(u)).cloned();
                 let round = card.kind == Kind::Artist;
                 let title = card.title.clone();
+                // Tipo e dono, como no Spotify: "Playlist • gabs", "Álbum • Outkast".
+                let sub = if card.kind == Kind::Artist || card.subtitle.is_empty() {
+                    kind_label(card.kind).to_string()
+                } else {
+                    format!("{} • {}", kind_label(card.kind), card.subtitle)
+                };
                 let menu_card = card.clone();
                 let (drag, target_uri) = (SideDrag { uri: card.uri.clone(), title: card.title.clone() }, card.uri.clone());
                 // Faixas arrastadas de qualquer lista entram nas playlists que a pessoa pode editar.
@@ -719,12 +766,14 @@ impl Cyder {
                     .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(card.clone())); cx.notify(); }))
                     .child(match thumb {
                         Some(p) => {
-                            let image = img(p).size(px(28.)).flex_none().object_fit(ObjectFit::Cover);
+                            let image = img(p).size(px(34.)).flex_none().object_fit(ObjectFit::Cover);
                             if round { image.rounded_full() } else { image.rounded(px(5.)) }.into_any_element()
                         }
-                        None => div().size(px(28.)).flex_none().rounded(px(if round { 14. } else { 5. })).bg(rgba(theme::wash(0x14))).into_any_element(),
+                        None => div().size(px(34.)).flex_none().rounded(px(if round { 17. } else { 5. })).bg(rgba(theme::wash(0x14))).into_any_element(),
                     })
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(playing_here, |d| d.text_color(accent)).child(title))
+                    .child(div().flex_1().min_w_0().flex().flex_col()
+                        .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().when(playing_here, |d| d.text_color(accent)).child(title))
+                        .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().text_xs().text_color(rgba(theme::ink_3())).child(sub)))
                     .when(pinned, |d| d.child(icon("pin", 12., theme::ink_3())))
                     .when(playing_here, |d| d.child(this.playing_mark(15., theme::accent())))
                     .into_any_element()
@@ -892,6 +941,15 @@ impl Cyder {
                 Some(i) => (0, i as i64),
                 None => (1, -(added.and_then(|a| a.get(&c.uri)).copied().unwrap_or(0) as i64)),
             });
+            // Por nome ou por criador: as fixadas continuam no topo.
+            let key = |c: &Card| match self.side_sort {
+                SideSort::Name => Some(c.title.to_lowercase()),
+                SideSort::Creator => Some(format!("{}\u{0}{}", c.subtitle.to_lowercase(), c.title.to_lowercase())),
+                SideSort::Added => None,
+            };
+            if self.side_sort != SideSort::Added {
+                items.sort_by_cached_key(|c| (!self.pins.contains(&c.uri), self.pins.iter().position(|p| *p == c.uri), key(c)));
+            }
         }
         let q = self.side_query.trim().to_lowercase();
         if !q.is_empty() {
@@ -1007,28 +1065,29 @@ impl Cyder {
     }
 
     /// Tela vazia: o que falta, por quê ou como encher, e o próximo passo (quando há um).
-    /// No lugar do esqueleto quando a biblioteca ou a tela inicial não vieram: o motivo e "Tentar de novo",
-    /// que pede as duas outra vez (a tela inicial também mostra as playlists da biblioteca).
+    /// No lugar do esqueleto quando a biblioteca ou a tela inicial não vieram: "Tentar de novo" pede as duas
+    /// outra vez (a tela inicial também mostra as playlists da biblioteca).
     fn load_error(&mut self, id: &'static str, title: &'static str, why: String, cx: &mut Context<Self>) -> AnyElement {
-        let retry = Self::primary_button(id, "Tentar de novo").on_click(cx.listener(|t, _, _, cx| {
+        self.error_state(id, title, &why, |t, _| {
             t.library_error = None;
             t.home_error = None;
             t.send(Cmd::RefreshLibrary);
             t.send(Cmd::RefreshHome);
-            cx.notify();
-        }));
-        Self::empty_state(title, why, Some(retry))
+        }, cx)
     }
 
     pub(super) fn empty_state(title: &'static str, detail: impl Into<gpui::SharedString>, action: Option<gpui::Stateful<gpui::Div>>) -> AnyElement {
+        // Centralizado, no mesmo desenho do estado de erro (`error_state`), sem o ícone.
         div()
-            .pt_8()
+            .w_full()
+            .pt(px(72.))
+            .px_6()
             .flex()
             .flex_col()
-            .items_start()
-            .gap_1()
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-            .child(div().text_sm().text_color(rgba(theme::ink_3())).child(detail.into()))
+            .items_center()
+            .gap_2()
+            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).text_center().child(title))
+            .child(div().max_w(px(420.)).text_center().text_color(rgba(theme::ink_2())).child(detail.into()))
             .children(action.map(|a| div().pt_3().child(a)))
             .into_any_element()
     }
@@ -1042,7 +1101,7 @@ impl Cyder {
             .gap_4()
             .child(
                 div().flex_1().flex().flex_col().gap_0p5()
-                    .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child(title))
+                    .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child(title))
                     .child(div().text_sm().text_color(rgba(theme::ink_3())).child(subtitle)),
             )
             .children(play.map(|source| self.play_buttons(source, cx)))
@@ -1239,7 +1298,7 @@ impl Cyder {
             .pb_4()
             .flex()
             .items_center()
-            .child(div().flex_1().text_size(px(24.)).font_weight(FontWeight::BOLD).child("Início"))
+            .child(div().flex_1().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Início"))
             .child(Self::chip("home-refresh", "Atualizar a tela inicial", "rotate-cw", false, true)
                 .on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::RefreshHome); cx.notify(); })));
         let shelves = self.home_shelves().filter(|s| !s.is_empty() || self.home_error.is_none());
@@ -1417,9 +1476,13 @@ impl Cyder {
             .flex()
             .flex_col()
             .child(
-                div().h(px(header_h)).px_4().flex().flex_col().justify_center()
-                    .child(div().text_sm().font_weight(FontWeight::BOLD).child("Letra"))
-                    .children(track.map(|t| div().text_xs().text_color(rgba(theme::ink_3())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(format!("{} – {}", t.name, t.artist)))),
+                div().h(px(header_h)).px_4().flex().items_center().gap_2()
+                    .child(div().flex_1().min_w_0().flex().flex_col()
+                        .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Letra"))
+                        .children(track.map(|t| div().text_xs().text_color(rgba(theme::ink_3())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(format!("{} – {}", t.name, t.artist)))))
+                    .child(Self::bar_button("lyrics-close", "Fechar a letra".into(), 32., false)
+                        .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Lyrics); cx.notify(); }))
+                        .child(icon("x", 15., theme::ink_2()))),
             )
             .child(div().h(px(body_h)).w_full().overflow_hidden().child(content))
     }
@@ -1429,18 +1492,13 @@ impl Cyder {
 
         let Some(page) = self.pages.get(&card.id).cloned() else {
             let body = match self.page_errors.get(&card.id).cloned() {
-                Some(e) => div()
-                    .pt_8()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(div().text_color(rgba(theme::ink_2())).child(format!("Não deu para abrir \"{}\". {e}", card.title)))
-                    .child(div().flex().child(Self::primary_button("retry-page", "Tentar de novo").on_click(cx.listener(move |t, _, _, cx| {
+                Some(e) => {
+                    let title = format!("Não deu para abrir “{}”", card.title);
+                    self.error_state("retry-page", title, &e, move |t, _| {
                         t.page_errors.remove(&card.id);
                         t.send(Cmd::Open(card.clone()));
-                        cx.notify();
-                    }))))
-                    .into_any_element(),
+                    }, cx)
+                }
                 None => match card.kind {
                     Kind::Artist => loading::artist(HERO_H - TOOLBAR_H, 0.),
                     kind => loading::media_page(kind == Kind::Playlist),
@@ -1561,8 +1619,9 @@ impl Cyder {
             .child(div().absolute().inset_0().rounded_t(px(PANEL_R)).bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x80), 0.), linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.3))))
             .child(div().absolute().inset_0().bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.35), linear_color_stop(rgba((theme::surface() << 8) | 0xff), 1.))))
             .child(
-                div().absolute().left(px(PAD)).right(px(PAD)).bottom_0().flex().flex_col().gap_4()
-                    .child(div().text_size(px(46.)).line_height(px(52.)).font_weight(FontWeight::BOLD).line_clamp(2).text_ellipsis().child(c.title.clone()))
+                // Folga embaixo: o play não encosta no "Lançamento mais recente" logo abaixo.
+                div().absolute().left(px(PAD)).right(px(PAD)).bottom(px(20.)).flex().flex_col().gap_4()
+                    .child(div().text_size(px(56.)).line_height(px(62.)).font_weight(FontWeight::EXTRA_BOLD).line_clamp(2).text_ellipsis().child(c.title.clone()))
                     .when(!page.meta.is_empty(), |d| d.child(div().text_sm().text_color(rgba(theme::ink_2())).child(page.meta.clone())))
                     .child(div().flex().items_center().gap_3().child(play).child(shuffle)),
             )
@@ -1867,11 +1926,12 @@ impl Cyder {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(rgba(theme::ink_1()))
-                .hover(|s| s.bg(rgba(theme::wash(0xd9))))
+                // Botão fantasma: o "Tocar" é a ação principal da página, o "⋯" branco cheio competia com ele.
+                .bg(rgba(theme::wash(0x0f)))
+                .hover(|s| s.bg(rgba(theme::wash(0x1f))))
                 .tip(if c.kind == Kind::Playlist { "Mais opções da playlist" } else { "Mais opções do álbum" })
                 .on_click(cx.listener(move |t, e: &ClickEvent, _, cx| { t.open_menu(MenuTarget::Card(menu_card.clone()), e.position()); cx.notify(); }))
-                .child(icon("ellipsis", 18., theme::on_ink()))
+                .child(icon("ellipsis", 18., theme::ink_1()))
         });
         let hero = div()
             .w_full()
@@ -1885,7 +1945,7 @@ impl Cyder {
             .child(
                 div().flex_1().min_w_0().flex().flex_col().gap_2()
                     .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(kind_label(c.kind).to_uppercase()))
-                    .child(div().w_full().text_size(px(32.)).line_height(px(38.)).font_weight(FontWeight::BOLD).line_clamp(2).text_ellipsis().child(c.title.clone()))
+                    .child(div().w_full().text_size(px(40.)).line_height(px(46.)).font_weight(FontWeight::EXTRA_BOLD).line_clamp(2).text_ellipsis().child(c.title.clone()))
                     .child(by_line)
                     .child(chips)
                     .child(div().mt_3().flex().items_center().gap_3().child(play).child(shuffle).children(follow).child(div().flex_1()).children(more)),
@@ -1947,10 +2007,11 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_3()
-            .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x0a))))
+            // Zebra bem leve e hover bem mais forte que ela: com os dois parecidos, o hover se perdia.
+            .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x05))))
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
             .when(hidden, |d| d.opacity(0.4))
-            .hover(|s| s.bg(rgba(theme::wash(0x17))))
+            .hover(|s| s.bg(rgba(theme::wash(0x1c))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
             .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
@@ -2306,6 +2367,15 @@ impl Cyder {
                 .when(!enabled, |d| d.opacity(0.35).cursor_default())
                 .child(icon(icon_name, 16., theme::ink_1()))
         };
+        // Na página de artista a foto passa por baixo do cabeçalho; depois que ela sai da tela, o cabeçalho ganha
+        // fundo de vidro e o nome do artista, para o conteúdo não passar por trás dos botões.
+        let scrolled_title = match &self.screen {
+            Screen::Page(c) if c.kind == Kind::Artist => self.page_lists.get(&format!("artist-{}", c.id)).and_then(|state| {
+                let top = state.logical_scroll_top();
+                (top.item_ix > 0 || f32::from(top.offset_in_item) > HERO_H - TOOLBAR_H * 2.).then(|| c.title.clone())
+            }),
+            _ => None,
+        };
         div()
             .absolute()
             .top_0()
@@ -2317,6 +2387,11 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_2()
+            .when(scrolled_title.is_some(), |d| d
+                .bg(rgba((theme::surface() << 8) | 0xd9))
+                .backdrop_blur(px(24.))
+                .border_b_1()
+                .border_color(rgba(theme::wash(0x14))))
             .child(
                 // Voltar e avançar num pílula só, como no Cider.
                 div().h(px(36.)).flex().rounded_full().border_1().border_color(rgba(theme::wash(0x1a))).bg(rgba(theme::shade(0x4d))).backdrop_blur(px(20.))
@@ -2330,8 +2405,9 @@ impl Cyder {
                 Self::chip("toggle-sidebar", if self.sidebar_open { "Esconder a barra lateral" } else { "Mostrar a barra lateral" }, "panel-left", false, true)
                     .on_click(cx.listener(|t, _, _, cx| { t.sidebar_open = !t.sidebar_open; cx.notify(); })),
             )
-            // Espaço livre do cabeçalho: arrasta a janela.
-            .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
+            // Espaço livre do cabeçalho: arrasta a janela (com o nome da página quando ela rolou).
+            .child(div().flex_1().min_w_0().h_full().flex().items_center().px_2().window_control_area(WindowControlArea::Drag)
+                .children(scrolled_title.map(|t| div().truncate().text_size(px(16.)).font_weight(FontWeight::BOLD).child(t))))
             // Versão nova: à esquerda do mini player.
             .children(self.update_button(cx))
             .child(
@@ -2462,8 +2538,7 @@ impl Cyder {
         let minutes = remaining_ms.div_ceil(60_000);
         // Pausado, não há hora de término.
         let ends = finish_clock(remaining_ms / 1000).filter(|_| self.playing).map_or(String::new(), |c| format!(" → {c}"));
-        let items = if upcoming == 1 { "1 item".to_string() } else { format!("{upcoming} itens") };
-        let mode_color = |on: bool| if on { theme::ink_1() } else { theme::ink_3() };
+        let mode_color = |on: bool| if on { theme::accent() } else { theme::ink_3() };
         let heading = |text: &'static str| div().text_sm().font_weight(FontWeight::BOLD).child(text);
         let handle = self.scroll("queue".into());
         let list = uniform_list("queue-list", upcoming, cx.processor(|this, range: Range<usize>, _window, cx| this.queue_rows(range, cx)))
@@ -2482,15 +2557,18 @@ impl Cyder {
             .flex_col()
             .gap_3()
             .child(
+                // Título do painel, os modos e o fechar.
                 div().flex().items_center().gap_1()
+                    .child(div().flex_1().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Fila"))
                     .child(Self::bar_button("queue-shuffle", if self.shuffle { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), 32., self.shuffle)
                         .on_click(cx.listener(|t, _, _, cx| { t.shuffle = !t.shuffle; t.send(Cmd::SetShuffle(t.shuffle)); t.remember_shuffle(); cx.notify(); }))
                         .child(self.shuffle_icon(15., mode_color(false))))
                     .child(Self::bar_button("queue-repeat", "Repetir".into(), 32., self.repeat != cyder_core::player::Repeat::Off)
                         .on_click(cx.listener(|t, _, _, cx| { t.cycle_repeat(); cx.notify(); }))
                         .child(icon(if self.repeat == cyder_core::player::Repeat::One { "repeat-1" } else { "repeat" }, 15., mode_color(self.repeat != cyder_core::player::Repeat::Off))))
-                    .child(div().flex_1())
-                    .child(div().px_3().py_1().rounded_full().bg(rgba(theme::wash(0x12))).text_xs().text_color(rgba(theme::ink_2())).child(items)),
+                    .child(Self::bar_button("queue-close", "Fechar a fila".into(), 32., false)
+                        .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Queue); cx.notify(); }))
+                        .child(icon("x", 15., theme::ink_2()))),
             )
             .child(heading("Tocando agora"))
             .children(now.map(|t| self.queue_row(&t, None, None, true, cx)))
@@ -2502,7 +2580,8 @@ impl Cyder {
                             .when(!self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label))))
                         .when(!self.tracks.is_empty() && !from_spotify, |d| d.child(div().flex_none().child(format!("{} de {}", self.current + 1, self.tracks.len())))))
                     .child(div().flex().items_center().gap_2()
-                        .child(div().flex_1().child(heading("A seguir")))
+                        .child(div().flex_1().flex().items_baseline().gap_2().child(heading("A seguir"))
+                            .when(upcoming > 0, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(if upcoming == 1 { "1 música".to_string() } else { format!("{upcoming} músicas") }))))
                         // Tocando em outro aparelho, a fila é a dele: a Web API não deixa limpar.
                         .when(upcoming > 0 && self.elsewhere().is_none(), |d| d.child(Self::text_button("queue-clear", "Limpar fila").flex_none()
                             .on_click(cx.listener(|t, _, _, cx| { t.clear_queue(); cx.notify(); }))))),
@@ -2646,10 +2725,14 @@ impl Cyder {
                                 t.devices_open = false;
                                 cx.notify();
                             }))
-                            .child(icon(icon_name, 16., if active { theme::ink_1() } else { theme::ink_2() }))
-                            .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis()
-                                .when(active, |d| d.font_weight(FontWeight::SEMIBOLD)).child(d.name))
-                            .when(active, |d| d.child(icon("check", 15., theme::ink_1())))
+                            .when(active, |d| d.h(px(48.)))
+                            .child(icon(icon_name, 16., if active { theme::accent() } else { theme::ink_2() }))
+                            // O aparelho que está tocando: na cor de destaque, com "Tocando agora" embaixo.
+                            .child(div().flex_1().min_w_0().flex().flex_col()
+                                .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis()
+                                    .when(active, |d| d.font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::accent()))).child(d.name))
+                                .when(active, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child("Tocando agora"))))
+                            .when(active, |d| d.child(icon("check", 15., theme::accent())))
                     }))
                     .into_any_element()
             }
