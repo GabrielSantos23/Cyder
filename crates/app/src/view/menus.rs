@@ -14,9 +14,9 @@ const ITEM_H: f32 = 34.;
 const SEP_H: f32 = 9.;
 /// Respiro do cartão (p_2 dos dois lados).
 const PAD_H: f32 = 16.;
-/// Playlists no submenu "Adicionar à playlist"; mais que isso não cabe na tela.
-const ADD_TO_MAX: usize = 14;
 const MARGIN: f32 = 8.;
+/// Altura máxima de um submenu (cerca de 10 itens); com mais, ele rola.
+const SUB_MAX_H: f32 = ITEM_H * 10. + PAD_H;
 
 #[derive(Clone)]
 pub enum MenuTarget {
@@ -245,7 +245,7 @@ impl Cyder {
 
     fn track_entries(&self, track: &Track) -> Vec<Entry> {
         let liked = self.is_liked(&track.uri);
-        let mine: Vec<Card> = self.sidebar_playlists().into_iter().filter(|c| self.owns(c)).take(ADD_TO_MAX).collect();
+        let mine: Vec<Card> = self.sidebar_playlists().into_iter().filter(|c| self.owns(c)).collect();
         // Aberta numa playlist sua: dá para tirar a faixa dela.
         let here = match &self.screen {
             Screen::Page(c) if self.owns(c) && self.pages.get(&c.id).is_some_and(|p| p.tracks.iter().any(|t| t.uri == track.uri)) => Some(c.clone()),
@@ -473,7 +473,8 @@ impl Cyder {
         if let Some(Entry::Item(it)) = sub.and_then(|i| entries.get(i)) {
             if !it.sub.is_empty() {
                 let top = y + 8. + entries[..sub.unwrap_or(0)].iter().map(entry_h).sum::<f32>() - 8.;
-                let sh = height(&it.sub);
+                // Mais alto que a janela (muitas playlists), o submenu rola.
+                let sh = height(&it.sub).min(SUB_MAX_H).min(vh - 2. * MARGIN);
                 let sx = if x + w + W - 4. <= vw - MARGIN { x + w - 4. } else { (x - W + 4.).max(MARGIN) };
                 let sy = top.min(vh - sh - MARGIN).max(MARGIN);
                 sub_panel = Some((sx, sy));
@@ -490,7 +491,8 @@ impl Cyder {
             // Monta de novo para pegar os filhos (os itens não são Clone).
             if let Some(Entry::Item(it)) = self.entries(&target).into_iter().nth(i) {
                 let sub_items = self.render_entries(it.sub, false, cx);
-                layer = layer.child(Self::menu_card(sx, sy, W).children(sub_items));
+                // A coluna de dentro não encolhe: sem ela, os itens se espremiam em vez de rolar.
+                layer = layer.child(Self::menu_card(sx, sy, W).id("submenu").max_h(px(SUB_MAX_H.min(vh - 2. * MARGIN))).overflow_y_scroll().child(div().flex_none().flex().flex_col().children(sub_items)));
             }
         }
         Some(layer.into_any_element())

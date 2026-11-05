@@ -2,7 +2,8 @@
 //! Não passam pela cota da Web API e chegam onde ela não chega desde 2026: playlists de outras pessoas
 //! e as playlists do Spotify salvas na biblioteca (daylist, Daily Mix, mixes).
 //! O mesmo caminho do spotifast e do psst; é interno e pode mudar sem aviso.
-//! A tela inicial personalizada do Spotify (Pathfinder) responde 403 para este client (doc 07).
+//! A tela inicial personalizada do Spotify vem do Pathfinder (pathfinder.rs): com o token do login5 e os headers do
+//! web player ele responde (o 403 do doc 07 era sem esses headers).
 use librespot::core::Session;
 use librespot::protocol::extended_metadata::{BatchedEntityRequest, EntityRequest, ExtensionQuery};
 use librespot::protocol::extension_kind::ExtensionKind;

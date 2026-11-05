@@ -23,7 +23,10 @@ use crate::theme;
 use cyder_core::local_offset_secs;
 
 pub const SIDEBAR_W: f32 = 212.;
-pub const DOCK_H: f32 = 92.;
+pub const DOCK_H: f32 = 74.;
+/// Largura do player flutuante (fica centralizado no painel; em janela estreita, ocupa o que tiver).
+const DOCK_W: f32 = 740.;
+const DOCK_COVER: f32 = 44.;
 /// Respiro entre a moldura escura e o painel principal.
 const GAP: f32 = 8.;
 /// Moldura em cima e embaixo do painel, mais grossa que dos lados, como no Cider.
@@ -2084,92 +2087,84 @@ impl Cyder {
         }
     }
 
-    /// Player flutuante dentro do painel, como no Cider: progresso em cima; controles, faixa e volume embaixo.
-    /// A lista rola por baixo dele e aparece borrada através do vidro.
+    /// Player flutuante, compacto e centralizado no painel (como o do Musique): controles à esquerda; capa, nome,
+    /// artistas e progresso no meio; volume à direita. A lista rola por baixo dele e aparece borrada através do vidro.
     fn dock(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let bar = Self::slider_drags(theme::glass(div()), cx)
             // A lista rola por baixo do player; sem isto, um clique no player também clicava no cartão de trás.
             .block_mouse_except_scroll()
-            .absolute()
-            .left(px(16.))
-            .right(px(16.))
-            .bottom(px(16.))
+            .w(px(DOCK_W))
+            .max_w_full()
             .h(px(DOCK_H))
-            .px_5()
+            .px_4()
             .rounded(px(18.))
             .flex()
-            .flex_col()
-            .justify_center()
+            .items_center()
+            .gap_4()
             .shadow_2xl();
+        // Só o player recebe o mouse; a faixa larga em volta dele deixa o clique passar para a lista.
+        let place = |bar| div().absolute().left(px(16.)).right(px(16.)).bottom(px(16.)).flex().justify_center().child(bar);
         let Some(track) = self.tracks.get(self.current).cloned() else {
-            return bar.child(div().text_sm().text_color(rgba(theme::ink_3())).child("Escolha uma música para tocar."));
+            return place(bar.justify_center().child(div().text_sm().text_color(rgba(theme::ink_3())).child("Escolha uma música para tocar.")));
         };
         let duration = track.duration_ms;
         let pos = self.seek_drag.map_or(self.position(), |f| (f * duration as f32) as u32);
         let frac = if duration == 0 { 0. } else { (pos as f32 / duration as f32).clamp(0., 1.) };
         let right_time = if self.show_total { fmt(duration) } else { format!("-{}", fmt(duration.saturating_sub(pos))) };
         let cover = match (&self.shown_art, track.cover_small.as_ref().and_then(|u| self.thumbs.get(u))) {
-            // A de 64 px basta para 40 px; a de 640 só no imersivo.
-            (_, Some(p)) => img(p.clone()).size(px(40.)).rounded(px(7.)).into_any_element(),
-            (Some(art), None) => img(art.cover.clone()).size(px(40.)).rounded(px(7.)).into_any_element(),
-            (None, None) => div().size(px(40.)).rounded(px(7.)).bg(rgba(theme::wash(0x0f))).into_any_element(),
+            // A de 64 px basta para 44 px; a de 640 só no imersivo.
+            (_, Some(p)) => img(p.clone()).size(px(DOCK_COVER)).rounded(px(7.)).into_any_element(),
+            (Some(art), None) => img(art.cover.clone()).size(px(DOCK_COVER)).rounded(px(7.)).into_any_element(),
+            (None, None) => div().size(px(DOCK_COVER)).rounded(px(7.)).bg(rgba(theme::wash(0x0f))).into_any_element(),
         };
         let progress = self.progress(frac, self.accent_ink(), cx);
-        bar.child(
-            div().flex().items_center().gap_3().text_size(px(11.)).text_color(rgba(theme::ink_3()))
-                .child(div().w(px(40.)).flex().justify_end().child(fmt(pos)))
-                .child(div().flex_1().child(progress))
+        let times = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(10.5))
+            .text_color(rgba(theme::ink_3()))
+            .child(div().flex_none().child(fmt(pos)))
+            .child(div().flex_1().min_w_0().child(progress))
+            .child(
+                Self::focusable("dock-time")
+                    .flex_none()
+                    .rounded(px(6.))
+                    .hover(|s| s.text_color(rgba(theme::ink_1())))
+                    .aria_label(if self.show_total { "Mostrar tempo restante" } else { "Mostrar duração total" })
+                    .on_click(cx.listener(|t, _, _, cx| { t.show_total = !t.show_total; cx.notify(); }))
+                    .child(right_time),
+            );
+        place(
+            bar.child(div().flex_none().flex().items_center().gap_0p5().children(self.transport(cx)))
+                .child(self.dock_track(&track, cover, times, cx))
                 .child(
-                    Self::focusable("dock-time")
-                        .w(px(48.))
-                        .rounded(px(6.))
-                        .hover(|s| s.text_color(rgba(theme::ink_1())))
-                        .aria_label(if self.show_total { "Mostrar tempo restante" } else { "Mostrar duração total" })
-                        .on_click(cx.listener(|t, _, _, cx| { t.show_total = !t.show_total; cx.notify(); }))
-                        .child(right_time),
-                ),
-        )
-        .child(
-            div()
-                .h(px(50.))
-                .flex()
-                .items_center()
-                .gap_4()
-                // Os lados não encolhem além dos controles; quem cede espaço é o cartão da faixa.
-                .child(div().flex_1().min_w(px(200.)).flex().items_center().gap_0p5().children(self.transport(cx)))
-                .child(self.dock_track(&track, cover, cx))
-                .child(
-                    div().flex_1().min_w(px(200.)).flex().items_center().justify_end().gap_1()
-                        .child(icon(self.volume_icon(), 17., theme::ink_2()))
+                    div().flex_none().flex().items_center().gap_1()
+                        .child(icon(self.volume_icon(), 16., theme::ink_2()))
                         .child(self.volume_slider(true, cx))
                         .child(
-                            Self::bar_button("dock-immersive", "Modo imersivo".into(), 36., false)
-                                .ml_2()
+                            Self::bar_button("dock-immersive", "Modo imersivo".into(), 32., false)
+                                .ml_1()
                                 .on_click(cx.listener(|t, _, _, cx| { t.set_immersive(true); cx.notify(); }))
-                                .child(icon("maximize-2", 16., theme::ink_1())),
+                                .child(icon("maximize-2", 15., theme::ink_1())),
                         ),
                 ),
         )
     }
 
-    /// Cartão da faixa no centro do player: a capa abre o imersivo, o nome abre o álbum (ou single)
-    /// e cada artista abre a página dele.
-    fn dock_track(&mut self, track: &Track, cover: AnyElement, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A faixa no meio do player: a capa abre o imersivo, o nome abre o álbum (ou single), cada artista abre a
+    /// página dele, e o progresso fica logo embaixo.
+    fn dock_track(&mut self, track: &Track, cover: AnyElement, times: gpui::Div, cx: &mut Context<Self>) -> impl IntoElement {
         let (title, artists) = self.track_links(track, "dock", cx);
         div()
-            .w(px(480.))
-            .min_w(px(180.))
-            .p_1()
-            .pr_3()
-            .rounded(px(10.))
+            .flex_1()
+            .min_w_0()
             .flex()
             .items_center()
             .gap_3()
-            .bg(rgba(theme::wash(0x0a)))
-            .border_1()
-            .border_color(rgba(theme::wash(0x1f)))
             .child(
                 Self::focusable("dock-cover")
+                    .flex_none()
                     .rounded(px(8.))
                     .hover(|s| s.opacity(0.8))
                     .tip("Abrir o modo imersivo")
@@ -2178,11 +2173,15 @@ impl Cyder {
             )
             .child(
                 div().flex_1().min_w_0().flex().flex_col()
-                    .child(div().flex().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(div().flex().min_w_0().gap(px(3.)).overflow_hidden().text_xs().text_color(rgba(theme::ink_2())).children(artists)),
+                    .child(
+                        div().flex().items_center().gap_1().min_w_0()
+                            .child(div().flex().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+                            // Curtir a que está tocando; episódios de podcast não entram nas Músicas curtidas.
+                            .when(track.uri.starts_with("spotify:track:"), |d| d.child(self.heart_button("dock-heart", "", track, cx))),
+                    )
+                    .child(div().flex().min_w_0().gap(px(3.)).overflow_hidden().text_xs().text_color(rgba(theme::ink_2())).children(artists))
+                    .child(div().mt(px(3.)).child(times)),
             )
-            // Curtir a que está tocando; episódios de podcast não entram nas Músicas curtidas.
-            .when(track.uri.starts_with("spotify:track:"), |d| d.child(self.heart_button("dock-heart", "", track, cx)))
     }
 
     /// Faixa verde acima do player quando outro aparelho está tocando, como no app do Spotify.

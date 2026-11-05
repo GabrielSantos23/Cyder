@@ -194,11 +194,12 @@ async fn session(key: &str, tx: &UnboundedSender<Status>) -> Result<i32, String>
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let port = port.ok_or("a API local não respondeu")?;
-    // O arquivo sai um pouco antes de a porta aceitar conexão: sem tentar de novo, o Soloist fechava e
-    // reabria 15 s depois.
+    let mut port = port.ok_or("a API local não respondeu")?;
+    // O arquivo sai um pouco antes de a porta aceitar conexão, e a porta pode mudar logo depois: tenta de novo
+    // relendo o arquivo. Sem isto, o Soloist fechava e reabria 15 s depois (ou insistia na porta velha).
     let mut tries = 0;
     let mut ws = loop {
+        port = std::fs::read_to_string(&port_file).ok().and_then(|p| p.trim().parse::<u16>().ok()).unwrap_or(port);
         match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}")).await {
             Ok((ws, _)) => break ws,
             Err(e) if tries < 20 => {

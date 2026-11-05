@@ -429,6 +429,8 @@ const REMOTE_FALLBACK: Duration = Duration::from_secs(30);
 const WAKE_CHECK: Duration = Duration::from_secs(15);
 const WAKE_GAP: Duration = Duration::from_secs(60);
 const REFRESH_REMOTE_GAP: Duration = Duration::from_secs(20);
+/// Anterior depois disto volta ao começo da faixa, como no Spotify.
+const PREV_RESTART_MS: u32 = 3_000;
 /// Faixas por pedaço nas playlists grandes.
 const PLAYLIST_CHUNK: usize = 200;
 /// Faixas por página conferidas em "está curtida?" (5 pedidos de 40).
@@ -533,18 +535,30 @@ impl Ctx {
     /// As de playlists (do Spotify e suas) a UI monta com a biblioteca.
     async fn refresh_home(self) {
         let local = now_secs() as i64 + crate::local_offset_secs();
-        let moods = self.moods().await.for_now(local);
-        let top_artists = self.api.top_artists().await.unwrap_or_default();
         let played = self.api.recently_played().await;
-        let radios = self.radios(&radio_seeds(played.as_deref().unwrap_or_default(), &top_artists)).await;
-        let editorial = self.editorial(moods.iter().flat_map(|m| m.playlists.iter().cloned()).chain(radios.iter().cloned()).collect()).await;
-        let shelf = |title: &str, ids: Vec<String>| Shelf { title: title.into(), cards: ids.iter().filter_map(|id| editorial.get(id).cloned()).collect() };
-        let mood_shelf = |m: &crate::moods::Mood| shelf(&m.title, crate::moods::of_day(&m.playlists, local));
-        // Tocadas recentemente abre a tela e a do momento vem logo depois (a UI põe as playlists da biblioteca em seguida).
+        // A home personalizada do Spotify (Feito para você, Daily Mix, rádios…), com as seções dele. Sem ela, a
+        // montada aqui com moods, rádios e artistas mais ouvidos.
+        let feed = crate::pathfinder::home(&self.http, &self.session, None).await;
+        if let Err(e) = &feed {
+            log::warn!("home personalizada do Spotify: {e}");
+        }
+        let (rest, top_artists) = match feed {
+            Ok(sections) => (sections, Vec::new()),
+            Err(_) => {
+                let moods = self.moods().await.for_now(local);
+                let top_artists = self.api.top_artists().await.unwrap_or_default();
+                let radios = self.radios(&radio_seeds(played.as_deref().unwrap_or_default(), &top_artists)).await;
+                let editorial = self.editorial(moods.iter().flat_map(|m| m.playlists.iter().cloned()).chain(radios.iter().cloned()).collect()).await;
+                let shelf = |title: &str, ids: Vec<String>| Shelf { title: title.into(), cards: ids.iter().filter_map(|id| editorial.get(id).cloned()).collect() };
+                let mood_shelf = |m: &crate::moods::Mood| shelf(&m.title, crate::moods::of_day(&m.playlists, local));
+                let mut rest: Vec<Shelf> = moods.iter().take(2).map(mood_shelf).collect();
+                rest.push(shelf("Rádios dos seus artistas", radios));
+                rest.extend(moods.iter().skip(2).map(mood_shelf));
+                (rest, top_artists)
+            }
+        };
+        // Tocadas recentemente abre a tela e as outras vêm logo depois (a UI põe as playlists da biblioteca em seguida).
         let mut shelves: Vec<Shelf> = Vec::new();
-        let mut rest: Vec<Shelf> = moods.iter().take(2).map(mood_shelf).collect();
-        rest.push(shelf("Rádios dos seus artistas", radios));
-        rest.extend(moods.iter().skip(2).map(mood_shelf));
         if let Ok(played) = played {
             // Guardada à parte para juntar de novo com o que toca por aqui sem pedir ao Spotify.
             // As playlists tocadas que ainda não temos (de outras pessoas, do Spotify) vêm uma vez e ficam guardadas.
@@ -1204,6 +1218,11 @@ async fn play_on_soloist(ctx: Ctx, body: serde_json::Value, shuffle: bool, repea
         return ctx.send(AppEvent::Notice("O Soloist não aparece nos aparelhos desta conta. Ele precisa ser escolhido no app do Spotify com a mesma conta do Cyder.".into()));
     };
     log::info!("tocando pelo Soloist ({id})");
+    // Aleatório antes do play: sem faixa escolhida (o play de um cartão), o Spotify sorteia a primeira em vez de
+    // começar pela primeira da playlist. Pode falhar com o Soloist ainda inativo; o de depois do play garante.
+    if shuffle {
+        let _ = ctx.api.control(reqwest::Method::PUT, &format!("/shuffle?state=true&device_id={id}")).await;
+    }
     if let Err(e) = ctx.api.play_on(&id, body).await {
         return ctx.send(AppEvent::Notice(format!("O Soloist não aceitou o play: {e}")));
     }
@@ -1234,15 +1253,10 @@ fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session
             return;
         }
         // Falha não é cacheada: a próxima vez que a faixa tocar (ou "Tentar de novo") pede outra vez.
-        let lyrics = lyrics::fetch(&http, &cache, &track).await.unwrap_or_else(|e| {
+        let lyrics = lyrics::fetch(&http, &session, &cache, &track).await.unwrap_or_else(|e| {
             log::warn!("letra de {}: {e}", track.name);
             Lyrics::Failed
         });
-        // LRCLIB fora do ar ou sem a letra: tenta a do Spotify. Sem ela também, fica o resultado do LRCLIB.
-        let lyrics = match lyrics {
-            Lyrics::Failed | Lyrics::NotFound => lyrics::from_spotify(&session, &track).await.unwrap_or(lyrics),
-            found => found,
-        };
         let _ = out.send(AppEvent::Lyrics { index, lyrics });
     });
 }
@@ -1400,6 +1414,11 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let mut device_id = ready.session.device_id().to_string();
     let mut remote: Option<String> = None;
     let mut remote_uri: Option<String> = None;
+    // Id do aparelho seguido, para o play ir direto a ele (pausado há muito tempo, o Spotify o esquece como ativo).
+    let mut remote_id = String::new();
+    // Outro aparelho (não o Soloist) tocou por último: o play daqui puxa a reprodução dele, com a fila e o
+    // contexto do Spotify. A nossa lista só tem a faixa dele, e o play retomava a playlist de antes.
+    let mut taken_from = false;
     // O Spotify Connect avisa pela sessão quando qualquer aparelho da conta muda o que toca; só então
     // pergunta à Web API o que é (a consulta a cada 8 s estourava o limite de pedidos do Client ID).
     let (cluster_tx, mut cluster_rx) = unbounded_channel::<String>();
@@ -1655,6 +1674,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         remote = Some(st.device.clone());
                         ctx.send(AppEvent::Remote(Some(st.device.clone())));
                     }
+                    remote_id = st.device_id.clone();
+                    taken_from = st.device != soloist::DEVICE_NAME;
                     if let Some(t) = st.track {
                         if remote_uri.as_deref() != Some(t.uri.as_str()) {
                             remote_uri = Some(t.uri.clone());
@@ -1726,9 +1747,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 // Outro aparelho tocando: os controles vão para ele pela Web API.
                 if remote.is_some() {
                     use reqwest::Method;
+                    let position = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                     let call = match &cmd {
-                        Cmd::Toggle => Some((Method::PUT, if playing { "/pause".to_string() } else { "/play".to_string() })),
+                        Cmd::Toggle => Some((Method::PUT, if playing { "/pause".to_string() } else { format!("/play?device_id={remote_id}") })),
                         Cmd::Next => Some((Method::POST, "/next".into())),
+                        // Como no Spotify: depois de 3 s, volta ao começo da faixa. O /previous da Web API sempre
+                        // voltava uma faixa (numa da fila, ia para a anterior a ela).
+                        Cmd::Prev if position > PREV_RESTART_MS => Some((Method::PUT, "/seek?position_ms=0".into())),
                         Cmd::Prev => Some((Method::POST, "/previous".into())),
                         Cmd::Seek(ms) => Some((Method::PUT, format!("/seek?position_ms={ms}"))),
                         Cmd::SetShuffle(on) => Some((Method::PUT, format!("/shuffle?state={on}"))),
@@ -1738,6 +1763,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     };
                     if let Some((method, path)) = call {
                         log::info!("comando para {}: {path}", remote.as_deref().unwrap_or_default());
+                        // O Soloist que o Spotify já soltou não aceita o play: manda a fila de novo, do mesmo ponto.
+                        let resume = (matches!(cmd, Cmd::Toggle) && !playing && remote.as_deref() == Some(soloist::DEVICE_NAME) && !tracks.is_empty())
+                            .then(|| soloist_body(&tracks, index, context.as_deref(), position));
+                        if let Some((_, end)) = &resume {
+                            soloist_end = *end;
+                        }
                         if matches!(cmd, Cmd::Toggle) {
                             // Responde já; a consulta seguinte confirma.
                             playing = !playing;
@@ -1746,7 +1777,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let ctx2 = ctx.clone();
                         tokio::spawn(async move {
                             if let Err(e) = ctx2.api.control(method, &path).await {
-                                ctx2.send(AppEvent::Notice(format!("O outro aparelho não aceitou o comando: {e}")));
+                                match resume {
+                                    Some((body, _)) => play_on_soloist(ctx2, body, shuffle, repeat, false).await,
+                                    None => ctx2.send(AppEvent::Notice(format!("O outro aparelho não aceitou o comando: {e}"))),
+                                }
                             }
                         });
                         poll(&ctx, 700);
@@ -1754,6 +1788,20 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                 }
                 let pcmd = match cmd {
+                    // O outro aparelho parou (e o Spotify o soltou): a reprodução dele passa para cá, com a fila dele.
+                    Cmd::Toggle if taken_from && !playing => {
+                        taken_from = false;
+                        let (ctx2, own) = (ctx.clone(), device_id.clone());
+                        tokio::spawn(async move {
+                            let target = if soloist_ready { ctx2.api.devices().await.ok().and_then(|d| d.into_iter().find(|d| d.name == soloist::DEVICE_NAME)).map(|d| d.id) } else { Some(own) };
+                            let Some(id) = target else { return ctx2.send(AppEvent::Notice("O Soloist não aparece nos aparelhos desta conta.".into())) };
+                            if let Err(e) = ctx2.api.transfer(&id).await {
+                                ctx2.send(AppEvent::Notice(format!("Não deu para trazer a música para cá: {e}")));
+                            }
+                        });
+                        poll(&ctx, 1500);
+                        continue;
+                    }
                     // Nada tocando: retoma a fila pelo Soloist.
                     Cmd::Toggle if soloist_ready && !playing && !tracks.is_empty() => {
                         let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
@@ -1790,6 +1838,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     Cmd::SetRepeat(r) => PlayerCmd::SetRepeat(r),
                     Cmd::SetVolume(v) => PlayerCmd::SetVolume(v),
                     Cmd::Play { tracks: queue, index: i, context: c, label: l, shuffle_start } => {
+                        taken_from = false;
                         // O Spotify não registra o que toca pelo Cyder (doc 07): guardamos aqui.
                         if let Some(uri) = &c {
                             let mut history: HashMap<String, u64> = cache::load("history").unwrap_or_default();

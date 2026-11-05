@@ -1,7 +1,7 @@
 //! Tela principal: modo imersivo com letra sincronizada (doc 05, tela 1).
 use std::{cell::Cell, collections::{HashMap, HashSet}, path::PathBuf, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 
-use cyder_core::{AppEvent, Cmd, Device, Library, Page, SearchKind, SearchResults, Shelf, Track, config, images::Art, lyrics::{Line, Lyrics}, player::Repeat};
+use cyder_core::{AppEvent, Cmd, Device, Library, Page, SearchKind, SearchResults, Shelf, Track, config, images::Art, lyrics::{Line, Lyrics, Word}, player::Repeat};
 use gpui::{
     Animation, AnimationExt, AnyElement, Bounds, ClickEvent, ClipboardItem, Context, FocusHandle, Font, FontWeight, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Render, SharedString,
@@ -163,10 +163,70 @@ pub(crate) struct LyricStyle {
     pad_x: f32,
     /// Tamanho do texto dos estados vazios ("Sem letra…").
     title: f32,
+    /// Escala das linhas fora da ativa. A lista é medida no tamanho da ativa e as outras encolhem (as do Musique:
+    /// 0.79 no imersivo); assim a linha que acende nunca quebra diferente nem sai do cartão.
+    rest_scale: f32,
 }
 
-const IMMERSIVE_LYRICS: LyricStyle = LyricStyle { size: 32., line_h: 40., gap: 18., pad_x: 44., title: 22. };
-pub(crate) const PANEL_LYRICS: LyricStyle = LyricStyle { size: 21., line_h: 27., gap: 12., pad_x: 16., title: 16. };
+/// Largura da imagem do imersivo com letra, em fração da janela (a metade direita dela some em direção à letra).
+const SLEEVE_W: f32 = 0.62;
+const IMMERSIVE_LYRICS: LyricStyle = LyricStyle { size: 44., line_h: 53., gap: 10., pad_x: 30., title: 22., rest_scale: 0.79 };
+pub(crate) const PANEL_LYRICS: LyricStyle = LyricStyle { size: 23., line_h: 29., gap: 10., pad_x: 16., title: 16., rest_scale: 1. };
+/// A linha que entra e a que sai mudam de tamanho, luz e foco juntas neste tempo.
+const LYRIC_SWAP: Duration = Duration::from_millis(450);
+/// Ad-lib abrindo ou fechando.
+const ADLIB_SWAP: Duration = Duration::from_millis(420);
+/// Constante de tempo da luz que persegue a voz: palavra muito curta vira um deslize rápido, não um salto.
+const GLOW_CHASE_MS: f32 = 80.;
+
+/// O que a animação da letra precisa lembrar de um quadro para o outro.
+struct LyricFx {
+    track: usize,
+    active: Option<usize>,
+    /// A linha que acabou de deixar de ser a ativa (encolhe e apaga enquanto a nova cresce).
+    prev: Option<usize>,
+    since: Instant,
+    /// Até onde a luz chegou na linha ativa, em letras.
+    glow: f32,
+    glow_at: Instant,
+    /// Ad-libs: aberto ou não, e desde quando.
+    adlibs: HashMap<usize, (bool, Instant)>,
+}
+
+impl LyricFx {
+    fn new() -> Self {
+        let long_ago = Instant::now() - Duration::from_secs(10);
+        Self { track: usize::MAX, active: None, prev: None, since: long_ago, glow: 0., glow_at: long_ago, adlibs: HashMap::new() }
+    }
+}
+
+/// Luz e foco de uma linha a `distance` da ativa (a do Musique): as vizinhas ficam nítidas e legíveis, e só da
+/// segunda em diante a linha borra. `(opacidade, desfoque)`.
+fn lyric_tone(distance: usize, past: bool) -> (f32, f32) {
+    if distance == 0 {
+        return (1., 0.);
+    }
+    let d = (distance - 1) as f32;
+    // O desfoque de um text-shadow é o dobro do de um filtro com o mesmo raio.
+    ((if past { 0.42 } else { 0.54 } - d * 0.12).max(0.1), (d * 2.2).min(6.5) * 0.5)
+}
+
+/// Até onde a voz chegou em `words`, medido em letras (não em palavras): a luz anda proporcional ao texto, então
+/// palavra cantada rápido não "teleporta". Entre palavras, segura na borda.
+fn char_pos(t: u32, words: &[Word]) -> f32 {
+    let mut at = 0.;
+    for w in words {
+        let n = w.text.trim().chars().count().max(1) as f32;
+        if t < w.start {
+            return at;
+        }
+        if t <= w.end {
+            return at + n * (t - w.start) as f32 / (w.end - w.start).max(1) as f32;
+        }
+        at += n;
+    }
+    at
+}
 const PLAYER_H: f32 = 56.;
 const PLAYER_BOTTOM: f32 = 20.;
 const KNOB: f32 = 12.;
@@ -400,6 +460,7 @@ pub struct Cyder {
     frame_px: std::cell::RefCell<Option<(PathBuf, image::RgbImage)>>,
     notice: Option<(String, Instant)>,
     layout: Option<LyricLayout>,
+    lyric_fx: LyricFx,
     shuffle: bool,
     repeat: Repeat,
     /// 0..=1.
@@ -466,9 +527,28 @@ trait Tip {
 impl Tip for gpui::Stateful<gpui::Div> {
     fn tip(self, label: impl Into<SharedString>) -> Self {
         let label = label.into();
-        self.aria_label(label.clone()).tooltip(move |_, cx| cx.new(|_| Tooltip(label.clone(), tip_epoch())).into())
+        self.aria_label(label.clone())
+            .tooltip(move |window, cx| {
+                // Uma dica acabou de aparecer (passando o mouse por uma fileira de botões): a próxima vem sem animação.
+                let warm = LAST_TIP.with(|t| t.get()).is_some_and(|at| at.elapsed() < TIP_WARM);
+                let id = TIP_SERIAL.with(|s| { s.set(s.get() + 1); s.get() });
+                let tip = Tooltip { label: label.clone(), epoch: tip_epoch(), mouse: window.mouse_position(), warm, id };
+                cx.new(|_| tip).into()
+            })
+            .tooltip_show_delay(TIP_DELAY)
     }
 }
+
+/// Espera antes da primeira dica, para o mouse só de passagem não espalhar dicas.
+const TIP_DELAY: Duration = Duration::from_millis(140);
+/// Dentro disto depois de uma dica, a seguinte aparece sem animação.
+const TIP_WARM: Duration = Duration::from_millis(400);
+const TIP_TEXT: f32 = 11.5;
+const TIP_PAD_X: f32 = 9.;
+const TIP_PAD_Y: f32 = 5.;
+/// Distância da ponta do mouse até a dica em cima dele, e até a dica embaixo (passando o desenho do cursor).
+const TIP_ABOVE: f32 = 12.;
+const TIP_BELOW: f32 = 26.;
 
 thread_local! {
     /// Muda a cada clique: a dica criada antes dele (com o rótulo do estado antigo, ou do botão que abriu um
@@ -476,31 +556,72 @@ thread_local! {
     static TIP_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Menu, diálogo ou lista de aparelhos aberta: nenhuma dica por cima deles.
     static OVERLAY_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Quando uma dica esteve na tela pela última vez (para a seguinte saber se vem sem animação).
+    static LAST_TIP: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    static TIP_SERIAL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn tip_epoch() -> u64 {
     TIP_EPOCH.with(|e| e.get())
 }
 
-struct Tooltip(SharedString, u64);
+struct Tooltip {
+    label: SharedString,
+    epoch: u64,
+    /// Onde estava a ponta do mouse quando a dica abriu: o GPUI põe a raiz da dica aí (+1 px).
+    mouse: gpui::Point<Pixels>,
+    warm: bool,
+    id: usize,
+}
 
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        if self.1 != tip_epoch() || OVERLAY_OPEN.with(|o| o.get()) {
-            return div();
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.epoch != tip_epoch() || OVERLAY_OPEN.with(|o| o.get()) {
+            return div().into_any_element();
         }
-        div()
-            .px_2()
-            .py_1()
-            .rounded(px(6.))
+        LAST_TIP.with(|t| t.set(Some(Instant::now())));
+        // O GPUI encosta a dica embaixo do mouse, onde o cursor cobre o texto. A raiz fica com tamanho zero (assim o
+        // GPUI não a empurra) e o balão vai por conta própria para cima do mouse, centralizado nele, ou para baixo
+        // quando não cabe em cima.
+        let font = Font { weight: FontWeight::SEMIBOLD, ..font(theme::FONT) };
+        let run = TextRun { len: self.label.len(), font, color: gpui::white(), background_color: None, underline: None, strikethrough: None };
+        let text_w = f32::from(window.text_system().shape_line(self.label.clone(), px(TIP_TEXT), &[run], None).width);
+        let (w, h) = (text_w + TIP_PAD_X * 2. + 2., (TIP_TEXT * 1.2).round() + TIP_PAD_Y * 2. + 2.);
+        let viewport = window.viewport_size();
+        let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
+        let (mx, my) = (f32::from(self.mouse.x), f32::from(self.mouse.y));
+        let x = (mx - w / 2.).clamp(8., (vw - 8. - w).max(8.));
+        let above = my - TIP_ABOVE - h >= 4.;
+        let y = if above { my - TIP_ABOVE - h } else { (my + TIP_BELOW).min(vh - h - 4.) };
+        // Cresce a partir do lado do mouse: sobe de 5 px abaixo quando fica em cima, desce de 5 px acima quando fica embaixo.
+        let rise = if above { 5. } else { -5. };
+        let bubble = div()
+            .absolute()
+            .left(px(x - mx - 1.))
+            .top(px(y - my - 1.))
+            .whitespace_nowrap()
+            .px(px(TIP_PAD_X))
+            .py(px(TIP_PAD_Y))
+            .rounded(px(7.))
             .border_1()
             .border_color(rgba(theme::wash(0x1f)))
             .bg(rgba((theme::surface() << 8) | 0xf2))
-            .shadow_md()
-            .text_xs()
+            .shadow_lg()
+            .text_size(px(TIP_TEXT))
+            .line_height(px((TIP_TEXT * 1.2).round()))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgba(theme::ink_1()))
             .font_family(theme::FONT)
-            .child(self.0.clone())
+            .layer_scale_origin(point(((mx - x) / w).clamp(0., 1.), if above { 1. } else { 0. }))
+            .child(self.label.clone());
+        // 1 ms e não 0: a animação divide o tempo passado pela duração.
+        let duration = Duration::from_millis(if self.warm { 1 } else { 150 });
+        div()
+            .size_0()
+            .child(bubble.with_animation(("tip", self.id), Animation::new(duration).with_easing(ease_out_quint()), move |d, t| {
+                d.opacity(t).layer_scale(0.94 + 0.06 * t).layer_translate(point(px(0.), px(rise * (1. - t))))
+            }))
+            .into_any_element()
     }
 }
 
@@ -524,6 +645,121 @@ pub(crate) fn friendly_error(raw: &str) -> (&'static str, &'static str) {
 
 fn line_text(l: &Line) -> SharedString {
     if l.text.is_empty() { "…".into() } else { l.text.clone().into() }
+}
+
+/// Recuo da linha da letra no cartão: a voz da direita deixa mais espaço à esquerda. Mais uma folga, para a caixa
+/// de largura fixa da linha nunca passar da borda do cartão (que tem borda e arredondamento).
+fn lyric_inset(right: bool, style: &LyricStyle) -> f32 {
+    style.size * if right { 1.5 } else { 0.5 } + 4.
+}
+
+/// Quanto a parte ainda não cantada da linha ativa fica apagada (o resto acende conforme a voz passa).
+const UNSUNG_ALPHA: f32 = 0.42;
+
+/// Onde a luz (`glow` letras, como em `char_pos`) cai no texto: o byte da letra em que ela está, o da letra seguinte
+/// e quanto dessa letra já acendeu.
+fn glow_bytes(words: &[Word], text: &str, glow: f32) -> (usize, usize, f32) {
+    let (mut byte, mut before) = (0, 0.);
+    for w in words {
+        let start = byte.min(text.len());
+        byte += w.text.len();
+        let word = text[start..byte.min(text.len())].trim();
+        let start = start + text[start..].len() - text[start..].trim_start().len();
+        let chars: Vec<usize> = word.char_indices().map(|(i, _)| start + i).collect();
+        let n = chars.len().max(1) as f32;
+        if glow < before + n && !chars.is_empty() {
+            let k = (glow - before).max(0.);
+            let i = (k.floor() as usize).min(chars.len() - 1);
+            return (chars[i], chars.get(i + 1).copied().unwrap_or(start + word.len()), k - i as f32);
+        }
+        before += n;
+    }
+    (text.len(), text.len(), 0.)
+}
+
+/// Texto aceso até `glow` letras, com a borda da luz suave dentro da própria letra, como o gradiente com
+/// background-clip do Musique. O GPUI só pinta uma cor por letra (a luz andava aos degraus), então: a linha
+/// apagada embaixo e, por cima, a mesma linha acesa recortada em cada fileira até onde a voz chegou, com a ponta
+/// do recorte esmaecendo (`fade_sides`). `wrap`: a largura em que a linha quebra (a mesma do texto de baixo).
+#[allow(clippy::too_many_arguments)]
+fn swept_text(window: &Window, text: SharedString, words: &[Word], glow: f32, size: f32, line_h: f32, weight: FontWeight, wrap: Option<f32>, right: bool, ink: gpui::Hsla) -> AnyElement {
+    let font = Font { weight, ..font(theme::FONT) };
+    let run = TextRun { len: text.len(), font, color: gpui::white(), background_color: None, underline: None, strikethrough: None };
+    let Some(layout) = window.text_system().shape_text(text.clone(), px(size), &[run], wrap.map(px), None).ok().and_then(|l| l.into_iter().next()) else {
+        return text.into_any_element();
+    };
+    let flat = &layout.unwrapped_layout;
+    // Fileiras: (byte final, x inicial, x final) na linha antes de quebrar.
+    let mut rows = Vec::new();
+    let mut start_x = 0.;
+    for b in layout.wrap_boundaries() {
+        let g = &flat.runs[b.run_ix].glyphs[b.glyph_ix];
+        rows.push((g.index, start_x, f32::from(g.position.x)));
+        start_x = f32::from(g.position.x);
+    }
+    rows.push((text.len(), start_x, f32::from(flat.width)));
+    let align_w = wrap.unwrap_or(f32::from(flat.width));
+    let (b0, b1, frac) = glow_bytes(words, &text, glow);
+    let x = f32::from(flat.x_for_index(b0)) * (1. - frac) + f32::from(flat.x_for_index(b1)) * frac;
+    let cur = rows.iter().position(|(end, _, _)| b0 < *end).unwrap_or(rows.len() - 1);
+    // A ponta da luz: cerca de uma letra e meia.
+    let band = size * 0.75;
+    let lit = gpui::Hsla { a: ink.a * 0.99, ..ink };
+    let glow_shadow = gpui::TextShadow { color: gpui::Hsla { a: 0.28, ..ink }, offset: point(px(0.), px(0.)), blur: px(size * 0.16) };
+    // Um pedaço da fileira `r` da linha acesa, de `from` a `from + w` (x dentro da fileira), na cor `color`.
+    let clip = |r: usize, left: f32, from: f32, w: f32, color: gpui::Hsla| {
+        div()
+            .absolute()
+            .top(px(r as f32 * line_h))
+            .left(px(left + from))
+            .w(px(w))
+            .h(px(line_h))
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-(r as f32) * line_h))
+                    .left(px(-(left + from)))
+                    .w(px(align_w))
+                    .when(wrap.is_none(), |d| d.whitespace_nowrap())
+                    .when(right, |d| d.text_right())
+                    .text_color(color)
+                    .text_shadow([glow_shadow.clone()])
+                    .child(text.clone()),
+            )
+    };
+    // A ponta suave em fatias de opacidade decrescente. Não `fade_sides`: é uma camada de filtro, e dentro do
+    // `layer_scale` da linha crescendo ela era pintada sem a escala (a fileira saía grande, por cima da outra).
+    const SLICES: usize = 6;
+    let mut overlays = Vec::new();
+    for (r, &(_, x0, x1)) in rows.iter().enumerate().take(cur + 1) {
+        let row_w = x1 - x0;
+        let left = if right { align_w - row_w } else { 0. };
+        if r < cur {
+            overlays.push(clip(r, left, -band, row_w + band * 2., lit));
+            continue;
+        }
+        let edge = x - x0 - band * 0.5;
+        if edge > 0. {
+            overlays.push(clip(r, left, -band, edge + band, lit));
+        }
+        let slice = band / SLICES as f32;
+        for k in 0..SLICES {
+            let from = edge + k as f32 * slice;
+            if from + slice <= 0. {
+                continue;
+            }
+            let fade = 1. - (k as f32 + 0.5) / SLICES as f32;
+            overlays.push(clip(r, left, from.max(0.), slice + from.min(0.), gpui::Hsla { a: lit.a * fade, ..lit }));
+        }
+    }
+    div()
+        .relative()
+        .when(wrap.is_none(), |d| d.whitespace_nowrap())
+        .text_color(gpui::Hsla { a: ink.a * UNSUNG_ALPHA, ..ink })
+        .child(text.clone())
+        .children(overlays)
+        .into_any_element()
 }
 
 impl Cyder {
@@ -733,6 +969,7 @@ impl Cyder {
             frame_px: Default::default(),
             notice: crate::take_crash_notice().map(|n| (n, Instant::now())),
             layout: None,
+            lyric_fx: LyricFx::new(),
             shuffle: false,
             repeat: Repeat::Off,
             volume: 0.7,
@@ -1348,9 +1585,11 @@ impl Cyder {
             tops.push(y);
             let text = line_text(line);
             let run = TextRun { len: text.len(), font: font.clone(), color: gpui::white(), background_color: None, underline: None, strikethrough: None };
+            // O mesmo recuo da linha na tela: a voz da direita deixa mais espaço à esquerda.
+            let inset = lyric_inset(line.right, style);
             let rows = window
                 .text_system()
-                .shape_text(text, px(style.size), &[run], Some(width), None)
+                .shape_text(text, px(style.size), &[run], Some(width - px(inset)), None)
                 .map(|ls| ls.iter().map(|l| l.wrap_boundaries.len() + 1).sum::<usize>())
                 .unwrap_or(1);
             y += rows as f32 * style.line_h + style.gap;
@@ -1416,8 +1655,33 @@ impl Cyder {
     }
 
     fn background(&mut self, window: &mut Window) -> AnyElement {
-        // No imersivo, o Canvas da faixa (quando tem) no lugar da capa borrada.
-        if let Some(frame) = self.immersive.then(|| self.canvas_frame(window)).flatten() {
+        let frame = self.immersive.then(|| self.canvas_frame(window)).flatten();
+        // Imersivo com letra: a capa (ou o Canvas) de ponta a ponta na esquerda, sumindo em direção à letra, sobre a
+        // capa borrada.
+        if self.immersive && self.lyrics_on {
+            let viewport = window.viewport_size();
+            let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
+            let w = (vw * SLEEVE_W).max(vh.min(vw * 0.8));
+            let picture = match (frame, &self.shown_art) {
+                (Some(f), _) => Some(img(f)),
+                (None, Some(art)) => Some(img(art.cover.clone())),
+                (None, None) => None,
+            };
+            return self.blurred_background()
+                .children(picture.map(|p| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(w))
+                        .h(px(vh))
+                        .fade_sides(px(0.), px(w * 0.55))
+                        .fade_edges(px(vh * 0.1), px(vh * 0.16))
+                        .child(p.size_full().object_fit(ObjectFit::Cover))
+                }))
+                .into_any_element();
+        }
+        if let Some(frame) = frame {
             return div()
                 .absolute()
                 .inset_0()
@@ -1425,14 +1689,18 @@ impl Cyder {
                 .child(div().absolute().inset_0().bg(rgba(0x0000008c)))
                 .into_any_element();
         }
+        self.blurred_background().into_any_element()
+    }
+
+    /// A capa borrada e escurecida que fica no fundo de tudo.
+    fn blurred_background(&self) -> Div {
         match &self.shown_art {
             Some(art) => div()
                 .absolute()
                 .inset_0()
                 .child(img(art.background.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
-                .child(div().absolute().inset_0().bg(rgba(theme::shade(if theme::cover_frame() { COVER_SHADE } else { 0x73 }))))
-                .into_any_element(),
-            None => div().absolute().inset_0().bg(rgba(theme::base_fill())).into_any_element(),
+                .child(div().absolute().inset_0().bg(rgba(theme::shade(if theme::cover_frame() { COVER_SHADE } else { 0x73 })))),
+            None => div().absolute().inset_0().bg(rgba(theme::base_fill())),
         }
     }
 
@@ -1680,10 +1948,10 @@ impl Cyder {
             None => loading::lyrics(style.line_h, style.pad_x),
             Some(Lyrics::NotFound) => center(
                 "Sem letra para esta música".into(),
-                Some(format!("O LRCLIB ainda não tem a letra de “{track_name}”.").into()),
+                Some(format!("Nem o Apple Music, nem o Spotify, nem o LRCLIB têm a letra de “{track_name}”.").into()),
             ),
             Some(Lyrics::Instrumental) => center("Instrumental".into(), None),
-            // Falha de rede ou do LRCLIB: diz isso (não "sem letra") e deixa pedir de novo.
+            // Falha de rede ou dos serviços de letra: diz isso (não "sem letra") e deixa pedir de novo.
             Some(Lyrics::Failed) => {
                 let index = self.current;
                 div()
@@ -1695,7 +1963,7 @@ impl Cyder {
                     .gap_3()
                     .px_8()
                     .child(div().text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Não deu para carregar a letra"))
-                    .child(div().text_sm().text_color(rgba(theme::ink_3())).child("O LRCLIB, de onde vêm as letras, não respondeu agora."))
+                    .child(div().text_sm().text_color(rgba(theme::ink_3())).child("Os serviços de letra não responderam agora."))
                     .child(Self::text_button("lyrics-retry", "Tentar de novo").on_click(cx.listener(move |t, _, _, cx| {
                         // Volta ao esqueleto de carregamento enquanto pede.
                         t.lyrics.remove(&index);
@@ -1722,35 +1990,158 @@ impl Cyder {
                 let tops = self.lyric_tops(window, &lines, width, style);
                 let pos = self.position();
                 let idx = lines.iter().rposition(|l| l.time_ms <= pos);
-                let target = -idx.map_or(0., |i| tops[i]);
+                let now = Instant::now();
+                let ease = ease_out_quint();
+
+                // Linha nova: a anterior encolhe e apaga enquanto ela cresce e acende, juntas.
+                let fx = &mut self.lyric_fx;
+                if fx.track != self.current {
+                    *fx = LyricFx::new();
+                    fx.track = self.current;
+                    fx.active = idx;
+                }
+                let swapped = fx.active != idx;
+                if swapped {
+                    fx.prev = fx.active;
+                    fx.active = idx;
+                    fx.since = now;
+                }
+                let swap_t = (now - fx.since).as_secs_f32() / LYRIC_SWAP.as_secs_f32();
+                let swap = ease(swap_t.min(1.));
+                // A luz persegue a posição da voz em vez de pular para ela (amortecimento crítico, igual em qualquer fps).
+                let glow_target = idx.map_or(0., |i| char_pos(pos, &lines[i].words));
+                if swapped {
+                    fx.glow = glow_target;
+                } else {
+                    let dt = (now - fx.glow_at).as_secs_f32().min(0.064) * 1000.;
+                    fx.glow += (glow_target - fx.glow) * (1. - (-dt / GLOW_CHASE_MS).exp());
+                }
+                fx.glow_at = now;
+                let glow = fx.glow;
+
+                // Ad-lib: abre só quando começa a ser cantado e fecha quando acaba.
+                let adlib_size = (style.size * 0.74).round();
+                let adlib_line = (adlib_size * 1.2).round();
+                let adlib_h = adlib_line + 6.;
+                let mut adlib_busy = false;
+                let adlib_open: Vec<f32> = lines.iter().enumerate().map(|(i, line)| {
+                    let (Some(first), Some(end)) = (line.adlib.first(), line.adlib.iter().map(|w| w.end).max()) else { return 0. };
+                    let singing = pos >= first.start && pos < end;
+                    let (open, since) = fx.adlibs.entry(i).or_insert((false, now - ADLIB_SWAP));
+                    if *open != singing {
+                        *open = singing;
+                        *since = now;
+                    }
+                    let t = (now - *since).as_secs_f32() / ADLIB_SWAP.as_secs_f32();
+                    adlib_busy |= t < 1.;
+                    let q = ease(t.min(1.));
+                    if *open { q } else { 1. - q }
+                }).collect();
+                let (prev, glow_moving) = (fx.prev, (glow_target - glow).abs() > 0.01);
+
+                // Ad-libs abertos acima da ativa empurram ela para baixo: a rolagem conta com eles.
+                let pushed: f32 = idx.map_or(0., |c| adlib_open[..c].iter().map(|f| f * adlib_h).sum());
+                let target = -idx.map_or(0., |i| tops[i]) - pushed;
                 // Rolada à mão, a letra fica onde o usuário deixou até ele pedir para sincronizar.
                 let bottom = -tops.last().copied().unwrap_or(0.);
                 let manual = self.lyrics_manual;
                 let spring = SpringAnimation::new(SPRING).to(px(manual.unwrap_or(target)));
+                // A luz e as trocas de linha andam a cada quadro; o relógio de 200 ms deixaria tudo aos pulos.
+                if swap_t < 1. || adlib_busy || glow_moving || (self.playing && idx.is_some_and(|i| !lines[i].words.is_empty())) {
+                    window.request_animation_frame();
+                }
+                let dist = |i: usize, c: Option<usize>| match c {
+                    Some(c) => (i.abs_diff(c), i < c),
+                    None => (i + 1, false),
+                };
                 let rows = lines.iter().enumerate().map(|(i, line)| {
-                    let d = idx.map_or(i + 1, |c| i.abs_diff(c)) as f32;
-                    // Rolando à mão, todas as linhas ficam legíveis; acompanhando, as de longe apagam.
-                    let (opacity, blur) = if d == 0. { (1., 0.) } else if manual.is_some() { (0.7, 0.) } else { ((0.5 - d * 0.07).max(0.14), (d * 0.9).min(4.5)) };
+                    let active = idx == Some(i);
+                    // Quanto esta linha é "a ativa" agora: sobe na que entra e desce na que sai.
+                    let emphasis = if active { swap } else if prev == Some(i) && swap_t < 1. { 1. - swap } else { 0. };
+                    let (opacity, blur) = if manual.is_some() {
+                        // Rolando à mão, todas as linhas ficam legíveis.
+                        if active { (1., 0.) } else { (0.7, 0.) }
+                    } else {
+                        let (d_new, past_new) = dist(i, idx);
+                        let (d_old, past_old) = dist(i, prev);
+                        let (a1, b1) = lyric_tone(d_new, past_new);
+                        let (a0, b0) = if swap_t < 1. { lyric_tone(d_old, past_old) } else { (a1, b1) };
+                        (a0 + (a1 - a0) * swap, b0 + (b1 - b0) * swap)
+                    };
+                    let scale = style.rest_scale + (1. - style.rest_scale) * emphasis;
                     let time = line.time_ms;
+                    let text = line_text(line);
+                    // Linha ativa palavra por palavra: o que falta cantar fica apagado e acende com a voz.
+                    let sweeping = active && !line.words.is_empty();
+                    // A mesma largura do texto na tela (e de lyric_tops), para a camada acesa quebrar igual.
+                    let text_w = f32::from(width) - lyric_inset(line.right, style);
+                    let body = if sweeping {
+                        swept_text(window, text.clone(), &line.words, glow, style.size, style.line_h, FontWeight::EXTRA_BOLD, Some(text_w), line.right, ink)
+                    } else {
+                        text.into_any_element()
+                    };
+                    let words_el = div()
+                        .w_full()
+                        .text_size(px(style.size))
+                        .line_height(px(style.line_h))
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_color(ink)
+                        .flex()
+                        .when(line.right, |d| d.justify_end().text_right())
+                        .opacity(opacity)
+                        .when(blur > 0.05, |d| d.blur(px(blur)))
+                        // Encolhe para o lado de quem canta, e na direção do ad-lib quando ele está aberto embaixo.
+                        .when(scale < 0.999, |d| {
+                            d.layer_scale_origin(point(if line.right { 1. } else { 0. }, if adlib_open[i] > 0. { 1. } else { 0.5 })).layer_scale(scale)
+                        })
+                        // Caixa de largura fixa, a mesma de lyric_tops e da camada acesa: a linha quebra sempre no mesmo
+                        // lugar, acesa ou não (com a largura do cartão, 1-2 px de borda mudavam a quebra).
+                        .child(div().flex_none().w(px(text_w)).child(body));
+                    // Ad-lib (vocal de apoio): só enquanto é cantado, abrindo e fechando a altura.
+                    let open = adlib_open[i];
+                    let adlib = (open > 0.).then(|| {
+                        let text: SharedString = line.adlib_text().into();
+                        let mut words = line.adlib.clone();
+                        // O texto sem o espaço da ponta; as faixas do sweep são recortadas por ele.
+                        if let Some(w) = words.first_mut() {
+                            w.text = w.text.trim_start().to_string();
+                        }
+                        let lit = char_pos(pos, &words);
+                        div()
+                            .flex()
+                            .when(line.right, |d| d.justify_end())
+                            .overflow_hidden()
+                            .max_h(px(adlib_h * open))
+                            .opacity(open * 0.78)
+                            .child(
+                                div()
+                                    .mt(px(6.))
+                                    // Pendurado do lado de quem canta: recuado dessa borda, com o fio dela.
+                                    .when(!line.right, |d| d.ml(px(18.)).pl(px(12.)).border_l_2())
+                                    .when(line.right, |d| d.mr(px(18.)).pr(px(12.)).border_r_2())
+                                    .border_color(gpui::Hsla { a: 0.18, ..ink })
+                                    .whitespace_nowrap()
+                                    .text_size(px(adlib_size))
+                                    .line_height(px(adlib_line))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(swept_text(window, text.clone(), &words, lit, adlib_size, adlib_line, FontWeight::BOLD, None, false, ink)),
+                            )
+                    });
                     div()
                         .id(("lyric", i))
                         .pb(px(style.gap))
+                        .flex()
+                        .flex_col()
+                        .when(line.right, |d| d.items_end().pl(px(style.size * 1.5)))
+                        .when(!line.right, |d| d.pr(px(style.size * 0.5)))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.lyrics_manual = None;
                             this.seek(time);
                             cx.notify();
                         }))
-                        .child(
-                            div()
-                                .text_size(px(style.size))
-                                .line_height(px(style.line_h))
-                                .font_weight(FontWeight::EXTRA_BOLD)
-                                .text_color(ink)
-                                .opacity(opacity)
-                                .blur(px(blur))
-                                .child(line_text(line)),
-                        )
+                        .child(words_el)
+                        .children(adlib)
                 });
                 div()
                     .id("synced-lyrics")
@@ -2519,11 +2910,12 @@ impl Render for Cyder {
                     .h(px(content_h))
                     .flex()
                     .gap(px(gap))
+                    // Com a letra, a capa já está no fundo da esquerda (background) e o título na barra do player.
                     .child(
                         div().w(px(left_w)).h_full().flex().flex_col().justify_center().gap_2()
                             .when(!self.lyrics_on, |d| d.items_center())
-                            .child(cover_el)
-                            .children(track.map(|t| {
+                            .when(!self.lyrics_on, |d| d.child(cover_el))
+                            .children(track.filter(|_| !self.lyrics_on).map(|t| {
                                 let (title, artists) = self.track_links(&t, "immersive", cx);
                                 div().mt_4().w(px(cover)).flex().flex_col().gap_1()
                                     .when(!self.lyrics_on, |d| d.items_center())
@@ -2566,5 +2958,43 @@ impl Render for Cyder {
         // A biblioteca desenha os próprios botões da janela, no recorte do painel.
         .when(self.immersive || !matches!(self.phase, Phase::Ready), |d| d.child(self.titlebar(cx)))
         .children(self.dialog_layer(window, cx).map(|d| library::appear("dialog", d)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glow_is_measured_in_letters_and_holds_between_words() {
+        let words = vec![Word { start: 0, end: 100, text: "ab ".into() }, Word { start: 200, end: 400, text: "cdef".into() }];
+        assert_eq!(char_pos(50, &words), 1.);
+        // Entre as palavras, a luz para na borda da que acabou.
+        assert_eq!(char_pos(150, &words), 2.);
+        assert_eq!(char_pos(300, &words), 4.);
+        assert_eq!(char_pos(999, &words), 6.);
+    }
+
+    #[test]
+    fn glow_lands_on_the_right_letter() {
+        let words = vec![Word { start: 0, end: 100, text: "ab ".into() }, Word { start: 100, end: 300, text: "cd".into() }];
+        // 1.5 letras: no meio do "b".
+        assert_eq!(glow_bytes(&words, "ab cd", 1.5), (1, 2, 0.5));
+        // 2 letras: "ab" acabou; a luz está no começo do "c" (o espaço não conta).
+        assert_eq!(glow_bytes(&words, "ab cd", 2.), (3, 4, 0.));
+        assert_eq!(glow_bytes(&words, "ab cd", 3.5), (4, 5, 0.5));
+        assert_eq!(glow_bytes(&words, "ab cd", 9.), (5, 5, 0.));
+        // Acentos: bytes de verdade, não letras.
+        let w = vec![Word { start: 0, end: 100, text: "ção".into() }];
+        assert_eq!(glow_bytes(&w, "ção", 1.), (2, 4, 0.));
+    }
+
+    #[test]
+    fn neighbours_stay_sharp_and_far_lines_blur() {
+        assert_eq!(lyric_tone(0, false), (1., 0.));
+        assert_eq!(lyric_tone(1, false).1, 0.);
+        assert!(lyric_tone(1, true).0 < lyric_tone(1, false).0);
+        assert!(lyric_tone(3, false).1 > 0.);
+        assert_eq!(lyric_tone(20, false).0, 0.1);
     }
 }
