@@ -682,7 +682,7 @@ fn glow_bytes(words: &[Word], text: &str, glow: f32) -> (usize, usize, f32) {
 /// apagada embaixo e, por cima, a mesma linha acesa recortada em cada fileira até onde a voz chegou, com a ponta
 /// do recorte esmaecendo (`fade_sides`). `wrap`: a largura em que a linha quebra (a mesma do texto de baixo).
 #[allow(clippy::too_many_arguments)]
-fn swept_text(window: &Window, text: SharedString, words: &[Word], glow: f32, size: f32, line_h: f32, weight: FontWeight, wrap: Option<f32>, right: bool, ink: gpui::Hsla) -> AnyElement {
+fn swept_text(window: &Window, text: SharedString, words: &[Word], glow: f32, size: f32, line_h: f32, weight: FontWeight, wrap: Option<f32>, right: bool, ink: gpui::Hsla, bloom: Option<gpui::Hsla>) -> AnyElement {
     let font = Font { weight, ..font(theme::FONT) };
     let run = TextRun { len: text.len(), font, color: gpui::white(), background_color: None, underline: None, strikethrough: None };
     let Some(layout) = window.text_system().shape_text(text.clone(), px(size), &[run], wrap.map(px), None).ok().and_then(|l| l.into_iter().next()) else {
@@ -705,52 +705,65 @@ fn swept_text(window: &Window, text: SharedString, words: &[Word], glow: f32, si
     // A ponta da luz: cerca de uma letra e meia.
     let band = size * 0.75;
     let lit = gpui::Hsla { a: ink.a * 0.99, ..ink };
-    let glow_shadow = gpui::TextShadow { color: gpui::Hsla { a: 0.28, ..ink }, offset: point(px(0.), px(0.)), blur: px(size * 0.16) };
-    // Um pedaço da fileira `r` da linha acesa, de `from` a `from + w` (x dentro da fileira), na cor `color`.
-    let clip = |r: usize, left: f32, from: f32, w: f32, color: gpui::Hsla| {
+    // Um pedaço da fileira `r` da linha acesa, de `from` a `from + w` (x dentro da fileira). `pad` deixa o brilho
+    // passar um pouco acima e abaixo da fileira em vez de ser cortado reto.
+    let clip = |r: usize, left: f32, from: f32, w: f32, color: gpui::Hsla, shadow: Option<gpui::TextShadow>, pad: f32| {
         div()
             .absolute()
-            .top(px(r as f32 * line_h))
+            .top(px(r as f32 * line_h - pad))
             .left(px(left + from))
-            .w(px(w))
-            .h(px(line_h))
+            .w(px(w.max(0.)))
+            .h(px(line_h + pad * 2.))
             .overflow_hidden()
             .child(
                 div()
                     .absolute()
-                    .top(px(-(r as f32) * line_h))
+                    .top(px(pad - r as f32 * line_h))
                     .left(px(-(left + from)))
                     .w(px(align_w))
                     .when(wrap.is_none(), |d| d.whitespace_nowrap())
                     .when(right, |d| d.text_right())
                     .text_color(color)
-                    .text_shadow([glow_shadow.clone()])
+                    .when_some(shadow, |d, s| d.text_shadow([s]))
                     .child(text.clone()),
             )
     };
-    // A ponta suave em fatias de opacidade decrescente. Não `fade_sides`: é uma camada de filtro, e dentro do
-    // `layer_scale` da linha crescendo ela era pintada sem a escala (a fileira saía grande, por cima da outra).
-    const SLICES: usize = 6;
+    // A ponta suave: camadas que começam todas no mesmo ponto e vão encurtando, então à esquerda somam mais luz e à
+    // direita menos. Fatias lado a lado deixavam frestas de 1 px (pixels fracionários) com o texto apagado aparecendo
+    // em linhas escuras. Não `fade_sides`: é uma camada de filtro, e dentro do `layer_scale` da linha crescendo ela
+    // era pintada sem a escala.
+    const LAYERS: usize = 6;
+    const LAYER_ALPHA: f32 = 0.25;
     let mut overlays = Vec::new();
     for (r, &(_, x0, x1)) in rows.iter().enumerate().take(cur + 1) {
         let row_w = x1 - x0;
         let left = if right { align_w - row_w } else { 0. };
         if r < cur {
-            overlays.push(clip(r, left, -band, row_w + band * 2., lit));
+            overlays.push(clip(r, left, -band, row_w + band * 2., lit, None, 0.));
             continue;
         }
-        let edge = x - x0 - band * 0.5;
+        let front = x - x0;
+        let edge = front - band * 0.5;
         if edge > 0. {
-            overlays.push(clip(r, left, -band, edge + band, lit));
+            overlays.push(clip(r, left, -band, edge + band + 1., lit, None, 0.));
         }
-        let slice = band / SLICES as f32;
-        for k in 0..SLICES {
-            let from = edge + k as f32 * slice;
-            if from + slice <= 0. {
-                continue;
+        // Começa 1 px antes do fim da parte acesa, por baixo dela: nenhuma fresta entre as duas.
+        let start = (edge - 1.).max(-band);
+        for k in 0..LAYERS {
+            let w = edge + band * (LAYERS - k) as f32 / LAYERS as f32 - start;
+            overlays.push(clip(r, left, start, w, gpui::Hsla { a: lit.a * LAYER_ALPHA, ..lit }, None, 0.));
+        }
+        // O brilho com a cor da capa onde a voz está passando (como o do Musique): só a sombra, sem o texto, em
+        // camadas que terminam na ponta e se estendem para trás, então é mais forte na ponta e some para a esquerda.
+        // Só com a linha parada no tamanho final: a sombra é uma camada de desfoque, e dentro do `layer_scale` da linha
+        // crescendo ela seria pintada sem a escala.
+        if let Some(bloom) = bloom.filter(|_| front > 0.) {
+            let pad = size * 0.3;
+            for k in 1..=3 {
+                let from = (front - band * 1.4 * k as f32).max(-band);
+                let shadow = gpui::TextShadow { color: gpui::Hsla { a: 0.1, ..bloom }, offset: point(px(0.), px(0.)), blur: px(size * 0.18) };
+                overlays.push(clip(r, left, from, front + band * 0.4 - from, gpui::transparent_black(), Some(shadow), pad));
             }
-            let fade = 1. - (k as f32 + 0.5) / SLICES as f32;
-            overlays.push(clip(r, left, from.max(0.), slice + from.min(0.), gpui::Hsla { a: lit.a * fade, ..lit }));
         }
     }
     div()
@@ -1929,7 +1942,18 @@ impl Cyder {
 
     /// Letra da faixa atual num retângulo `w`×`h`: sincronizada rolando sozinha, só texto, ou o estado vazio.
     pub(crate) fn lyrics_content(&mut self, window: &Window, card_w: f32, card_h: f32, style: &LyricStyle, cx: &mut Context<Self>) -> AnyElement {
-        let ink = theme::tinted_ink(self.shown_art.as_ref().map_or([255, 255, 255], |a| a.accent));
+        let accent = self.shown_art.as_ref().map_or([255, 255, 255], |a| a.accent);
+        let ink = theme::tinted_ink(accent);
+        // A cor que predomina na capa, clareada: o brilho da luz na letra parece vir do disco.
+        let bloom = {
+            let mut c: gpui::Hsla = gpui::rgb(((accent[0] as u32) << 16) | ((accent[1] as u32) << 8) | accent[2] as u32).into();
+            c.l = c.l.max(0.62);
+            // Capa cinza fica cinza: forçar saturação nela daria vermelho (matiz 0).
+            if c.s > 0.08 {
+                c.s = c.s.max(0.5);
+            }
+            c
+        };
         let center = |title: SharedString, detail: Option<SharedString>| {
             div()
                 .size_full()
@@ -2076,7 +2100,7 @@ impl Cyder {
                     // A mesma largura do texto na tela (e de lyric_tops), para a camada acesa quebrar igual.
                     let text_w = f32::from(width) - lyric_inset(line.right, style);
                     let body = if sweeping {
-                        swept_text(window, text.clone(), &line.words, glow, style.size, style.line_h, FontWeight::EXTRA_BOLD, Some(text_w), line.right, ink)
+                        swept_text(window, text.clone(), &line.words, glow, style.size, style.line_h, FontWeight::EXTRA_BOLD, Some(text_w), line.right, ink, (scale >= 0.999).then_some(bloom))
                     } else {
                         text.into_any_element()
                     };
@@ -2124,7 +2148,7 @@ impl Cyder {
                                     .text_size(px(adlib_size))
                                     .line_height(px(adlib_line))
                                     .font_weight(FontWeight::BOLD)
-                                    .child(swept_text(window, text.clone(), &words, lit, adlib_size, adlib_line, FontWeight::BOLD, None, false, ink)),
+                                    .child(swept_text(window, text.clone(), &words, lit, adlib_size, adlib_line, FontWeight::BOLD, None, false, ink, Some(bloom))),
                             )
                     });
                     div()
