@@ -605,6 +605,9 @@ impl Cyder {
         let backdrop = self.backdrop_layers();
         // A página de artista começa na borda do painel: a foto passa por baixo do cabeçalho, como no Cider.
         let bleed = matches!(&self.screen, Screen::Page(c) if c.kind == Kind::Artist) && matches!(&self.screen, Screen::Page(c) if self.pages.contains_key(&c.id));
+        // Faixas acima do player: outro aparelho / ouvir junto (no máximo uma) e o limite do Spotify, acima dela.
+        let banners: Vec<AnyElement> = [self.remote_banner(cx), self.listen_banner(cx), self.limit_banner()].into_iter().flatten().collect();
+        let stacked = banners.len();
         let panel = div()
             .absolute()
             .top(px(V_GAP))
@@ -638,9 +641,11 @@ impl Cyder {
             .child(self.toolbar(cx))
             // Sem nada tocado ainda (primeira abertura), sem player: ele aparece no primeiro play.
             .children((!self.tracks.is_empty()).then(|| self.dock(cx)))
-            .children(self.remote_banner(cx))
-            .children(self.listen_banner(cx))
-            .children(self.limit_banner());
+            .children(banners)
+            // O aviso, centralizado com o player e acima das faixas que estiverem abertas (cada uma tem 30 px + 8).
+            .children(self.notice_card(cx).map(|card| {
+                div().absolute().left_0().right_0().bottom(px(16. + DOCK_H + 8. + stacked as f32 * 38.)).flex().justify_center().child(card)
+            }));
         div()
             .absolute()
             .inset_0()

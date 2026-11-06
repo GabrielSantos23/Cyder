@@ -215,6 +215,7 @@ async fn session(key: &str, tx: &UnboundedSender<Status>) -> Result<i32, String>
             s = child.wait() => return Ok(code(s.map_err(|e| e.to_string())?)),
             msg = ws.next() => match msg {
                 Some(Ok(Message::Text(text))) => {
+                    note_position(&text);
                     if let Some(logged_in) = auth_state(&text) {
                         log::info!("soloist: {}", if logged_in { "pareado" } else { "esperando ser escolhido no app do Spotify" });
                         let _ = tx.send(if logged_in { Status::Ready } else { Status::Pairing });
@@ -226,6 +227,61 @@ async fn session(key: &str, tx: &UnboundedSender<Status>) -> Result<i32, String>
             },
         }
     }
+}
+
+/// A última posição que o Soloist mediu: a faixa, a posição, quando (ms desde 1970) e a velocidade (0 pausado).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Synced {
+    uri: String,
+    position_ms: u32,
+    at_ms: u64,
+    speed: f64,
+}
+
+static SYNCED: std::sync::Mutex<Option<Synced>> = std::sync::Mutex::new(None);
+/// Faixa do último `playback_state` (o `position_sync` não diz de qual faixa é).
+static PLAYING_URI: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Avisa quando o Soloist mede uma posição nova (play, pausa, seek, troca de faixa).
+pub fn synced() -> &'static tokio::sync::Notify {
+    static N: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    N.get_or_init(tokio::sync::Notify::new)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Guarda `playback_state` (qual faixa) e `position_sync` (`{"position_ms", "timestamp_ms", "speed"}`).
+fn note_position(text: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
+    match v["type"].as_str() {
+        Some("playback_state") => {
+            if let Some(uri) = v["item"]["uri"].as_str() {
+                *PLAYING_URI.lock().unwrap() = uri.to_string();
+            }
+        }
+        Some("position_sync") => {
+            let p = &v["position"];
+            let (Some(position_ms), Some(at_ms)) = (p["position_ms"].as_u64(), p["timestamp_ms"].as_u64()) else { return };
+            let uri = PLAYING_URI.lock().unwrap().clone();
+            *SYNCED.lock().unwrap() = Some(Synced { uri, position_ms: position_ms as u32, at_ms, speed: p["speed"].as_f64().unwrap_or(0.) });
+            synced().notify_one();
+        }
+        _ => {}
+    }
+}
+
+/// Onde o Soloist está agora em `uri` e se está tocando, contado da última posição que ele mediu. Bem mais exato
+/// que o `progress_ms` da Web API, que chega atrasado pela ida e volta do pedido (a letra ficava para trás).
+/// None quando a última medida é de outra faixa.
+pub fn position(uri: &str) -> Option<(u32, bool)> {
+    let s = SYNCED.lock().unwrap().clone().filter(|s| s.uri == uri)?;
+    Some((extrapolate(&s, now_ms()), s.speed > 0.))
+}
+
+fn extrapolate(s: &Synced, now_ms: u64) -> u32 {
+    (s.position_ms as f64 + now_ms.saturating_sub(s.at_ms) as f64 * s.speed).round() as u32
 }
 
 /// `logged_in` de um evento `auth_state`; None para os outros eventos.
@@ -265,6 +321,19 @@ fn close_with_cyder(child: &tokio::process::Child) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn follows_the_position_the_soloist_measured() {
+        super::note_position(r#"{"type":"playback_state","status":"playing","item":{"uri":"spotify:track:a"}}"#);
+        super::note_position(r#"{"type":"position_sync","position":{"position_ms":1000,"timestamp_ms":5000,"speed":1}}"#);
+        let s = super::SYNCED.lock().unwrap().clone().unwrap();
+        assert_eq!(s.uri, "spotify:track:a");
+        // Tocando, anda junto com o relógio; pausado (speed 0), fica parado.
+        assert_eq!(super::extrapolate(&s, 5250), 1250);
+        assert_eq!(super::extrapolate(&super::Synced { speed: 0., ..s.clone() }, 9000), 1000);
+        assert!(super::position("spotify:track:outra").is_none());
+        assert!(super::position("spotify:track:a").is_some_and(|(_, on)| on));
+    }
+
     #[test]
     fn reads_auth_state() {
         assert_eq!(super::auth_state(r#"{"type":"auth_state","logged_in":true,"is_active":false,"device_name":"x"}"#), Some(true));

@@ -2193,6 +2193,33 @@ impl Cyder {
     }
 
     /// Barra do player do modo imersivo: transporte à esquerda, faixa no meio, volume e letra à direita.
+    /// O aviso que some sozinho ("Adicionada à fila."), com o botão de fechar.
+    pub(super) fn notice_card(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let (text, _) = self.notice.as_ref()?;
+        Some(
+            glass(div())
+                .max_w(px(440.))
+                .pl_4()
+                .pr_2()
+                .py_2()
+                .rounded(px(14.))
+                .shadow_lg()
+                .flex()
+                .items_center()
+                .gap_3()
+                .text_sm()
+                .child(icon("info", 16., theme::ink_2()).flex_none())
+                .child(div().flex_1().min_w_0().child(text.clone()))
+                .child(
+                    div().id("notice-close").flex_none().size(px(28.)).rounded_full().flex().items_center().justify_center()
+                        .cursor_pointer().hover(|s| s.bg(rgba(theme::hover())))
+                        .child(icon("x", 14., theme::ink_2()))
+                        .on_click(cx.listener(|t, _, _, cx| { t.notice = None; cx.notify(); }))
+                        .tip("Fechar o aviso"),
+                ),
+        )
+    }
+
     fn player_bar(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let Some(track) = self.tracks.get(self.current) else { return div().into_any_element() };
         let duration = track.duration_ms;
@@ -2210,8 +2237,11 @@ impl Cyder {
         let slider_w = if self.volume_open { SLIDER_W + 8. } else { 0. };
         let progress = self.progress(frac, accent, cx);
         // Nome abre o álbum e cada artista abre a página dele, como no player da biblioteca.
-        let (_, artist_links) = self.track_links(track, "bar", cx);
+        let (title_link, artist_links) = self.track_links(track, "bar", cx);
         let album = track.album.clone();
+        // Com a letra aberta, o nome da música sai da esquerda (lá fica só a capa): a barra mostra a música e os
+        // artistas. Sem a letra, o nome já está grande ao lado da capa e a barra mostra o álbum e de onde vem a fila.
+        let with_lyrics = self.lyrics_on;
 
         let bar = Self::slider_drags(glass(div()), cx)
             .id("player-bar")
@@ -2258,10 +2288,12 @@ impl Cyder {
                     .bg(rgba(theme::wash(0x0a)))
                     // Altura fixa: a borda do anel de foco dos links não empurra a barra de progresso.
                     // O nome e o artista já estão grandes ao lado da capa: aqui, o álbum e de onde a fila vem.
-                    .child(div().h(px(16.)).flex().items_center().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(13.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD).child(album.clone()))
+                    .child(div().h(px(16.)).flex().items_center().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(13.)).line_height(px(16.)).font_weight(FontWeight::SEMIBOLD)
+                        .when(with_lyrics, |d| d.child(title_link))
+                        .when(!with_lyrics, |d| d.child(album.clone())))
                     .child(div().h(px(14.)).flex().items_center().min_w_0().gap(px(3.)).overflow_hidden().whitespace_nowrap().text_size(px(11.)).line_height(px(14.)).text_color(rgba(theme::ink_2()))
-                        .when(!self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label)))
-                        .when(self.queue_label.is_empty(), |d| d.children(artist_links)))
+                        .when(!with_lyrics && !self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label)))
+                        .when(with_lyrics || self.queue_label.is_empty(), |d| d.children(artist_links)))
                     .child(div().mt(px(-3.)).child(progress)),
             )
             .child(
@@ -2928,32 +2960,11 @@ impl Render for Cyder {
             .child(self.player_bar((vw - pad * 2.).min(860.), cx))
         };
 
-        let notice_bottom = if self.immersive { PLAYER_H + PLAYER_BOTTOM + 16. } else { library::DOCK_H + 12. };
-        // Fora do imersivo, centralizado no painel (não sobre a barra lateral).
-        let notice_left = if self.immersive || !matches!(self.phase, Phase::Ready) { 0. } else if self.sidebar_open { library::SIDEBAR_W } else { 0. };
-        root.children(self.notice.as_ref().map(|(text, _)| {
-            div().absolute().bottom(px(notice_bottom)).left(px(notice_left)).right_0().flex().justify_center().child(
-                glass(div())
-                    .max_w(px(440.))
-                    .pl_4()
-                    .pr_2()
-                    .py_2()
-                    .rounded(px(14.))
-                    .shadow_lg()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .text_sm()
-                    .child(icon("info", 16., theme::ink_2()).flex_none())
-                    .child(div().flex_1().min_w_0().child(text.clone()))
-                    .child(
-                        div().id("notice-close").flex_none().size(px(28.)).rounded_full().flex().items_center().justify_center()
-                            .cursor_pointer().hover(|s| s.bg(rgba(theme::hover())))
-                            .child(icon("x", 14., theme::ink_2()))
-                            .on_click(cx.listener(|t, _, _, cx| { t.notice = None; cx.notify(); }))
-                            .tip("Fechar o aviso"),
-                    ),
-            )
+        // Na biblioteca, o aviso fica dentro do painel, centralizado com o player (library::panel); aqui, só no imersivo
+        // e nas telas de entrada.
+        let in_panel = !self.immersive && matches!(self.phase, Phase::Ready);
+        root.children(self.notice_card(cx).filter(|_| !in_panel).map(|card| {
+            div().absolute().bottom(px(PLAYER_H + PLAYER_BOTTOM + 16.)).left_0().right_0().flex().justify_center().child(card)
         }))
         // A biblioteca desenha os próprios botões da janela, no recorte do painel.
         .when(self.immersive || !matches!(self.phase, Phase::Ready), |d| d.child(self.titlebar(cx)))

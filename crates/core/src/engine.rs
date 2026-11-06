@@ -1202,6 +1202,18 @@ fn reload_queue(ctx: &Ctx, pcmd: &UnboundedSender<PlayerCmd>, remote: Option<&st
 /// Toca pelo Soloist: acha o aparelho na conta e manda o play, com o aleatório e o repetir do Cyder.
 /// `paused`: era só trocar a lista com a música pausada; pausa de novo.
 async fn play_on_soloist(ctx: Ctx, body: serde_json::Value, shuffle: bool, repeat: Repeat, paused: bool) {
+    play_on_soloist_from(ctx, body, shuffle, repeat, paused, None).await
+}
+
+/// Retoma pelo Soloist depois de uma pausa longa (o Spotify já soltou o aparelho). Primeiro transfere a reprodução
+/// para ele: o Spotify continua a sessão de onde parou, com a mesma ordem do aleatório, a fila e a posição. Um play
+/// novo com o contexto sorteava a playlist de novo, e voltavam músicas que já tinham tocado. Se a sessão que voltar
+/// não for a mesma música (outro aparelho tocou outra coisa no meio tempo), cai no play de `body`.
+async fn continue_on_soloist(ctx: Ctx, body: serde_json::Value, shuffle: bool, repeat: Repeat, expected_uri: String) {
+    play_on_soloist_from(ctx, body, shuffle, repeat, false, Some(expected_uri)).await
+}
+
+async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, repeat: Repeat, paused: bool, resume: Option<String>) {
     let mut device = None;
     // Logo depois de parear, o aparelho demora um pouco para aparecer na lista.
     for _ in 0..3 {
@@ -1217,6 +1229,18 @@ async fn play_on_soloist(ctx: Ctx, body: serde_json::Value, shuffle: bool, repea
     let Some(id) = device else {
         return ctx.send(AppEvent::Notice("O Soloist não aparece nos aparelhos desta conta. Ele precisa ser escolhido no app do Spotify com a mesma conta do Cyder.".into()));
     };
+    if let Some(expected) = resume {
+        if ctx.api.transfer(&id).await.is_ok() {
+            // O Spotify leva um instante para o Soloist assumir; aí confere o que voltou a tocar.
+            tokio::time::sleep(Duration::from_millis(900)).await;
+            let now = ctx.api.player_state().await.ok().flatten();
+            if now.as_ref().and_then(|s| s.track.as_ref()).is_some_and(|t| t.uri == expected) {
+                log::info!("soloist: retomado de onde parou ({id})");
+                return;
+            }
+            log::info!("soloist: a sessão do Spotify era de outra música; tocando a fila do Cyder");
+        }
+    }
     log::info!("tocando pelo Soloist ({id})");
     // Aleatório antes do play: sem faixa escolhida (o play de um cartão), o Spotify sorteia a primeira em vez de
     // começar pela primeira da playlist. Pode falhar com o Soloist ainda inativo; o de depois do play garante.
@@ -1663,6 +1687,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 cluster_due = None;
                 poll(&ctx, 0);
             }
+            // O Soloist mediu a posição (play, pausa, seek): reancora o relógio na hora, sem esperar a Web API.
+            _ = soloist::synced().notified(), if remote.as_deref() == Some(soloist::DEVICE_NAME) => {
+                if let Some((position_ms, on)) = tracks.get(index).and_then(|t| soloist::position(&t.uri)) {
+                    (playing, anchor) = (on, (position_ms, std::time::Instant::now()));
+                    ctx.send(AppEvent::Playback { playing, position_ms });
+                }
+            }
             Some(state) = state_rx.recv() => match state {
                 // Só assume o estado de outro aparelho se ele estiver tocando (ou já estava sendo seguido). Com o
                 // Cyder tocando aqui, quem toca é ele: a conta só toca num aparelho. Sem isto, a consulta logo depois
@@ -1729,9 +1760,15 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             ctx.note_played(t, context.as_deref());
                         }
                     }
-                    let _ = pcmd_tx.send(PlayerCmd::Follow { index, context: context.clone(), position_ms: st.position_ms });
-                    (playing, anchor) = (st.playing, (st.position_ms, std::time::Instant::now()));
-                    ctx.send(AppEvent::Playback { playing, position_ms: st.position_ms });
+                    // Tocando no Soloist, a posição que ele mesmo mediu (a da Web API chega atrasada pela rede).
+                    let position_ms = tracks.get(index)
+                        .filter(|_| st.device == soloist::DEVICE_NAME)
+                        .and_then(|t| soloist::position(&t.uri))
+                        .filter(|(_, on)| *on == st.playing)
+                        .map_or(st.position_ms, |(p, _)| p);
+                    let _ = pcmd_tx.send(PlayerCmd::Follow { index, context: context.clone(), position_ms });
+                    (playing, anchor) = (st.playing, (position_ms, std::time::Instant::now()));
+                    ctx.send(AppEvent::Playback { playing, position_ms });
                     volume = st.volume_percent.map_or(volume, |p| (p.min(100) * u16::MAX as u64 / 100) as u16);
                     (shuffle, repeat) = (st.shuffle, st.repeat);
                     ctx.send(AppEvent::Modes { shuffle, repeat, volume });
@@ -1765,8 +1802,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         log::info!("comando para {}: {path}", remote.as_deref().unwrap_or_default());
                         // O Soloist que o Spotify já soltou não aceita o play: manda a fila de novo, do mesmo ponto.
                         let resume = (matches!(cmd, Cmd::Toggle) && !playing && remote.as_deref() == Some(soloist::DEVICE_NAME) && !tracks.is_empty())
-                            .then(|| soloist_body(&tracks, index, context.as_deref(), position));
-                        if let Some((_, end)) = &resume {
+                            .then(|| (soloist_body(&tracks, index, context.as_deref(), position), tracks[index.min(tracks.len() - 1)].uri.clone()))
+                            .map(|((body, end), uri)| (body, end, uri));
+                        if let Some((_, end, _)) = &resume {
                             soloist_end = *end;
                         }
                         if matches!(cmd, Cmd::Toggle) {
@@ -1778,7 +1816,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(async move {
                             if let Err(e) = ctx2.api.control(method, &path).await {
                                 match resume {
-                                    Some((body, _)) => play_on_soloist(ctx2, body, shuffle, repeat, false).await,
+                                    Some((body, _, uri)) => continue_on_soloist(ctx2, body, shuffle, repeat, uri).await,
                                     None => ctx2.send(AppEvent::Notice(format!("O outro aparelho não aceitou o comando: {e}"))),
                                 }
                             }
@@ -1806,7 +1844,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     Cmd::Toggle if soloist_ready && !playing && !tracks.is_empty() => {
                         let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
                         soloist_end = end;
-                        tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
+                        let uri = tracks[index.min(tracks.len() - 1)].uri.clone();
+                        tokio::spawn(continue_on_soloist(ctx.clone(), body, shuffle, repeat, uri));
                         poll(&ctx, 1500);
                         continue;
                     }
