@@ -178,12 +178,25 @@ const LYRIC_SWAP: Duration = Duration::from_millis(450);
 const ADLIB_SWAP: Duration = Duration::from_millis(420);
 /// Constante de tempo da luz que persegue a voz: palavra muito curta vira um deslize rápido, não um salto.
 const GLOW_CHASE_MS: f32 = 80.;
+/// Intervalo sem voz a partir deste tamanho mostra as três bolinhas (como o Apple Music).
+const INTERLUDE_MIN_MS: u32 = 4000;
+/// As bolinhas terminam de encher este tempo antes da voz voltar.
+const INTERLUDE_LEAD_MS: u32 = 400;
+/// No imersivo, a tela sai do preto quando a faixa começa (depois de um instante parada nele, para a capa nova
+/// chegar) e volta ao preto nos últimos segundos dela.
+const TRACK_FADE_HOLD: f32 = 0.12;
+const TRACK_FADE_IN: f32 = 1.1;
+const TRACK_FADE_OUT_MS: f32 = 2000.;
+/// Pular de faixa pelos botões do imersivo: a tela vai ao preto neste tempo e só então a música troca.
+const SKIP_FADE: Duration = Duration::from_millis(320);
 
 /// O que a animação da letra precisa lembrar de um quadro para o outro.
 struct LyricFx {
     track: usize,
-    active: Option<usize>,
-    /// A linha que acabou de deixar de ser a ativa (encolhe e apaga enquanto a nova cresce).
+    /// O que está em foco, em "posições": 0 antes de tudo, 1 as bolinhas da introdução, 2i+2 a linha i e 2i+3 as
+    /// bolinhas depois dela.
+    active: usize,
+    /// O foco anterior (encolhe e apaga enquanto o novo cresce).
     prev: Option<usize>,
     since: Instant,
     /// Até onde a luz chegou na linha ativa, em letras.
@@ -191,12 +204,14 @@ struct LyricFx {
     glow_at: Instant,
     /// Ad-libs: aberto ou não, e desde quando.
     adlibs: HashMap<usize, (bool, Instant)>,
+    /// Bolinhas de cada intervalo (pela posição dele): abertas ou não, e desde quando.
+    dots: HashMap<usize, (bool, Instant)>,
 }
 
 impl LyricFx {
     fn new() -> Self {
         let long_ago = Instant::now() - Duration::from_secs(10);
-        Self { track: usize::MAX, active: None, prev: None, since: long_ago, glow: 0., glow_at: long_ago, adlibs: HashMap::new() }
+        Self { track: usize::MAX, active: 0, prev: None, since: long_ago, glow: 0., glow_at: long_ago, adlibs: HashMap::new(), dots: HashMap::new() }
     }
 }
 
@@ -227,6 +242,50 @@ fn char_pos(t: u32, words: &[Word]) -> f32 {
     }
     at
 }
+/// Intervalos sem voz longos o bastante para as bolinhas: (depois de qual linha, None na introdução; início; fim).
+/// Uma linha vazia (o jeito do LRC marcar intervalo) conta desde o começo dela.
+fn interludes(lines: &[Line]) -> Vec<(Option<usize>, u32, u32)> {
+    let mut out = Vec::new();
+    if lines.first().is_some_and(|l| l.time_ms >= INTERLUDE_MIN_MS) {
+        out.push((None, 0, lines[0].time_ms));
+    }
+    for (i, pair) in lines.windows(2).enumerate() {
+        let (line, next) = (&pair[0], &pair[1]);
+        let end = if line.text.trim().is_empty() && line.adlib.is_empty() {
+            Some(line.time_ms)
+        } else {
+            line.words.iter().chain(&line.adlib).map(|w| w.end).max()
+        };
+        if let Some(end) = end.filter(|e| next.time_ms.saturating_sub(*e) >= INTERLUDE_MIN_MS) {
+            out.push((Some(i), end, next.time_ms));
+        }
+    }
+    out
+}
+
+/// Três bolinhas que enchem uma a uma até a voz voltar e respiram enquanto esperam.
+fn interlude_dots(fill: f32, open: f32, breathe: f32, size: f32, h: f32, right: bool, ink: gpui::Hsla) -> Div {
+    let d = (size * 0.36).round();
+    div()
+        .h(px(h * open))
+        .overflow_hidden()
+        .flex()
+        .items_center()
+        .when(right, |el| el.justify_end())
+        .opacity(open)
+        .child(
+            div()
+                .flex()
+                .gap(px((d * 0.6).round()))
+                .layer_scale_origin(point(if right { 1. } else { 0. }, 0.5))
+                .layer_scale(breathe * (0.6 + 0.4 * open))
+                .children((0..3).map(|k| {
+                    let lit = (fill * 3. - k as f32).clamp(0., 1.);
+                    div().size(px(d)).rounded_full().bg(gpui::Hsla { a: 0.3 + 0.7 * lit, ..ink })
+                })),
+        )
+}
+
 const PLAYER_H: f32 = 56.;
 const PLAYER_BOTTOM: f32 = 20.;
 const KNOB: f32 = 12.;
@@ -461,6 +520,10 @@ pub struct Cyder {
     notice: Option<(String, Instant)>,
     layout: Option<LyricLayout>,
     lyric_fx: LyricFx,
+    /// Faixa que o imersivo está mostrando e desde quando (para acender a letra e a capa quando ela começa).
+    track_seen: (usize, Instant),
+    /// Pulo esperando a tela escurecer (desde quando).
+    skip_fade: Option<Instant>,
     shuffle: bool,
     repeat: Repeat,
     /// 0..=1.
@@ -983,6 +1046,8 @@ impl Cyder {
             notice: crate::take_crash_notice().map(|n| (n, Instant::now())),
             layout: None,
             lyric_fx: LyricFx::new(),
+            track_seen: (usize::MAX, Instant::now()),
+            skip_fade: None,
             shuffle: false,
             repeat: Repeat::Off,
             volume: 0.7,
@@ -1360,6 +1425,33 @@ impl Cyder {
         self.send(Cmd::Prev);
     }
 
+    /// Pular pelos controles da tela: no imersivo, escurece primeiro e troca a música no preto (a troca em si não
+    /// dá tempo de apagar a faixa que sai). "Anterior" que só volta ao começo da mesma música não escurece.
+    fn skip_with_fade(&mut self, next: bool, cx: &mut Context<Self>) {
+        let restart = !next && (self.position() > 3000 || self.current == 0 || self.shuffle);
+        if !self.immersive || restart {
+            return if next { self.next_track() } else { self.prev_track() };
+        }
+        if self.skip_fade.is_some() {
+            return;
+        }
+        self.skip_fade = Some(Instant::now());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SKIP_FADE).await;
+            let _ = this.update(cx, |s, cx| {
+                s.skip_fade = None;
+                let before = s.current;
+                if next { s.next_track() } else { s.prev_track() }
+                // A faixa nova sai do preto. Com o aleatório ela só chega depois, pelo Spotify: fica no preto
+                // esperando (até 2 s), em vez de reacender a que saiu.
+                let wait = if s.current == before { Duration::from_secs(2) } else { Duration::ZERO };
+                s.track_seen = (s.current, Instant::now() + wait);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn show_track(&mut self, i: usize) {
         self.current = i;
         self.anchor_ms = 0;
@@ -1665,6 +1757,28 @@ impl Cyder {
             .child(control("win-min", "Minimizar", "minus", WindowControlArea::Min, theme::hover()))
             .child(control("win-max", "Maximizar", "square", WindowControlArea::Max, theme::hover()))
             .child(control("win-close", "Fechar", "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
+    }
+
+    /// Quanto a tela do imersivo está acesa (0 preto, 1 normal): sai do preto quando a faixa começa e volta a ele no
+    /// fim dela, nas duas pontas em curva suave (devagar no começo e no fim do efeito).
+    fn track_fade(&mut self, window: &Window) -> f32 {
+        if self.track_seen.0 != self.current {
+            self.track_seen = (self.current, Instant::now());
+        }
+        let smooth = |t: f32| {
+            let t = t.clamp(0., 1.);
+            t * t * (3. - 2. * t)
+        };
+        let fade_in = (self.track_seen.1.elapsed().as_secs_f32() - TRACK_FADE_HOLD) / TRACK_FADE_IN;
+        let left = self.tracks.get(self.current).filter(|t| t.duration_ms > 0).map_or(u32::MAX, |t| t.duration_ms.saturating_sub(self.position()));
+        let mut fade_out = left as f32 / TRACK_FADE_OUT_MS;
+        if let Some(at) = self.skip_fade {
+            fade_out = fade_out.min(1. - at.elapsed().as_secs_f32() / SKIP_FADE.as_secs_f32());
+        }
+        if fade_in < 1. || self.skip_fade.is_some() || (self.playing && fade_out < 1.) {
+            window.request_animation_frame();
+        }
+        smooth(fade_in).min(smooth(fade_out))
     }
 
     fn background(&mut self, window: &mut Window) -> AnyElement {
@@ -2016,18 +2130,26 @@ impl Cyder {
                 let idx = lines.iter().rposition(|l| l.time_ms <= pos);
                 let now = Instant::now();
                 let ease = ease_out_quint();
+                // Intervalo longo sem voz: as bolinhas ficam em foco no lugar da linha.
+                let gaps = interludes(&lines);
+                let interlude = gaps.iter().find(|g| pos >= g.1 && pos < g.2).copied();
+                let gap_slot = |after: Option<usize>| after.map_or(1, |i| 2 * i + 3);
+                let slot = match interlude {
+                    Some((after, ..)) => gap_slot(after),
+                    None => idx.map_or(0, |i| 2 * i + 2),
+                };
 
-                // Linha nova: a anterior encolhe e apaga enquanto ela cresce e acende, juntas.
+                // Foco novo: o anterior encolhe e apaga enquanto ele cresce e acende, juntos.
                 let fx = &mut self.lyric_fx;
                 if fx.track != self.current {
                     *fx = LyricFx::new();
                     fx.track = self.current;
-                    fx.active = idx;
+                    fx.active = slot;
                 }
-                let swapped = fx.active != idx;
+                let swapped = fx.active != slot;
                 if swapped {
-                    fx.prev = fx.active;
-                    fx.active = idx;
+                    fx.prev = Some(fx.active);
+                    fx.active = slot;
                     fx.since = now;
                 }
                 let swap_t = (now - fx.since).as_secs_f32() / LYRIC_SWAP.as_secs_f32();
@@ -2061,33 +2183,65 @@ impl Cyder {
                     let q = ease(t.min(1.));
                     if *open { q } else { 1. - q }
                 }).collect();
+                // Bolinhas: abrem com o intervalo e fecham quando a voz volta.
+                let dots_h = style.line_h;
+                let mut dots_busy = interlude.is_some();
+                let dots_open: Vec<f32> = gaps.iter().map(|g| {
+                    let on = slot == gap_slot(g.0);
+                    let (open, since) = fx.dots.entry(gap_slot(g.0)).or_insert((false, now - LYRIC_SWAP));
+                    if *open != on {
+                        *open = on;
+                        *since = now;
+                    }
+                    let t = (now - *since).as_secs_f32() / LYRIC_SWAP.as_secs_f32();
+                    dots_busy |= t < 1.;
+                    let q = ease(t.min(1.));
+                    if *open { q } else { 1. - q }
+                }).collect();
                 let (prev, glow_moving) = (fx.prev, (glow_target - glow).abs() > 0.01);
 
-                // Ad-libs abertos acima da ativa empurram ela para baixo: a rolagem conta com eles.
-                let pushed: f32 = idx.map_or(0., |c| adlib_open[..c].iter().map(|f| f * adlib_h).sum());
-                let target = -idx.map_or(0., |i| tops[i]) - pushed;
+                // Ad-libs e bolinhas abertos acima do foco empurram ele para baixo: a rolagem conta com eles.
+                let adlibs_before = |c: usize| -> f32 { adlib_open[..c].iter().map(|f| f * adlib_h).sum() };
+                let dots_before = |c: usize| -> f32 {
+                    gaps.iter().zip(&dots_open).filter(|(g, _)| g.0.is_none_or(|a| a < c)).map(|(_, o)| o * dots_h).sum()
+                };
+                let target = match interlude {
+                    Some((Some(i), ..)) => -(tops[i + 1] - style.gap + adlibs_before(i + 1) + dots_before(i)),
+                    Some((None, ..)) => 0.,
+                    None => -idx.map_or(0., |c| tops[c] + adlibs_before(c) + dots_before(c)),
+                };
+                // As bolinhas do intervalo: enchem até pouco antes da voz e respiram devagar.
+                let breathe = 1. + 0.06 * (now.duration_since(fx.since).as_secs_f32() * std::f32::consts::TAU / 2.4).sin();
+                let dots_for = |after: Option<usize>, right: bool| {
+                    let k = gaps.iter().position(|g| g.0 == after)?;
+                    let (open, (_, start, end)) = (dots_open[k], gaps[k]);
+                    let fill = (pos.saturating_sub(start)) as f32 / end.saturating_sub(start).saturating_sub(INTERLUDE_LEAD_MS).max(1) as f32;
+                    (open > 0.).then(|| interlude_dots(fill.min(1.), open, breathe, style.size, dots_h, right, ink))
+                };
                 // Rolada à mão, a letra fica onde o usuário deixou até ele pedir para sincronizar.
                 let bottom = -tops.last().copied().unwrap_or(0.);
                 let manual = self.lyrics_manual;
                 let spring = SpringAnimation::new(SPRING).to(px(manual.unwrap_or(target)));
                 // A luz e as trocas de linha andam a cada quadro; o relógio de 200 ms deixaria tudo aos pulos.
-                if swap_t < 1. || adlib_busy || glow_moving || (self.playing && idx.is_some_and(|i| !lines[i].words.is_empty())) {
+                if swap_t < 1. || adlib_busy || dots_busy || glow_moving || (self.playing && idx.is_some_and(|i| !lines[i].words.is_empty())) {
                     window.request_animation_frame();
                 }
-                let dist = |i: usize, c: Option<usize>| match c {
-                    Some(c) => (i.abs_diff(c), i < c),
-                    None => (i + 1, false),
+                // Distância da linha `i` ao foco `s`, em linhas: com as bolinhas em foco, as duas vizinhas ficam a 1.
+                let dist = |i: usize, s: usize| {
+                    let at = 2 * i + 2;
+                    (at.abs_diff(s).div_ceil(2), at < s)
                 };
+                let intro = dots_for(None, lines.first().is_some_and(|l| l.right));
                 let rows = lines.iter().enumerate().map(|(i, line)| {
-                    let active = idx == Some(i);
+                    let active = slot == 2 * i + 2;
                     // Quanto esta linha é "a ativa" agora: sobe na que entra e desce na que sai.
-                    let emphasis = if active { swap } else if prev == Some(i) && swap_t < 1. { 1. - swap } else { 0. };
+                    let emphasis = if active { swap } else if prev == Some(2 * i + 2) && swap_t < 1. { 1. - swap } else { 0. };
                     let (opacity, blur) = if manual.is_some() {
                         // Rolando à mão, todas as linhas ficam legíveis.
                         if active { (1., 0.) } else { (0.7, 0.) }
                     } else {
-                        let (d_new, past_new) = dist(i, idx);
-                        let (d_old, past_old) = dist(i, prev);
+                        let (d_new, past_new) = dist(i, slot);
+                        let (d_old, past_old) = dist(i, prev.unwrap_or(slot));
                         let (a1, b1) = lyric_tone(d_new, past_new);
                         let (a0, b0) = if swap_t < 1. { lyric_tone(d_old, past_old) } else { (a1, b1) };
                         (a0 + (a1 - a0) * swap, b0 + (b1 - b0) * swap)
@@ -2166,6 +2320,7 @@ impl Cyder {
                         }))
                         .child(words_el)
                         .children(adlib)
+                        .children(dots_for(Some(i), lines.get(i + 1).is_some_and(|l| l.right)))
                 });
                 div()
                     .id("synced-lyrics")
@@ -2184,6 +2339,7 @@ impl Cyder {
                             .left(px(style.pad_x))
                             .right(px(style.pad_x))
                             .top(px(card_h * 0.3))
+                            .children(intro)
                             .children(rows)
                             // Margem, não layer_translate: a camada é recortada pelo cartão antes de ser
                             // transladada, e as linhas que estavam abaixo da borda chegavam vazias.
@@ -2413,7 +2569,7 @@ impl Cyder {
                 .child(self.shuffle_icon(15., mode_color(false)))
                 .children(dot(shuffle_on))
                 .into_any_element(),
-            button("prev", "Anterior".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.prev_track(); cx.notify(); })).child(icon("rewind", 18., theme::ink_1())).into_any_element(),
+            button("prev", "Anterior".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(false, cx); cx.notify(); })).child(icon("rewind", 18., theme::ink_1())).into_any_element(),
             // O botão principal num círculo cheio: se destaca dos vizinhos.
             Self::focusable("play")
                 .size(px(40.))
@@ -2434,7 +2590,7 @@ impl Cyder {
                     |el, t| el.opacity(t).layer_scale(0.25 + 0.75 * t).blur(px(4. * (1. - t))),
                 ))
                 .into_any_element(),
-            button("next", "Próxima".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.next_track(); cx.notify(); })).child(icon("fast-forward", 18., theme::ink_1())).into_any_element(),
+            button("next", "Próxima".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(true, cx); cx.notify(); })).child(icon("fast-forward", 18., theme::ink_1())).into_any_element(),
             button("repeat", repeat_label.into(), 36., false)
                 .on_click(cx.listener(|t, _, _, cx| { t.cycle_repeat(); cx.notify(); }))
                 .relative()
@@ -2890,7 +3046,7 @@ impl Render for Cyder {
                 t.set_immersive(false);
                 t.open_search(window, cx);
             }))
-            .on_action(cx.listener(|t, _: &NextTrack, _, cx| { t.next_track(); cx.notify(); }))
+            .on_action(cx.listener(|t, _: &NextTrack, _, cx| { t.skip_with_fade(true, cx); cx.notify(); }))
             .on_action(cx.listener(|t, _: &OpenSettings, _, cx| {
                 if matches!(t.phase, Phase::Ready) {
                     t.set_immersive(false);
@@ -2900,7 +3056,7 @@ impl Render for Cyder {
             }))
             .on_action(cx.listener(|t, _: &GoBack, _, cx| { t.nav_back(); cx.notify(); }))
             .on_action(cx.listener(|t, _: &GoForward, _, cx| { t.nav_forward(); cx.notify(); }))
-            .on_action(cx.listener(|t, _: &PrevTrack, _, cx| { t.prev_track(); cx.notify(); }))
+            .on_action(cx.listener(|t, _: &PrevTrack, _, cx| { t.skip_with_fade(false, cx); cx.notify(); }))
             .on_action(cx.listener(|t, _: &SeekForward, _, cx| { t.seek_by(SEEK_STEP_MS as i64); cx.notify(); }))
             .on_action(cx.listener(|t, _: &SeekBack, _, cx| { t.seek_by(-(SEEK_STEP_MS as i64)); cx.notify(); }))
             // A view guarda o último render; sem notify o anel de foco só apareceria no próximo redesenho.
@@ -2952,6 +3108,9 @@ impl Render for Cyder {
             let card_w = content_w - gap - left_w;
             let cover = left_w.min(content_h - 120.).max(160.);
             let track = self.tracks.get(self.current).cloned();
+            // Cortina preta da troca de faixa: cobre fundo, capa e letra; o player e os botões da janela ficam por cima.
+            let dark = 1. - self.track_fade(window);
+            let curtain = (dark > 0.001).then(|| div().absolute().inset_0().bg(gpui::Hsla { a: dark, ..gpui::black() }));
             let cover_el = match &self.shown_art {
                 Some(art) => img(art.cover.clone()).size(px(cover)).rounded(px(20.)).shadow_2xl().into_any_element(),
                 None => div().size(px(cover)).rounded(px(20.)).bg(rgba(theme::wash(0x0f))).flex().items_center().justify_center()
@@ -2981,6 +3140,7 @@ impl Render for Cyder {
                     )
                     .when(self.lyrics_on, |d| d.child(div().w(px(card_w)).h_full().child(self.lyrics_card(window, card_w, content_h, cx)))),
             )
+            .children(curtain)
             .child(self.player_bar((vw - pad * 2.).min(860.), cx))
         };
 
@@ -3022,6 +3182,14 @@ mod tests {
         // Acentos: bytes de verdade, não letras.
         let w = vec![Word { start: 0, end: 100, text: "ção".into() }];
         assert_eq!(glow_bytes(&w, "ção", 1.), (2, 4, 0.));
+    }
+
+    #[test]
+    fn long_silences_get_dots() {
+        let sung = |t: u32, end: u32| Line { words: vec![Word { start: t, end, text: "oi".into() }], ..Line::plain(t, "oi") };
+        // Introdução de 9 s, intervalo curto (2 s), linha vazia do LRC e intervalo de 6 s depois de cantar.
+        let lines = [sung(9000, 10000), sung(12000, 13000), Line::plain(14000, ""), sung(20000, 21000), sung(27000, 28000)];
+        assert_eq!(interludes(&lines), vec![(None, 0, 9000), (Some(2), 14000, 20000), (Some(3), 21000, 27000)]);
     }
 
     #[test]

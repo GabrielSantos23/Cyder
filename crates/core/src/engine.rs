@@ -1259,6 +1259,28 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
     }
 }
 
+/// Enfileira no Soloist que o Spotify já soltou: primeiro direto (a sessão pode estar viva), depois passando a
+/// sessão para ele sem tocar. Sem sessão para retomar, manda a lista do Cyder (que já tem a faixa) pausada.
+async fn queue_on_idle_soloist(ctx: Ctx, uri: String, body: serde_json::Value, shuffle: bool, repeat: Repeat) {
+    if ctx.api.add_to_queue(&uri).await.is_ok() {
+        return ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
+    }
+    let device = ctx.api.devices().await.ok().and_then(|list| list.into_iter().find(|d| d.name == soloist::DEVICE_NAME)).map(|d| d.id);
+    if let Some(id) = device {
+        if ctx.api.transfer_paused(&id).await.is_ok() {
+            // O Spotify leva um instante para o Soloist assumir a sessão.
+            tokio::time::sleep(Duration::from_millis(900)).await;
+            if ctx.api.add_to_queue(&uri).await.is_ok() {
+                log::info!("soloist: acordado pausado para enfileirar ({id})");
+                return ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
+            }
+        }
+    }
+    // O play_on_soloist avisa se falhar; dando certo, a faixa já aparece na fila.
+    log::info!("soloist: sem sessão para enfileirar; mandando a lista do Cyder pausada");
+    play_on_soloist(ctx, body, shuffle, repeat, true).await;
+}
+
 fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session: &librespot::core::Session, tracks: &[Track], index: usize) {
     let Some(track) = tracks.get(index).cloned() else { return };
     let cache = config::cache_dir();
@@ -1962,6 +1984,16 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         queued.push(track.uri.clone());
                         dirty = true;
                         ctx.thumbs(track.cover_small.clone().into_iter().collect());
+                        // Pausado há muito tempo (ou com o app recém-aberto), o Spotify já soltou o Soloist e não aceita
+                        // a faixa na fila ("nenhum aparelho ativo"); recarregar o player daqui também não servia, porque o
+                        // play depois retoma a sessão do Spotify, que não tem a faixa. Acorda o Soloist pausado e enfileira nele.
+                        if soloist_ready && remote.is_none() && !playing {
+                            ctx.send(AppEvent::Inserted { at, track: track.clone() });
+                            let (body, _) = soloist_body(&tracks, index, None, anchor.0);
+                            tokio::spawn(queue_on_idle_soloist(ctx.clone(), track.uri.clone(), body, shuffle, repeat));
+                            poll(&ctx, 2500);
+                            continue;
+                        }
                         // Tocando por aqui na ordem da lista: recarrega o Spirc com a lista nova, como o "mover na fila".
                         // Pela Web API a faixa só chegava ao Spirc depois de um tempo (ou nunca, com o Client ID
                         // limitado), e o "próxima" tocava a que vinha antes; o contexto do álbum também não tem a faixa.
@@ -2009,13 +2041,22 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     Cmd::Canvas(uri) => {
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
-                            let path = match internal::canvas(&ctx.session, &uri).await {
-                                Ok(Some(url)) => images::canvas(&ctx.http, &config::cache_dir(), &url).await.map_err(|e| log::warn!("canvas {uri}: {e}")).ok(),
-                                Ok(None) => None,
-                                Err(e) => {
-                                    log::warn!("canvas {uri}: {e}");
-                                    None
+                            // O Spotify deixou de mandar o Canvas para a sessão do librespot: a capa animada do Apple Music cobre.
+                            let url = match internal::canvas(&ctx.session, &uri).await {
+                                Ok(Some(url)) => Some(url),
+                                spotify => {
+                                    if let Err(e) = spotify {
+                                        log::warn!("canvas {uri}: {e}");
+                                    }
+                                    crate::motion::find(&ctx.http, &ctx.session, &uri).await.unwrap_or_else(|e| {
+                                        log::warn!("capa animada {uri}: {e}");
+                                        None
+                                    })
                                 }
+                            };
+                            let path = match url {
+                                Some(url) => images::canvas(&ctx.http, &config::cache_dir(), &url).await.map_err(|e| log::warn!("canvas {uri}: {e}")).ok(),
+                                None => None,
                             };
                             ctx.send(AppEvent::Canvas { uri, path });
                         });

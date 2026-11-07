@@ -13,6 +13,7 @@ pub mod lastfm;
 pub mod listen;
 pub mod lyrics;
 pub mod moods;
+pub mod motion;
 pub mod pathfinder;
 pub mod player;
 pub mod soloist;

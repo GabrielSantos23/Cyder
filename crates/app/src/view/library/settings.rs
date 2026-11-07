@@ -387,7 +387,7 @@ impl Cyder {
         let accent = self.segmented("settings-accent", [(Accent::Green, "Verde"), (Accent::System, "Do Windows")], self.settings.accent, |st, a| st.accent = a, false, cx);
         let canvas = self.toggle("settings-canvas", self.settings.canvas, |st| st.canvas = !st.canvas, false, cx);
         let mut rows = vec![
-            Self::row("Canvas", "Mostra no fundo do modo imersivo o vídeo curto que algumas músicas têm no Spotify.".into(), canvas),
+            Self::row("Capa animada", "Mostra no modo imersivo o Canvas do Spotify ou, quando ele não tiver, a capa animada do Apple Music.".into(), canvas),
             Self::row("Tema", "Igual ao sistema segue o claro ou escuro do Windows. O modo imersivo fica sempre escuro.".into(), theme),
             Self::row("Cor de destaque", "Curtidas, botões ligados e a faixa tocando. A do Windows é ajustada para ficar legível.".into(), accent),
         ];

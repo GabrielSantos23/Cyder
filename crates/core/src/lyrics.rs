@@ -11,7 +11,7 @@ const BASE: &str = "https://lrclib.net/api";
 /// Busca de TTML do Apple Music por ISRC ou por nome/artista/álbum/duração (a mesma que o Musique usa).
 const APPLE: &str = "https://lyrics-api.binimum.org/";
 /// Sem cara de navegador, o Cloudflare na frente da API recusa.
-const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
+pub(crate) const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 
 /// Uma palavra (ou sílaba) com o tempo em que é cantada. O texto já traz o espaço que vem depois dela.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

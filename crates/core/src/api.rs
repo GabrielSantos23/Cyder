@@ -312,6 +312,11 @@ impl WebApi {
         self.put("/me/player", json!({ "device_ids": [device_id], "play": true })).await
     }
 
+    /// Passa a sessão para o aparelho sem tocar: ele fica ativo, pausado onde estava.
+    pub async fn transfer_paused(&self, device_id: &str) -> Result<(), String> {
+        self.put("/me/player", json!({ "device_ids": [device_id], "play": false })).await
+    }
+
     /// Músicas curtidas, da mais recente para a mais antiga.
     pub async fn liked_tracks(&self, limit: usize) -> Result<Vec<Track>, String> {
         let mut out = Vec::new();
