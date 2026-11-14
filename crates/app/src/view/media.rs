@@ -132,7 +132,8 @@ impl Cyder {
     /// Conta o tempo ouvido da faixa atual e manda ao Last.fm o "ouvindo agora" e o scrobble.
     /// Só o que toca neste computador: o que toca no celular, o app de lá registra.
     fn track_listen(&mut self) {
-        let track = self.tracks.get(self.current).filter(|_| self.lastfm_user.is_some() && self.elsewhere().is_none()).cloned();
+        let apple_ok = !self.settings.lastfm_apple_only || self.settings.apple_music;
+        let track = self.tracks.get(self.current).filter(|_| self.lastfm_user.is_some() && self.elsewhere().is_none() && apple_ok).cloned();
         let Some(track) = track else {
             self.listen = None;
             return;

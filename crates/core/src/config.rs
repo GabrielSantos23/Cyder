@@ -184,6 +184,8 @@ pub struct Settings {
     pub apple_music: bool,
     /// Com o Apple Music ligado: biblioteca, tela inicial e busca do Apple Music em vez das do Spotify.
     pub apple_catalog: bool,
+    /// Last.fm só com a saída Apple Music: o que toca pelo Spotify já vai ao Last.fm pela ligação do próprio Spotify.
+    pub lastfm_apple_only: bool,
 }
 
 impl Default for Settings {
@@ -217,6 +219,7 @@ impl Default for Settings {
             hotkeys: ["ctrl-alt-space", "ctrl-alt-right", "ctrl-alt-left", "ctrl-alt-up", "ctrl-alt-down", "ctrl-alt-l"].map(String::from),
             apple_music: false,
             apple_catalog: false,
+            lastfm_apple_only: false,
         }
     }
 }

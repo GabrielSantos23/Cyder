@@ -528,8 +528,16 @@ impl Cyder {
         } else {
             "Mostra no seu perfil do Discord o que está tocando. Precisa de um aplicativo seu no portal do Discord (o nome dele aparece como “Ouvindo …”)."
         };
-        Self::section("Integrações", vec![
-            lastfm,
+        let mut rows = vec![lastfm];
+        // Só faz sentido com as duas coisas: o Last.fm do Cyder e o Apple Music como saída.
+        if self.lastfm_user.is_some() && self.settings.apple_music {
+            rows.push(Self::row(
+                "Last.fm só pelo Apple Music",
+                "Manda ao Last.fm só o que toca pelo Apple Music. Use se a sua conta do Spotify já está ligada ao Last.fm, para não contar duas vezes.".into(),
+                self.toggle("settings-lastfm-apple", self.settings.lastfm_apple_only, |st| st.lastfm_apple_only = !st.lastfm_apple_only, false, cx),
+            ));
+        }
+        rows.extend([
             self.help_row("Discord", Help::Discord, discord_detail.into(), discord_control, cx),
             Self::row(
                 "Avisar a troca de música",
@@ -546,7 +554,8 @@ impl Cyder {
                 },
                 self.toggle("settings-toasts", self.settings.toasts, |st| st.toasts = !st.toasts, false, cx),
             ),
-        ])
+        ]);
+        Self::section("Integrações", rows)
     }
 
     fn storage_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
