@@ -15,6 +15,7 @@ anyhow = "1.0.104"
 souvlaki = "0.9"
 raw-window-handle = "0.6"
 serde_json.workspace = true
+serde.workspace = true
 # Canvas: ler o MP4 e decodificar o H.264 (o GPUI não toca vídeo). A mesma versão do `image` do GPUI.
 mp4 = "0.14"
 openh264 = "0.9"
@@ -36,4 +37,8 @@ tauri-winrt-notification = "0.8"
 # O `#[implement]` do alvo de soltar links (links.rs) pede o crate pelo nome.
 windows-core = "0.62"
 resvg = { version = "0.46", default-features = false }
+# Player do Apple Music: o music.apple.com num WebView2 escondido, que tem Widevine (view/apple.rs, doc 13).
+wry = { version = "0.57", default-features = false }
+# A janela e o laço de mensagens da thread do WebView2 (o GPUI não pode ser o dono dela).
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry"] }

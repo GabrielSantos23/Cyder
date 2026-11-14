@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::theme::{self, glass};
 
+#[cfg(windows)]
+mod apple;
 mod canvas;
 mod discord;
 #[cfg(windows)]
@@ -473,6 +475,9 @@ pub struct Cyder {
     /// "Pular" no toast, de volta à thread da UI.
     #[cfg(windows)]
     toast_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    /// Player do Apple Music (doc 13); só existe enquanto é usado.
+    #[cfg(windows)]
+    apple: Option<apple::ApplePlayer>,
     #[cfg(windows)]
     toast_registered: bool,
     #[cfg(windows)]
@@ -1013,6 +1018,8 @@ impl Cyder {
             toasted: Default::default(),
             #[cfg(windows)]
             toast_tx: None,
+            #[cfg(windows)]
+            apple: None,
             #[cfg(windows)]
             toast_registered: false,
             #[cfg(windows)]
