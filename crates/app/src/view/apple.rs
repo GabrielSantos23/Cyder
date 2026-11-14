@@ -22,17 +22,26 @@ const SITE: &str = "https://music.apple.com/";
 const BRIDGE: &str = r#"
 (() => {
   const send = m => window.ipc.postMessage(JSON.stringify(m));
+  // A Apple nega licença ao Widevine do WebView2 (status -1021) e concede ao PlayReady, mas o site prefere o Widevine:
+  // com o PlayReady disponível, o Widevine "não existe" e o MusicKit cai para ele.
+  const keys = navigator.requestMediaKeySystemAccess.bind(navigator);
+  navigator.requestMediaKeySystemAccess = (ks, c) => ks !== 'com.widevine.alpha' ? keys(ks, c)
+    : keys('com.microsoft.playready', c).then(() => Promise.reject(new DOMException('PlayReady primeiro', 'NotSupportedError')), () => keys(ks, c));
   const instance = () => { try { return window.MusicKit && MusicKit.getInstance(); } catch { return null; } };
   // Comandos que chegam antes do MusicKit subir esperam por ele.
   const ready = () => new Promise(done => { const t = setInterval(() => { const mk = instance(); if (mk) { clearInterval(t); done(mk); } }, 200); });
   const run = f => ready().then(f).catch(e => send({ error: String(e && (e.message || e)) }));
-  let last = 0;
+  let last = 0, atEnd = null;
   const state = mk => {
     const it = mk.nowPlayingItem;
-    send({ authorized: mk.isAuthorized, playing: mk.isPlaying,
+    const s = { authorized: mk.isAuthorized, playing: mk.isPlaying,
       position_ms: Math.round((mk.currentPlaybackTime || 0) * 1000), duration_ms: Math.round((mk.currentPlaybackDuration || 0) * 1000),
       song: it ? String(it.id) : null, storefront: mk.storefrontId || null,
-      ended: [MusicKit.PlaybackStates.ended, MusicKit.PlaybackStates.completed].includes(mk.playbackState) });
+      ended: [MusicKit.PlaybackStates.ended, MusicKit.PlaybackStates.completed].includes(mk.playbackState) };
+    // No fim da fila o MusicKit zera a posição e tira a música sem passar por "ended": chegou ao fim e sumiu, acabou.
+    if (s.song && s.duration_ms > 0 && s.position_ms > 0) atEnd = s.position_ms >= s.duration_ms - 2000 ? s.song : null;
+    if (!s.song && atEnd) Object.assign(s, { song: atEnd, ended: true }), atEnd = null;
+    send(s);
   };
   ready().then(mk => {
     // Logo depois do login o site ainda não sabe da assinatura e só toca a prévia (90 s); recarregado, toca a faixa inteira.
