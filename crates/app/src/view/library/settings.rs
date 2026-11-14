@@ -216,6 +216,7 @@ impl Cyder {
             cx,
         );
         let cache_sizes = self.segmented("settings-cache-size", CACHE_SIZES, s.audio_cache_mb, |st, mb| st.audio_cache_mb = mb, true, cx);
+        let catalog = self.segmented("settings-catalog", [(false, "Spotify"), (true, "Apple Music")], s.apple_catalog, |st, on| st.apple_catalog = on, true, cx);
         let why = self.sound_elsewhere();
         let off = why.is_some();
         let mut rows = vec![
@@ -244,6 +245,14 @@ impl Cyder {
                 self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx),
             )),
         ];
+        // Com as duas contas, a pessoa escolhe de qual vêm a biblioteca, a tela inicial e a busca.
+        if s.apple_music {
+            rows.insert(3, Self::row(
+                "Biblioteca e busca",
+                "De onde vêm as suas playlists, álbuns e artistas, a tela inicial e a busca. Curtidas e Novidades continuam do Spotify.".into(),
+                catalog,
+            ));
+        }
         // O tamanho numa linha própria, só com o cache ligado: o seletor e o interruptor juntos confundiam.
         if s.audio_cache {
             rows.push(dimmed(off, Self::row("Tamanho do cache", "O áudio mais antigo sai quando o cache enche.".into(), cache_sizes)));

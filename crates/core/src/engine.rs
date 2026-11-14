@@ -501,6 +501,16 @@ impl Ctx {
     /// Álbuns e artistas pela Web API; playlists na ordem da biblioteca do Spotify (rootlist),
     /// incluindo as do próprio Spotify (daylist, mixes salvos), que a Web API não devolve mais.
     async fn refresh_library(self) {
+        if config::apple_catalog() {
+            return match crate::apple_catalog::library(&self.http).await {
+                Ok(lib) => {
+                    cache::save("library", &lib);
+                    self.thumbs(library_images(&lib));
+                    self.send(AppEvent::Library(lib));
+                }
+                Err(e) => self.send(AppEvent::LibraryFailed(e)),
+            };
+        }
         let mut lib = match self.api.library().await {
             Ok(l) => l,
             Err(e) => return self.send(AppEvent::LibraryFailed(e)),
@@ -538,6 +548,18 @@ impl Ctx {
     /// Prateleiras da tela inicial que vêm da Web API: tocadas recentemente e artistas mais ouvidos.
     /// As de playlists (do Spotify e suas) a UI monta com a biblioteca.
     async fn refresh_home(self) {
+        // Pelo Apple Music: só as prateleiras dele (as playlists da biblioteca, a UI põe em seguida).
+        if config::apple_catalog() {
+            return match crate::apple_catalog::home(&self.http, &self.storefront()).await {
+                Ok(shelves) if !shelves.is_empty() => {
+                    cache::save("home", &shelves);
+                    self.thumbs(shelf_images(&shelves));
+                    self.send(AppEvent::Home(shelves));
+                }
+                Ok(_) => self.send(AppEvent::HomeFailed("O Apple Music não respondeu.".into())),
+                Err(e) => self.send(AppEvent::HomeFailed(e)),
+            };
+        }
         let local = now_secs() as i64 + crate::local_offset_secs();
         let played = self.api.recently_played().await;
         // A home personalizada do Spotify (Feito para você, Daily Mix, rádios…), com as seções dele. Sem ela, a
@@ -588,13 +610,6 @@ impl Ctx {
             }
             cache::save("history", &history);
             self.send(AppEvent::Recent(history));
-        }
-        // Tocando pelo Apple Music, as prateleiras da tela inicial dele vêm logo depois das tocadas recentemente.
-        if config::settings().apple_music {
-            match crate::apple_catalog::home(&self.http, &self.session.country().to_lowercase()).await {
-                Ok(apple) => shelves.extend(apple),
-                Err(e) => log::warn!("tela inicial do Apple Music: {e}"),
-            }
         }
         shelves.extend(rest);
         shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: top_artists });
@@ -884,8 +899,26 @@ impl Ctx {
         }
     }
 
+    /// Loja do Apple Music: a do país da conta do Spotify (`br`, `us`…).
+    fn storefront(&self) -> String {
+        self.session.country().to_lowercase()
+    }
+
     async fn search(self, query: String, kind: Option<SearchKind>, offset: usize) {
         let kinds = kind.map_or(SearchKind::ALL.to_vec(), |k| vec![k]);
+        if config::apple_catalog() {
+            return match crate::apple_catalog::search(&self.http, &self.storefront(), &query, &kinds, offset).await {
+                Ok(results) => {
+                    let cards = results.artists.iter().chain(&results.albums).chain(&results.playlists);
+                    self.thumbs(cards.filter_map(|c| c.image.clone()).chain(results.tracks.iter().filter_map(|t| t.cover_small.clone())).collect());
+                    self.send(AppEvent::Search { results, more: kind.is_some() });
+                }
+                Err(e) => {
+                    log::warn!("busca no Apple Music \"{query}\": {e}");
+                    self.send(AppEvent::SearchFailed { query, error: e });
+                }
+            };
+        }
         let mut found = self.api.search(&query, &kinds, offset).await;
         // Ver mais de um tipo: mais três páginas de 10 de uma vez, até acabar.
         if let (Some(_), Ok(results)) = (kind, &mut found) {
@@ -1047,7 +1080,7 @@ impl Ctx {
             }
         }
         let fresh = match card.kind {
-            _ if card.uri.starts_with(crate::apple_catalog::URI) => crate::apple_catalog::page(&self.http, &self.session.country().to_lowercase(), &card).await,
+            _ if card.uri.starts_with(crate::apple_catalog::URI) => crate::apple_catalog::page(&self.http, &self.storefront(), &card).await,
             // Pela sessão: funciona para playlists de qualquer dono, inclusive as do Spotify.
             // Aos poucos: o primeiro pedaço (ou o tanto que já estava no cache) e o resto conforme a lista rola.
             Kind::Playlist => match internal::playlist(&self.session, &card.id, 0, cached.as_ref().map_or(PLAYLIST_CHUNK, |p| p.more_from.unwrap_or(p.total.max(p.tracks.len())).max(PLAYLIST_CHUNK))).await {
@@ -1549,6 +1582,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let (mut pcmd_tx, pcmd_rx) = unbounded_channel();
     let (pout_tx, mut pout_rx) = unbounded_channel();
     let mut apple_out = config::settings().apple_music;
+    let mut catalog_on = config::apple_catalog();
     spawn_player(apple_out, ready.session, ready.credentials, volume, pcmd_rx, pout_tx.clone(), out.clone());
     let _ = pcmd_tx.send(PlayerCmd::SetShuffle(shuffle));
     let _ = pcmd_tx.send(PlayerCmd::SetRepeat(repeat));
@@ -2390,7 +2424,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     Cmd::RestartPlayer if config::settings().apple_music != apple_out => {
                         apple_out = !apple_out;
                         apple_shuffle.store(apple_out, std::sync::atomic::Ordering::Relaxed);
-                        // A tela inicial ganha ou perde as prateleiras do Apple Music.
+                        // A biblioteca e a tela inicial podem trocar de plataforma junto.
+                        catalog_on = config::apple_catalog();
+                        tokio::spawn(ctx.clone().refresh_library());
                         tokio::spawn(ctx.clone().refresh_home());
                         soloist_ready = soloist_up && !apple_out;
                         let (tx, rx) = unbounded_channel();
@@ -2411,8 +2447,24 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let _ = pcmd_tx.send(PlayerCmd::Load { queue: tracks.clone(), index, context: context.clone(), position_ms });
                         continue;
                     }
+                    // Trocou a plataforma da biblioteca, da tela inicial e da busca.
+                    Cmd::RestartPlayer if config::apple_catalog() != catalog_on => {
+                        catalog_on = !catalog_on;
+                        tokio::spawn(ctx.clone().refresh_library());
+                        tokio::spawn(ctx.clone().refresh_home());
+                        continue;
+                    }
                     Cmd::RestartPlayer => PlayerCmd::Restart,
-                    Cmd::Apple(st) => PlayerCmd::Apple(st),
+                    Cmd::Apple(mut st) => {
+                        // O token da pessoa chegou (ou trocou): a biblioteca e a tela inicial do Apple Music já podem vir.
+                        if let Some(token) = st.user_token.take() {
+                            if crate::apple_catalog::set_user_token(&token) && config::apple_catalog() {
+                                tokio::spawn(ctx.clone().refresh_library());
+                                tokio::spawn(ctx.clone().refresh_home());
+                            }
+                        }
+                        PlayerCmd::Apple(st)
+                    }
                     Cmd::Relogin => {
                         auth::forget_web_login();
                         return Flow::Relogin;

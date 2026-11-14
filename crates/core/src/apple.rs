@@ -30,6 +30,9 @@ pub struct AppleState {
     /// O MusicKit não conseguiu tocar (licença negada, música fora da loja…).
     #[serde(default)]
     pub error: Option<String>,
+    /// Token da pessoa (`musicUserToken`), para a biblioteca dela. O engine tira daqui antes de passar adiante.
+    #[serde(default)]
+    pub user_token: Option<String>,
 }
 
 /// Pedido para o player do app.
@@ -49,6 +52,10 @@ const MAX_MISSES: u32 = 5;
 const DRIFT_MS: u32 = 2000;
 /// Como no Spotify: depois de 3 s, o "anterior" volta ao começo da faixa.
 const PREV_RESTART_MS: u32 = 3000;
+/// Sem a música andar depois do play, o play vai de novo (o MusicKit às vezes fica parado em 0:00 "tocando")...
+const RETRY_AFTER: Duration = Duration::from_secs(15);
+/// ...e depois disto desiste e avisa.
+const GIVE_UP_AFTER: Duration = Duration::from_secs(30);
 
 /// Sorteio sem dependência (xorshift com semente do relógio): basta para embaralhar uma fila.
 fn shuffled(mut items: Vec<usize>) -> Vec<usize> {
@@ -105,6 +112,9 @@ struct State {
     song: Option<String>,
     /// O MusicKit já tocou esta faixa: só então um "acabou" é dela (repetindo, o ID é o mesmo da vez anterior).
     heard: bool,
+    /// Play mandado e a música ainda não andou: desde quando e se já mandou de novo. Nesse meio tempo o MusicKit
+    /// oscila entre tocando e pausado; a tela fica em "tocando" em vez de mostrar a pausa (e pedir um segundo clique).
+    starting: Option<(Instant, bool)>,
     misses: u32,
     /// No aleatório, as próximas faixas (índices da fila) na ordem sorteada; cada uma toca uma vez.
     order: Vec<usize>,
@@ -159,7 +169,7 @@ impl State {
     /// Toca a faixa `i` a partir de `ms`: acha o ID dela na Apple (do cache ou numa tarefa) e manda ao MusicKit.
     fn start(&mut self, i: usize, ms: u32) {
         let Some(t) = self.queue.get(i).cloned() else { return };
-        (self.index, self.loaded, self.start_ms, self.song, self.heard) = (i, true, ms, None, false);
+        (self.index, self.loaded, self.start_ms, self.song, self.heard, self.starting) = (i, true, ms, None, false, None);
         self.send(PlayerOut::TrackChanged(i));
         self.set_playback(false, ms);
         let Some(storefront) = self.storefront.clone() else { return };
@@ -191,7 +201,10 @@ impl State {
             Ok(Some(song)) => {
                 self.misses = 0;
                 self.song = Some(song.clone());
+                self.starting = Some((Instant::now(), false));
+                self.set_playback(true, self.start_ms);
                 self.apple(AppleCmd::Play { song, start_ms: self.start_ms });
+                self.prefetch();
             }
             Ok(None) | Err(_) => {
                 let name = self.queue[i].name.clone();
@@ -207,6 +220,38 @@ impl State {
                     self.set_playback(false, 0);
                 }
             }
+        }
+    }
+
+    /// Já procura o ID da próxima faixa, para a troca não esperar pela busca do ISRC.
+    fn prefetch(&self) {
+        let next = if self.shuffle { self.order.first().copied() } else { Some(self.index + 1) };
+        let Some((i, t)) = next.and_then(|i| Some((i, self.queue.get(i)?.clone()))) else { return };
+        let Some(storefront) = self.storefront.clone() else { return };
+        if crate::apple_catalog::song_id(&t.uri).is_some() || self.ids.contains_key(&t.uri) {
+            return;
+        }
+        let (http, session, tx) = (self.http.clone(), self.session.clone(), self.resolve.clone());
+        // O `found` guarda no cache e, como não é a faixa atual, não toca.
+        tokio::spawn(async move {
+            let r = find(&http, &session, &storefront, &t).await;
+            let _ = tx.send((i, t.uri, r));
+        });
+    }
+
+    /// A cada segundo: o play que não fez a música andar vai de novo e, sem jeito, vira aviso.
+    fn tick(&mut self) {
+        let Some((since, retried)) = self.starting else { return };
+        let Some(song) = self.song.clone() else { return };
+        if since.elapsed() >= GIVE_UP_AFTER {
+            self.starting = None;
+            let name = self.queue.get(self.index).map_or(String::new(), |t| t.name.clone());
+            self.send(PlayerOut::Error(format!("O Apple Music não começou a tocar “{name}”.")));
+            self.set_playback(false, self.start_ms);
+        } else if since.elapsed() >= RETRY_AFTER && !retried {
+            log::info!("apple music: a música não andou; mandando o play de novo");
+            self.starting = Some((since, true));
+            self.apple(AppleCmd::Play { song, start_ms: self.start_ms });
         }
     }
 
@@ -274,6 +319,12 @@ impl State {
                 }
             }
             PlayerCmd::Toggle if !self.loaded => self.start(self.index, self.start_ms),
+            // Pausar enquanto começa: a tela já mostrava "tocando".
+            PlayerCmd::Toggle if self.starting.is_some() => {
+                self.starting = None;
+                self.apple(AppleCmd::Pause);
+                self.set_playback(false, self.start_ms);
+            }
             PlayerCmd::Toggle => self.apple(if self.playing { AppleCmd::Pause } else { AppleCmd::Resume }),
             PlayerCmd::Next => self.advance(false),
             PlayerCmd::Prev if self.position() > PREV_RESTART_MS || self.index == 0 => {
@@ -336,6 +387,7 @@ impl State {
         }
         // Sem pular sozinho: uma licença negada faria a fila inteira passar sem som.
         if let Some(e) = st.error {
+            self.starting = None;
             if self.song.is_some() {
                 let name = self.queue.get(self.index).map_or(String::new(), |t| t.name.clone());
                 let why = if e.contains("MEDIA_LICENSE") { "a Apple negou a licença".into() } else { e };
@@ -353,6 +405,13 @@ impl State {
             return if std::mem::take(&mut self.heard) { self.advance(true) };
         }
         self.heard |= st.playing;
+        // Começando: só vale quando a música anda.
+        if self.starting.is_some() {
+            if !(st.playing && st.position_ms > self.start_ms) {
+                return;
+            }
+            self.starting = None;
+        }
         if !self.warned_preview && st.duration_ms > 0 && st.duration_ms <= 90_000 && self.queue.get(self.index).is_some_and(|t| t.duration_ms > 120_000) {
             self.warned_preview = true;
             self.send(PlayerOut::Error("O Apple Music está tocando só a prévia. Confira a assinatura na janela do Apple Music.".into()));
@@ -384,13 +443,15 @@ pub async fn run(session: Session, credentials: Credentials, volume: u16, mut cm
     let (resolve, mut resolved) = unbounded_channel();
     let mut state = State {
         queue: Vec::new(), index: 0, start_ms: 0, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, volume,
-        anchor: (0, Instant::now()), song: None, heard: false, misses: 0, order: Vec::new(), storefront: None, authorized: true, warned_login: false, warned_preview: false,
+        anchor: (0, Instant::now()), song: None, heard: false, starting: None, misses: 0, order: Vec::new(), storefront: None, authorized: true, warned_login: false, warned_preview: false,
         out, ui, resolve, ids: HashMap::new(), http: reqwest::Client::new(), session,
     };
     state.apple(AppleCmd::Volume(volume as f32 / u16::MAX as f32));
     state.send_modes();
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
+            _ = tick.tick() => state.tick(),
             cmd = cmds.recv() => match cmd {
                 Some(cmd) => {
                     let wants_sound = matches!(cmd, PlayerCmd::Play { .. } | PlayerCmd::Toggle);

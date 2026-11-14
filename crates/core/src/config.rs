@@ -182,6 +182,8 @@ pub struct Settings {
     pub hotkeys: [String; 6],
     /// Tocar a fila pelo Apple Music em vez do librespot (doc 13).
     pub apple_music: bool,
+    /// Com o Apple Music ligado: biblioteca, tela inicial e busca do Apple Music em vez das do Spotify.
+    pub apple_catalog: bool,
 }
 
 impl Default for Settings {
@@ -214,6 +216,7 @@ impl Default for Settings {
             global_hotkeys: false,
             hotkeys: ["ctrl-alt-space", "ctrl-alt-right", "ctrl-alt-left", "ctrl-alt-up", "ctrl-alt-down", "ctrl-alt-l"].map(String::from),
             apple_music: false,
+            apple_catalog: false,
         }
     }
 }
@@ -237,6 +240,12 @@ fn settings_path() -> PathBuf {
 
 pub fn settings() -> Settings {
     std::fs::read_to_string(settings_path()).ok().and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok()).unwrap_or_default()
+}
+
+/// Biblioteca, tela inicial e busca vêm do Apple Music (ligado e escolhido nas configurações).
+pub fn apple_catalog() -> bool {
+    let s = settings();
+    s.apple_music && s.apple_catalog
 }
 
 pub fn save_settings(s: &Settings) {

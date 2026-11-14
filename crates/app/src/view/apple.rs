@@ -16,6 +16,8 @@ use wry::{WebContext, WebViewBuilder, WebViewBuilderExtWindows};
 use super::Cyder;
 use cyder_core::Cmd;
 
+/// A home do site. A busca seria mais leve (sem os ~30 vídeos de capa animada, ~175 MB a menos), mas aberto direto
+/// nela o MusicKit só toca a prévia de 90 s.
 const SITE: &str = "https://music.apple.com/";
 
 /// Roda antes do site: liga os eventos do MusicKit à `ipc` e expõe `window.cyder` para os comandos.
@@ -27,6 +29,16 @@ const BRIDGE: &str = r#"
   const keys = navigator.requestMediaKeySystemAccess.bind(navigator);
   navigator.requestMediaKeySystemAccess = (ks, c) => ks !== 'com.widevine.alpha' ? keys(ks, c)
     : keys('com.microsoft.playready', c).then(() => Promise.reject(new DOMException('PlayReady primeiro', 'NotSupportedError')), () => keys(ks, c));
+  // O PlayReady leva ~8 s para subir na primeira música; aquecido aqui, com a página abrindo, o primeiro play sai em ~1,5 s.
+  // Só criar as chaves não acorda o processo do PlayReady: elas vão num <audio> mudo e abrem uma sessão de mentira.
+  keys('com.microsoft.playready', [{ initDataTypes: ['keyids', 'cenc'], audioCapabilities: [{ contentType: 'audio/mp4;codecs="mp4a.40.2"' }], distinctiveIdentifier: 'optional', persistentState: 'required' }])
+    .then(a => a.createMediaKeys())
+    .then(async k => {
+      window.__cyderKeys = k;
+      await document.createElement('audio').setMediaKeys(k).catch(() => {});
+      await k.createSession().generateRequest('keyids', new TextEncoder().encode('{"kids":["AAAAAAAAAAAAAAAAAAAAAA"]}')).catch(() => {});
+    })
+    .catch(() => {});
   const instance = () => { try { return window.MusicKit && MusicKit.getInstance(); } catch { return null; } };
   // Comandos que chegam antes do MusicKit subir esperam por ele.
   const ready = () => new Promise(done => { const t = setInterval(() => { const mk = instance(); if (mk) { clearInterval(t); done(mk); } }, 200); });
@@ -36,7 +48,7 @@ const BRIDGE: &str = r#"
     const it = mk.nowPlayingItem;
     const s = { authorized: mk.isAuthorized, playing: mk.isPlaying,
       position_ms: Math.round((mk.currentPlaybackTime || 0) * 1000), duration_ms: Math.round((mk.currentPlaybackDuration || 0) * 1000),
-      song: it ? String(it.id) : null, storefront: mk.storefrontId || null,
+      song: it ? String(it.id) : null, storefront: mk.storefrontId || null, user_token: mk.musicUserToken || null,
       ended: [MusicKit.PlaybackStates.ended, MusicKit.PlaybackStates.completed].includes(mk.playbackState) };
     // No fim da fila o MusicKit zera a posição e tira a música sem passar por "ended": chegou ao fim e sumiu, acabou.
     if (s.song && s.duration_ms > 0 && s.position_ms > 0) atEnd = s.position_ms >= s.duration_ms - 2000 ? s.song : null;
@@ -133,7 +145,11 @@ fn run(ready: std::sync::mpsc::Sender<Result<EventLoopProxy<Msg>, String>>, even
         .with_ipc_handler(move |req| drop(events.send(req.into_body())))
         .with_autoplay(true)
         // Os padrões do wry, mais as teclas de mídia: quem responde a elas e aparece no Windows é o Cyder, não o site.
-        .with_additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HardwareMediaKeyHandling")
+        // E sem o freio de janela escondida: o Chromium segura os timers e a mídia dela, e o play levava de 1 a 15 s.
+        .with_additional_browser_args(concat!(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HardwareMediaKeyHandling,IntensiveWakeUpThrottling,CalculateNativeWinOcclusion",
+            " --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows",
+        ))
         .build(&window);
     let webview = match built {
         Ok(w) => w,
@@ -193,7 +209,9 @@ impl Cyder {
         cx.spawn(async move |this, cx| {
             while let Some(msg) = rx.recv().await {
                 let Some(ev) = parse(&msg) else { continue };
-                if this.update(cx, |s, cx| { s.apple_event(ev); cx.notify(); }).is_err() {
+                // Sem `cx.notify()`: a tela não mostra este estado (o que muda nela vem do core), e redesenhar a
+                // janela inteira a cada mensagem pesava.
+                if this.update(cx, |s, _| s.apple_event(ev)).is_err() {
                     break;
                 }
             }
@@ -211,7 +229,8 @@ impl Cyder {
             }
             AppleEvent::State(state) => {
                 if state.authorized != apple.state.authorized || state.playing != apple.state.playing || state.song != apple.state.song {
-                    log::info!("apple music: {state:?}");
+                    // O token da pessoa não vai para o log.
+                    log::info!("apple music: {:?}", AppleState { user_token: None, ..state.clone() });
                 }
                 // Sem login, a janela aparece para a pessoa entrar; entrou, volta a ficar escondida.
                 if state.authorized != apple.state.authorized || apple.state == AppleState::default() {

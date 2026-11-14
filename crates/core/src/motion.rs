@@ -63,10 +63,19 @@ pub(crate) async fn catalog_in(http: &reqwest::Client, storefront: &str, path: &
 
 /// Qualquer caminho da `amp-api` (catálogo, editorial), com o token do site.
 pub(crate) async fn amp(http: &reqwest::Client, path: &str) -> Result<Value, String> {
+    amp_as(http, path, None).await
+}
+
+/// O mesmo com o token da pessoa (`Media-User-Token`), para a biblioteca dela (`/v1/me/…`).
+pub(crate) async fn amp_as(http: &reqwest::Client, path: &str, user_token: Option<&str>) -> Result<Value, String> {
     let mut refreshed = false;
     loop {
         let tok = token(http, refreshed).await?;
-        let r = http.get(format!("{AMP}{path}")).header("user-agent", BROWSER_UA).header("origin", SITE).bearer_auth(tok).send().await.map_err(err)?;
+        let mut req = http.get(format!("{AMP}{path}")).header("user-agent", BROWSER_UA).header("origin", SITE).bearer_auth(tok);
+        if let Some(user) = user_token {
+            req = req.header("media-user-token", user);
+        }
+        let r = req.send().await.map_err(err)?;
         if r.status().as_u16() == 401 && !refreshed {
             refreshed = true;
             continue;
