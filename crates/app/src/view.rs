@@ -407,8 +407,6 @@ pub struct Cyder {
     /// None: o player está conectado; Some: o motivo de não estar.
     player_status: Option<String>,
     /// Nome do aparelho sendo digitado (vale no Enter).
-    device_draft: String,
-    device_focus: FocusHandle,
     /// Religa o player um pouco depois da última mudança, para várias mudanças seguidas religarem uma vez só.
     restart_due: Option<Instant>,
     /// Onde a janela foi parar; salva um pouco depois de parar de mover, não a cada pixel do arraste.
@@ -846,7 +844,6 @@ fn swept_text(window: &Window, text: SharedString, words: &[Word], glow: f32, si
 impl Cyder {
     pub fn new(cmds: UnboundedSender<Cmd>, mut events: UnboundedReceiver<AppEvent>, cx: &mut Context<Self>) -> Self {
         let settings = config::settings();
-        cyder_core::fx::set(settings.fx());
         KEEP_PLAYING.store(settings.keep_playing_on_close, Ordering::Relaxed);
         cx.spawn(async move |this, cx| {
             while let Some(ev) = events.recv().await {
@@ -977,8 +974,6 @@ impl Cyder {
             plan: None,
             soloist: cyder_core::soloist::Status::Off,
             player_status: None,
-            device_draft: settings.device_name(),
-            device_focus: cx.focus_handle(),
             restart_due: None,
             place_due: None,
             window_title: "Cyder".into(),

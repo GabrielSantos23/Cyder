@@ -1357,7 +1357,7 @@ fn spawn_player(apple: bool, session: librespot::core::session::Session, credent
     if apple {
         tokio::spawn(crate::apple::run(session, credentials, volume, cmds, pout, out));
     } else {
-        tokio::spawn(player::run(config::cache_dir(), session, credentials, volume, cmds, pout));
+        tokio::spawn(player::run(session, credentials, volume, cmds, pout));
     }
 }
 
@@ -1555,6 +1555,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
             }
         });
     };
+    // Depois de um play no Soloist: sem o Spirc não chegam os avisos do Connect, e o Soloist leva uns segundos para
+    // assumir; a primeira consulta pode vir cedo demais, então vai mais uma.
+    let poll_soloist = |ctx: &Ctx| {
+        poll(ctx, 1500);
+        poll(ctx, 5000);
+    };
     // A ordem do aleatório (e o que o autoplay escolheu) só o Spotify sabe; a fila dele vem pela Web API.
     // Pelo Apple Music não: quem sorteia é o player dele, que manda a própria lista.
     let apple_shuffle = std::sync::atomic::AtomicBool::new(config::settings().apple_music);
@@ -1598,9 +1604,6 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let mut resume_on_soloist = false;
     // Fora de álbum e playlist, o Soloist recebe até 100 faixas: o índice (na nossa lista) onde a mandada acaba.
     let mut soloist_end = usize::MAX;
-    // Teste da chave de áudio ao abrir (uma vez): sem o Soloist, a recusa já aparece antes do primeiro play.
-    let (refused_tx, mut refused_rx) = unbounded_channel::<bool>();
-    let mut probed = false;
     // A sessão já conectou alguma vez; e o que carregou antes disso, só pela Web API (player sem conexão).
     let mut connected_once = false;
     let mut loaded_without_session = false;
@@ -1666,7 +1669,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             let (body, end) = soloist_body(&tracks, 0, None, target);
                             soloist_end = end;
                             tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
-                            poll(&ctx, 1500);
+                            poll_soloist(&ctx);
                         }
                     } else {
                         let _ = pcmd_tx.send(if st.playing {
@@ -1716,13 +1719,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
                     soloist_end = end;
                     tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
-                    poll(&ctx, 1500);
-                }
-            }
-            Some(true) = refused_rx.recv() => {
-                log::error!("o Spotify recusa a chave de áudio desta conta ao librespot");
-                if _soloist.is_none() {
-                    ctx.send(AppEvent::AudioRefused);
+                    poll_soloist(&ctx);
                 }
             }
             _ = wake_tick.tick() => {
@@ -1932,7 +1929,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         soloist_end = end;
                         let uri = tracks[index.min(tracks.len() - 1)].uri.clone();
                         tokio::spawn(continue_on_soloist(ctx.clone(), body, shuffle, repeat, uri));
-                        poll(&ctx, 1500);
+                        poll_soloist(&ctx);
                         continue;
                     }
                     Cmd::Toggle => PlayerCmd::Toggle,
@@ -1948,7 +1945,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let (body, end) = soloist_body(&tracks, i, context.as_deref(), 0);
                         soloist_end = end;
                         tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
-                        poll(&ctx, 1500);
+                        poll_soloist(&ctx);
                         continue;
                     }
                     Cmd::Next => PlayerCmd::Next,
@@ -1985,7 +1982,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             let (body, end) = soloist_body(&queue, i, c.as_deref(), start_ms);
                             soloist_end = end;
                             tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
-                            poll(&ctx, 1500);
+                            poll_soloist(&ctx);
                             continue;
                         }
                         PlayerCmd::Play { queue, index: i, context: c, start_ms, shuffle_start }
@@ -2497,17 +2494,6 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         if let Some(plan) = session.get_user_attribute("type") {
                             ctx.send(AppEvent::Plan(plan));
                         }
-                        // Com o Soloist ligado, ele já toca: não precisa testar.
-                        if !std::mem::replace(&mut probed, true) && _soloist.is_none() {
-                            if let Some(uri) = tracks.iter().chain(liked.iter()).map(|t| t.uri.clone()).find(|u| u.starts_with("spotify:track:")) {
-                                let (session, tx) = (session.clone(), refused_tx.clone());
-                                tokio::spawn(async move {
-                                    if let Some(refused) = player::audio_key_refused(&session, &uri).await {
-                                        let _ = tx.send(refused);
-                                    }
-                                });
-                            }
-                        }
                         ctx.session = session;
                         // Outro aparelho já pode estar tocando quando o Cyder abre.
                         poll(&ctx, 1500);
@@ -2539,18 +2525,18 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     PlayerOut::Refused => {
-                        log::error!("várias faixas seguidas não carregaram; provável recusa da chave de áudio");
+                        // Sem o player interno: o play pelo Spotify só sai pelo Soloist.
                         resume_on_soloist = true;
                         if soloist_ready {
                             resume_on_soloist = false;
                             let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
                             soloist_end = end;
                             tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));
-                            poll(&ctx, 1500);
+                            poll_soloist(&ctx);
                             continue;
                         }
                         if _soloist.is_some() {
-                            AppEvent::Notice("O Spotify recusou o áudio ao player do Cyder. A música continua pelo Soloist assim que ele ficar pronto.".into())
+                            AppEvent::Notice("O Spotify toca pelo Soloist: a música começa assim que ele ficar pronto.".into())
                         } else {
                             AppEvent::AudioRefused
                         }

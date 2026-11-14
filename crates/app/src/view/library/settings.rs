@@ -2,7 +2,7 @@
 //! (mesma fila e posição) um pouco depois da última mudança; as outras valem na hora.
 use std::time::{Duration, Instant};
 
-use cyder_core::{Cmd, config::{self, Accent, Quality, Settings, Theme}, images};
+use cyder_core::{Cmd, config::{self, Accent, Settings, Theme}, images};
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, ParentElement, SharedString, Styled, Window, div, img, prelude::*, px, rgba};
 
 use crate::theme;
@@ -11,7 +11,6 @@ use crate::view::{Ask, Cyder, Dialog, Help, KEEP_PLAYING, Phase, Tip, icon};
 /// Espera antes de religar o player: clicar em três opções seguidas religa uma vez só.
 pub(in crate::view) const RESTART_AFTER: Duration = Duration::from_millis(900);
 const MAX_W: f32 = 760.;
-const CACHE_SIZES: [(u32, &str); 3] = [(512, "512 MB"), (1024, "1 GB"), (4096, "4 GB")];
 
 fn size_label(bytes: u64) -> String {
     let mb = bytes as f64 / (1024. * 1024.);
@@ -21,16 +20,6 @@ fn size_label(bytes: u64) -> String {
 /// "2c38327a19a54c4f88c2b89af901246d" → "2c38…246d".
 fn masked(id: &str) -> String {
     if id.len() > 8 { format!("{}…{}", &id[..4], &id[id.len() - 4..]) } else { id.to_string() }
-}
-
-/// Opção que não vale agora (o som não sai do player do Cyder): apagada e sem responder ao mouse.
-fn dimmed(off: bool, row: AnyElement) -> AnyElement {
-    if !off {
-        return row;
-    }
-    div().relative().opacity(0.4).child(row)
-        .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll())
-        .into_any_element()
 }
 
 fn plan_label(plan: &str) -> String {
@@ -70,7 +59,6 @@ impl Cyder {
         if self.settings.send_errors != before.send_errors {
             crate::reports::set(self.settings.send_errors == Some(true));
         }
-        cyder_core::fx::set(self.settings.fx());
         KEEP_PLAYING.store(self.settings.keep_playing_on_close, std::sync::atomic::Ordering::Relaxed);
         #[cfg(windows)]
         if (self.settings.global_hotkeys, &self.settings.hotkeys) != (before.global_hotkeys, &before.hotkeys) {
@@ -104,8 +92,7 @@ impl Cyder {
         // Cada seção é um filho direto da rolagem: o índice no topo rola até ela (`scroll_to_item`).
         let mut sections: Vec<(&'static str, AnyElement)> = vec![
             ("Conta", self.account_section(cx)),
-            ("Reprodução", self.playback_section(window, cx)),
-            ("Som", self.sound_section(cx)),
+            ("Reprodução", self.playback_section(cx)),
             ("Aparência", self.appearance_section(cx)),
         ];
         #[cfg(windows)]
@@ -192,10 +179,10 @@ impl Cyder {
         ])
     }
 
-    fn playback_section(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn playback_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let s = self.settings.clone();
         let status = match self.player_status.clone() {
-            None => Self::row("Status: conectado", format!("Aparece como “{}” no Spotify Connect.", s.device_name()), div()),
+            None => Self::row("Status: conectado", "O Spotify toca pelo Soloist; o Apple Music, pelo player dele.".into(), div()),
             Some(why) => Self::row(
                 "Status: sem conexão",
                 // "Reconectando…" é nosso; o resto vem do librespot, em inglês: a frase amigável no lugar.
@@ -207,18 +194,7 @@ impl Cyder {
                 })),
             ),
         };
-        let quality = self.segmented(
-            "settings-quality",
-            [(Quality::Normal, "Normal"), (Quality::High, "Alta"), (Quality::VeryHigh, "Muito alta")],
-            s.quality,
-            |st, q| st.quality = q,
-            true,
-            cx,
-        );
-        let cache_sizes = self.segmented("settings-cache-size", CACHE_SIZES, s.audio_cache_mb, |st, mb| st.audio_cache_mb = mb, true, cx);
         let catalog = self.segmented("settings-catalog", [(false, "Spotify"), (true, "Apple Music")], s.apple_catalog, |st, on| st.apple_catalog = on, true, cx);
-        let why = self.sound_elsewhere();
-        let off = why.is_some();
         let mut rows = vec![
             status,
             self.soloist_row(cx),
@@ -227,23 +203,10 @@ impl Cyder {
                 "Toca a sua fila do Spotify pelo Apple Music, achando cada música nele. Precisa de assinatura do Apple Music; na primeira vez abre uma janela para entrar com o Apple ID.".into(),
                 self.toggle("settings-apple-music", s.apple_music, |st| st.apple_music = !st.apple_music, true, cx),
             ),
-            Self::row("Nome do aparelho", "Como este computador aparece no Spotify Connect. Enter para salvar.".into(), self.device_field(window, cx)),
-            dimmed(off, Self::row("Qualidade do áudio", "Mais qualidade usa mais internet e mais espaço no cache.".into(), quality)),
-            dimmed(off, Self::row("Normalizar volume", "Deixa músicas altas e baixas num volume parecido.".into(),
-                self.toggle("settings-normalize", s.normalize, |st| st.normalize = !st.normalize, true, cx))),
-            dimmed(off, Self::row("Autoplay", "Continua com músicas parecidas quando a lista acaba.".into(),
-                self.toggle("settings-autoplay", s.autoplay, |st| st.autoplay = !st.autoplay, true, cx))),
-            dimmed(off, Self::row("Sem pausa entre faixas", "Emenda uma faixa na outra, sem silêncio.".into(),
-                self.toggle("settings-gapless", s.gapless, |st| st.gapless = !st.gapless, true, cx))),
             Self::row("Continuar tocando ao fechar a janela", "Fechar esconde o Cyder no ícone da bandeja, perto do relógio. Para sair, use Ctrl+Q ou Sair no ícone.".into(),
                 self.toggle("settings-keep-playing", s.keep_playing_on_close, |st| st.keep_playing_on_close = !st.keep_playing_on_close, false, cx)),
             Self::row("Abrir com o Windows", "Abre o Cyder escondido no ícone da bandeja quando você entra no Windows, pronto para tocar.".into(),
                 self.toggle("settings-open-at-login", s.open_at_login, |st| st.open_at_login = !st.open_at_login, false, cx)),
-            dimmed(off, Self::row(
-                "Cache de áudio",
-                "Guarda o áudio baixado para não baixar de novo ao repetir.".into(),
-                self.toggle("settings-cache", s.audio_cache, |st| st.audio_cache = !st.audio_cache, true, cx),
-            )),
         ];
         // Com as duas contas, a pessoa escolhe de qual vêm a biblioteca, a tela inicial e a busca.
         if s.apple_music {
@@ -253,24 +216,16 @@ impl Cyder {
                 catalog,
             ));
         }
-        // O tamanho numa linha própria, só com o cache ligado: o seletor e o interruptor juntos confundiam.
-        if s.audio_cache {
-            rows.push(dimmed(off, Self::row("Tamanho do cache", "O áudio mais antigo sai quando o cache enche.".into(), cache_sizes)));
-        }
         // Sem o app oficial do Spotify, os links já abrem no Cyder; com ele, só se a pessoa pedir.
         #[cfg(windows)]
         if crate::protocol::other_app() {
             rows.push(Self::row("Abrir links do Spotify no Cyder", "Links spotify: de sites e mensagens abrem aqui, e não no app do Spotify.".into(),
                 self.toggle("settings-spotify-links", s.spotify_links, |st| st.spotify_links = !st.spotify_links, false, cx)));
         }
-        // Com o Soloist, a linha dele já explica; com outro aparelho, explica aqui.
-        if let Some(why) = why.filter(|_| self.soloist != cyder_core::soloist::Status::Ready) {
-            rows.insert(2, div().text_sm().text_color(rgba(theme::ink_2())).child(why).into_any_element());
-        }
         if let Some(note) = self.playback_note {
             rows.push(div().text_sm().text_color(rgba(theme::ink_2())).child(note).into_any_element());
         }
-        Self::section("Reprodução neste computador", rows)
+        Self::section("Reprodução", rows)
     }
 
     /// O Soloist: para contas em que o Spotify recusa o áudio ao player do Cyder.
@@ -282,7 +237,7 @@ impl Cyder {
                 return self.help_row(
                     "Player oficial do Spotify (Soloist)",
                     Help::Soloist,
-                    "Toca pelo player oficial do Spotify quando ele recusa o áudio desta conta ao Cyder. Precisa de uma chave sua (Premium).".into(),
+                    "O Spotify toca pelo player oficial dele, o Soloist: sem ele ligado, as músicas do Spotify não tocam no Cyder. Precisa de uma chave sua (Premium).".into(),
                     div().flex().gap_2()
                         .child(Self::secondary_button("settings-soloist-page", "Gerar chave").on_click(|_, _, cx| cx.open_url(KEY_PAGE)))
                         .child(Self::secondary_button("settings-soloist-on", "Ligar").on_click(cx.listener(|t, _, _, cx| { t.ask(crate::view::Ask::SoloistKey, String::new()); cx.notify(); }))),
@@ -291,101 +246,11 @@ impl Cyder {
             }
             Status::Starting(what) => what,
             Status::Pairing => format!("Falta parear, uma vez só: no app do Spotify, na mesma rede, escolha “{DEVICE_NAME}” nos aparelhos."),
-            Status::Ready => "Ligado: o Cyder toca pelo Soloist. As opções de som apagadas não valem nele.".into(),
+            Status::Ready => "Ligado: o Spotify toca pelo Soloist.".into(),
             Status::Failed(why) => why,
         };
         let off = off();
         self.help_row("Player oficial do Spotify (Soloist)", Help::Soloist, detail, off, cx)
-    }
-
-    /// O som não sai do player do Cyder: pelo Soloist (pareado, é por onde tudo toca) ou outro aparelho.
-    /// O texto diz por quê; None quando as opções de som valem.
-    fn sound_elsewhere(&self) -> Option<String> {
-        if self.soloist == cyder_core::soloist::Status::Ready {
-            return Some("Pelo Soloist, o som sai dele direto para o Windows e o Cyder não tem como mexer. Estas opções voltam a valer se você desligar o Soloist.".into());
-        }
-        self.remote.as_ref().map(|d| format!("Tocando em {d}: o som sai de lá, não do Cyder. Estas opções voltam a valer quando a música tocar aqui."))
-    }
-
-    /// Equalizador e transição suave: valem na hora, sem religar o player.
-    fn sound_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let s = self.settings.clone();
-        let fade = self.segmented("settings-fade", [(0, "Desligada"), (3, "3 s"), (6, "6 s"), (10, "10 s")], s.fade_secs, |st, v| st.fade_secs = v, false, cx);
-        let why = self.sound_elsewhere();
-        let off = why.is_some();
-        let mut rows = Vec::new();
-        if let Some(why) = why {
-            rows.push(div().text_sm().text_color(rgba(theme::ink_2())).child(why).into_any_element());
-        }
-        rows.push(dimmed(off, Self::row("Equalizador", "Ajusta graves, médios e agudos do que toca neste computador.".into(),
-            self.toggle("settings-eq", s.eq_on, |st| st.eq_on = !st.eq_on, false, cx))));
-        if s.eq_on {
-            let presets = div().flex().flex_wrap().gap_1().children(cyder_core::fx::PRESETS.iter().enumerate().map(|(i, (name, gains))| {
-                let on = s.eq == *gains;
-                let gains = *gains;
-                Self::focusable(("eq-preset", i))
-                    .h(px(30.))
-                    .px_3()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .aria_selected(on)
-                    .when(on, |d| d.bg(rgba(theme::ink_1())).text_color(rgba(theme::on_ink())))
-                    .when(!on, |d| d.bg(rgba(theme::wash(0x0f))).hover(|s| s.bg(rgba(theme::wash(0x1a)))))
-                    .on_click(cx.listener(move |t, _, _, cx| { t.change(|st| st.eq = gains, false); cx.notify(); }))
-                    .child(*name)
-            }));
-            rows.push(dimmed(off, presets.into_any_element()));
-            let bands = self.eq_bands(cx);
-            rows.push(dimmed(off, bands));
-        }
-        rows.push(dimmed(off, Self::row(
-            "Transição suave",
-            "Abaixa o fim de cada música e sobe o começo da próxima. Elas não tocam juntas: o player do Cyder toca uma por vez.".into(),
-            fade,
-        )));
-        Self::section("Som", rows)
-    }
-
-    /// As 6 faixas: barra do ganho (de −12 a +12 dB, a partir do meio) e botões de subir e descer 1 dB.
-    fn eq_bands(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        const H: f32 = 120.;
-        let gains = self.settings.eq;
-        let columns = cyder_core::fx::BANDS.iter().enumerate().map(|(i, &freq)| {
-            let g = gains[i];
-            let label = if freq >= 1000. { format!("{} kHz", (freq / 1000.).to_string().replace('.', ",")) } else { format!("{freq} Hz") };
-            let half = H / 2.;
-            let fill = (g.abs() / cyder_core::fx::GAIN_MAX * half).min(half);
-            let bar = div().relative().w(px(10.)).h(px(H)).rounded_full().bg(rgba(theme::wash(0x14)))
-                .child(div().absolute().left_0().right_0().top(px(half - 0.5)).h(px(1.)).bg(rgba(theme::wash(0x40))))
-                .child(div().absolute().left_0().right_0().rounded_full().bg(rgba(theme::ink_1()))
-                    .when(g >= 0., |d| d.top(px(half - fill)).h(px(fill)))
-                    .when(g < 0., |d| d.top(px(half)).h(px(fill))));
-            let step = |id: &'static str, label: SharedString, icon_name: &'static str, by: f32| {
-                Self::focusable((id, i))
-                    .size(px(28.))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .hover(|s| s.bg(rgba(theme::wash(0x1a))))
-                    .aria_label(label)
-                    .on_click(cx.listener(move |t, _, _, cx| {
-                        t.change(|st| st.eq[i] = (st.eq[i] + by).clamp(-cyder_core::fx::GAIN_MAX, cyder_core::fx::GAIN_MAX), false);
-                        cx.notify();
-                    }))
-                    .child(icon(icon_name, 14., theme::ink_2()))
-            };
-            div().flex_1().flex().flex_col().items_center().gap_1()
-                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child(if g > 0. { format!("+{g:.0} dB") } else { format!("{g:.0} dB") }))
-                .child(step("eq-up", format!("Aumentar {label}").into(), "chevron-up", 1.))
-                .child(bar)
-                .child(step("eq-down", format!("Diminuir {label}").into(), "chevron-down", -1.))
-                .child(div().text_xs().text_color(rgba(theme::ink_3())).child(label.clone()))
-        });
-        div().flex().gap_2().children(columns).into_any_element()
     }
 
     fn appearance_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -723,55 +588,6 @@ impl Cyder {
                     .child(label)
             }))
             .into_any_element()
-    }
-
-    fn device_field(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let focused = self.device_focus.is_focused(window);
-        let caret = || div().flex_none().w(px(1.5)).h(px(16.)).bg(rgba(theme::ink_1()));
-        div()
-            .id("settings-device-name")
-            .key_context("TextField")
-            .track_focus(&self.device_focus)
-            .aria_label("Nome do aparelho")
-            .w(px(220.))
-            .h(px(34.))
-            .px_3()
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .rounded(px(8.))
-            .bg(rgba(theme::shade(0x40)))
-            .border_1()
-            .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
-            .text_sm()
-            .cursor_text()
-            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.device_focus, cx); cx.notify(); }))
-            .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.device_key(e, window, cx)))
-            .child(self.field_text(self.device_draft.clone(), focused))
-            .when(focused, |d| d.child(caret()))
-            .into_any_element()
-    }
-
-    /// Enter salva o nome (e religa o player); Esc desfaz.
-    fn device_key(&mut self, e: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let k = &e.keystroke;
-        match k.key.as_str() {
-            "enter" => {
-                let name = self.device_draft.trim().to_string();
-                self.change(|st| st.device_name = name, true);
-                self.device_draft = self.settings.device_name();
-                window.focus(&self.focus, cx);
-            }
-            "escape" => {
-                self.device_draft = self.settings.device_name();
-                window.focus(&self.focus, cx);
-            }
-            _ if super::super::type_into(&mut self.device_draft, k, &mut self.text_selected, cx) => self.device_draft = self.device_draft.chars().take(40).collect(),
-            _ => return,
-        }
-        cx.stop_propagation();
-        cx.notify();
     }
 }
 

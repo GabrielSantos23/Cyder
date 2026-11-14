@@ -7,7 +7,6 @@ pub mod auth;
 pub mod cache;
 pub mod config;
 pub mod engine;
-pub mod fx;
 pub mod history;
 pub mod images;
 pub mod internal;
@@ -21,7 +20,6 @@ pub mod player;
 pub mod soloist;
 pub mod stats;
 pub mod update;
-mod sink;
 
 use serde::{Deserialize, Serialize};
 

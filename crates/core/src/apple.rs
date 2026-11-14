@@ -424,21 +424,7 @@ impl State {
 
 /// Conecta a sessão do Spotify (as letras, os metadados e a Web API usam) e fica tocando pelo Apple Music até o engine fechar o canal.
 pub async fn run(session: Session, credentials: Credentials, volume: u16, mut cmds: UnboundedReceiver<PlayerCmd>, out: UnboundedSender<PlayerOut>, ui: UnboundedSender<AppEvent>) {
-    let mut session = session;
-    let mut credentials = credentials;
-    // Sem o Spirc, ninguém mais conecta a sessão.
-    loop {
-        match session.connect(credentials.clone(), true).await {
-            Ok(()) => break,
-            Err(e) => {
-                let _ = out.send(PlayerOut::Offline(e.to_string()));
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                if let Ok((s, c)) = crate::auth::audio_session(&crate::config::cache_dir()).await {
-                    (session, credentials) = (s, c);
-                }
-            }
-        }
-    }
+    let session = crate::player::connect_session(session, credentials, &out).await;
     let _ = out.send(PlayerOut::Connected(session.clone()));
     let (resolve, mut resolved) = unbounded_channel();
     let mut state = State {

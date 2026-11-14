@@ -225,11 +225,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Os efeitos de áudio que valem com estas configurações.
-    pub fn fx(&self) -> crate::fx::Settings {
-        crate::fx::Settings { eq: self.eq_on.then_some(self.eq), fade_ms: self.fade_secs * 1000 }
-    }
-
     /// Nome no Connect; vazio vira "Cyder".
     pub fn device_name(&self) -> String {
         let name = self.device_name.trim();
