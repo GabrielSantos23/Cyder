@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::lyrics::BROWSER_UA;
 
 const SITE: &str = "https://music.apple.com";
-const CATALOG: &str = "https://amp-api.music.apple.com/v1/catalog";
+const AMP: &str = "https://amp-api.music.apple.com";
 const TOKEN_KEY: &str = "apple-music-token";
 /// O token dura meses; trocado antes disso por garantia, e na hora se o catálogo recusar.
 const TOKEN_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -58,10 +58,15 @@ pub(crate) async fn catalog(http: &reqwest::Client, path: &str) -> Result<Value,
 
 /// O mesmo, no catálogo de outra loja (os IDs e o que existe mudam de país para país).
 pub(crate) async fn catalog_in(http: &reqwest::Client, storefront: &str, path: &str) -> Result<Value, String> {
+    amp(http, &format!("/v1/catalog/{storefront}{path}")).await
+}
+
+/// Qualquer caminho da `amp-api` (catálogo, editorial), com o token do site.
+pub(crate) async fn amp(http: &reqwest::Client, path: &str) -> Result<Value, String> {
     let mut refreshed = false;
     loop {
         let tok = token(http, refreshed).await?;
-        let r = http.get(format!("{CATALOG}/{storefront}{path}")).header("user-agent", BROWSER_UA).header("origin", SITE).bearer_auth(tok).send().await.map_err(err)?;
+        let r = http.get(format!("{AMP}{path}")).header("user-agent", BROWSER_UA).header("origin", SITE).bearer_auth(tok).send().await.map_err(err)?;
         if r.status().as_u16() == 401 && !refreshed {
             refreshed = true;
             continue;

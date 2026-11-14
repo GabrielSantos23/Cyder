@@ -163,6 +163,10 @@ impl State {
         self.send(PlayerOut::TrackChanged(i));
         self.set_playback(false, ms);
         let Some(storefront) = self.storefront.clone() else { return };
+        // Do catálogo da Apple: o ID já vem na URI.
+        if let Some(id) = crate::apple_catalog::song_id(&t.uri) {
+            return self.found(i, &t.uri, Ok(Some(id.into())));
+        }
         match self.ids.get(&t.uri).cloned() {
             Some(id) => self.found(i, &t.uri, Ok(id)),
             None => {

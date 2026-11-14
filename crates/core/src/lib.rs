@@ -2,6 +2,7 @@
 //! Não depende de UI (doc 03): a UI só manda `Cmd` e recebe `AppEvent`.
 pub mod api;
 pub mod apple;
+pub mod apple_catalog;
 pub mod auth;
 pub mod cache;
 pub mod config;

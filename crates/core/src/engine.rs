@@ -589,6 +589,13 @@ impl Ctx {
             cache::save("history", &history);
             self.send(AppEvent::Recent(history));
         }
+        // Tocando pelo Apple Music, as prateleiras da tela inicial dele vêm logo depois das tocadas recentemente.
+        if config::settings().apple_music {
+            match crate::apple_catalog::home(&self.http, &self.session.country().to_lowercase()).await {
+                Ok(apple) => shelves.extend(apple),
+                Err(e) => log::warn!("tela inicial do Apple Music: {e}"),
+            }
+        }
         shelves.extend(rest);
         shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: top_artists });
         shelves.retain(|s| !s.cards.is_empty());
@@ -713,7 +720,7 @@ impl Ctx {
     fn check_saved(&self, tracks: &[Track]) {
         let uris: Vec<String> = {
             let known = self.saved_known.lock().unwrap_or_else(|e| e.into_inner());
-            tracks.iter().take(SAVED_CHECK_MAX).filter(|t| !known.contains(&t.uri)).map(|t| t.uri.clone()).collect()
+            tracks.iter().take(SAVED_CHECK_MAX).filter(|t| t.uri.starts_with("spotify:") && !known.contains(&t.uri)).map(|t| t.uri.clone()).collect()
         };
         if uris.is_empty() {
             return;
@@ -1040,6 +1047,7 @@ impl Ctx {
             }
         }
         let fresh = match card.kind {
+            _ if card.uri.starts_with(crate::apple_catalog::URI) => crate::apple_catalog::page(&self.http, &self.session.country().to_lowercase(), &card).await,
             // Pela sessão: funciona para playlists de qualquer dono, inclusive as do Spotify.
             // Aos poucos: o primeiro pedaço (ou o tanto que já estava no cache) e o resto conforme a lista rola.
             Kind::Playlist => match internal::playlist(&self.session, &card.id, 0, cached.as_ref().map_or(PLAYLIST_CHUNK, |p| p.more_from.unwrap_or(p.total.max(p.tracks.len())).max(PLAYLIST_CHUNK))).await {
@@ -1983,6 +1991,11 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(ctx.clone().set_saved(card, save));
                         continue;
                     }
+                    // As curtidas são do Spotify: uma faixa do catálogo da Apple não tem como entrar nelas.
+                    Cmd::Like { track, .. } if track.uri.starts_with(crate::apple_catalog::URI) => {
+                        ctx.send(AppEvent::Notice("Faixas do Apple Music não entram nas curtidas do Spotify.".into()));
+                        continue;
+                    }
                     Cmd::Like { track, on } => {
                         tokio::spawn(ctx.clone().like(track, on));
                         continue;
@@ -2377,6 +2390,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     Cmd::RestartPlayer if config::settings().apple_music != apple_out => {
                         apple_out = !apple_out;
                         apple_shuffle.store(apple_out, std::sync::atomic::Ordering::Relaxed);
+                        // A tela inicial ganha ou perde as prateleiras do Apple Music.
+                        tokio::spawn(ctx.clone().refresh_home());
                         soloist_ready = soloist_up && !apple_out;
                         let (tx, rx) = unbounded_channel();
                         // Fechar o canal encerra o player antigo.
