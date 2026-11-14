@@ -180,6 +180,8 @@ pub struct Settings {
     /// Cada um no formato do GPUI ("ctrl-alt-space").
     pub global_hotkeys: bool,
     pub hotkeys: [String; 6],
+    /// Tocar a fila pelo Apple Music em vez do librespot (doc 13).
+    pub apple_music: bool,
 }
 
 impl Default for Settings {
@@ -211,6 +213,7 @@ impl Default for Settings {
             send_errors: None,
             global_hotkeys: false,
             hotkeys: ["ctrl-alt-space", "ctrl-alt-right", "ctrl-alt-left", "ctrl-alt-up", "ctrl-alt-down", "ctrl-alt-l"].map(String::from),
+            apple_music: false,
         }
     }
 }

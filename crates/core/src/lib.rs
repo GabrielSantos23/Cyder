@@ -1,6 +1,7 @@
 //! Core do app: Spotify (áudio via librespot, Web API com Client ID do usuário), letras, imagens.
 //! Não depende de UI (doc 03): a UI só manda `Cmd` e recebe `AppEvent`.
 pub mod api;
+pub mod apple;
 pub mod auth;
 pub mod cache;
 pub mod config;

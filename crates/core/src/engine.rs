@@ -113,6 +113,8 @@ pub enum Cmd {
     Relogin,
     /// Chave do Soloist (o player oficial do Spotify) nova, ou None para desligar.
     SoloistKey(Option<String>),
+    /// Estado do player do Apple Music do app.
+    Apple(crate::apple::AppleState),
 }
 
 pub enum AppEvent {
@@ -208,6 +210,8 @@ pub enum AppEvent {
     /// Abrir no navegador (autorizar o Last.fm).
     OpenUrl(String),
     Soloist(crate::soloist::Status),
+    /// Pedido para o player do Apple Music do app.
+    Apple(crate::apple::AppleCmd),
     /// O Spotify recusa o áudio desta conta ao player do Cyder e o Soloist não está ligado.
     AudioRefused,
 }
@@ -1307,6 +1311,15 @@ fn fetch_extras(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, session
     });
 }
 
+/// O player do librespot ou, com a saída Apple Music, o do apple.rs: os dois falam `PlayerCmd` e `PlayerOut`.
+fn spawn_player(apple: bool, session: librespot::core::session::Session, credentials: librespot::core::authentication::Credentials, volume: u16, cmds: UnboundedReceiver<PlayerCmd>, pout: UnboundedSender<PlayerOut>, out: UnboundedSender<AppEvent>) {
+    if apple {
+        tokio::spawn(crate::apple::run(session, credentials, volume, cmds, pout, out));
+    } else {
+        tokio::spawn(player::run(config::cache_dir(), session, credentials, volume, cmds, pout));
+    }
+}
+
 async fn run(mut cmds: UnboundedReceiver<Cmd>, out: UnboundedSender<AppEvent>) {
     let http = reqwest::Client::builder()
         // Sem isto uma conexão que trava deixa a tela carregando para sempre.
@@ -1520,9 +1533,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // Depois de o PC dormir, uma atualização só, não uma por meia hora dormida.
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let (pcmd_tx, pcmd_rx) = unbounded_channel();
+    let (mut pcmd_tx, pcmd_rx) = unbounded_channel();
     let (pout_tx, mut pout_rx) = unbounded_channel();
-    tokio::spawn(player::run(config::cache_dir(), ready.session, ready.credentials, volume, pcmd_rx, pout_tx));
+    let mut apple_out = config::settings().apple_music;
+    spawn_player(apple_out, ready.session, ready.credentials, volume, pcmd_rx, pout_tx.clone(), out.clone());
     let _ = pcmd_tx.send(PlayerCmd::SetShuffle(shuffle));
     let _ = pcmd_tx.send(PlayerCmd::SetRepeat(repeat));
     let _ = pcmd_tx.send(PlayerCmd::Load { queue: tracks.clone(), index, context: context.clone(), position_ms: anchor.0 });
@@ -1531,6 +1545,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     let (soloist_tx, mut soloist_rx) = unbounded_channel();
     let mut _soloist = soloist::key().map(|key| soloist::start(ctx.http.clone(), key, soloist_tx.clone()));
     let mut soloist_ready = false;
+    // O Soloist pronto, mesmo com o Apple Music tocando (aí ele fica de lado: `soloist_ready` só vale sem o Apple Music).
+    let mut soloist_up = false;
     // O Spotify recusou o áudio: quando o Soloist ficar pronto, a fila continua por ele sem pedir nada.
     let mut resume_on_soloist = false;
     // Fora de álbum e playlist, o Soloist recebe até 100 faixas: o índice (na nossa lista) onde a mandada acaba.
@@ -1646,7 +1662,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
             }
             _ = remote_tick.tick(), if remote.is_some() => poll(&ctx, 0),
             Some(st) = soloist_rx.recv() => {
-                soloist_ready = st == soloist::Status::Ready;
+                soloist_up = st == soloist::Status::Ready;
+                soloist_ready = soloist_up && !apple_out;
                 ctx.send(AppEvent::Soloist(st));
                 if soloist_ready && std::mem::take(&mut resume_on_soloist) && !tracks.is_empty() {
                     let (body, end) = soloist_body(&tracks, index, context.as_deref(), anchor.0);
@@ -2351,7 +2368,30 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         fetch_extras(http, out, &ctx.session, &tracks, i);
                         continue;
                     }
+                    // Trocou a saída (librespot ou Apple Music): um player novo no lugar, na mesma fila e posição.
+                    Cmd::RestartPlayer if config::settings().apple_music != apple_out => {
+                        apple_out = !apple_out;
+                        soloist_ready = soloist_up && !apple_out;
+                        let (tx, rx) = unbounded_channel();
+                        // Fechar o canal encerra o player antigo.
+                        pcmd_tx = tx;
+                        let (pout, out2) = (pout_tx.clone(), out.clone());
+                        tokio::spawn(async move {
+                            match auth::audio_session(&config::cache_dir()).await {
+                                Ok((session, credentials)) => spawn_player(apple_out, session, credentials, volume, rx, pout, out2),
+                                Err(e) => drop(pout.send(PlayerOut::Offline(e))),
+                            }
+                        });
+                        let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
+                        playing = false;
+                        ctx.send(AppEvent::Playback { playing, position_ms });
+                        let _ = pcmd_tx.send(PlayerCmd::SetShuffle(shuffle));
+                        let _ = pcmd_tx.send(PlayerCmd::SetRepeat(repeat));
+                        let _ = pcmd_tx.send(PlayerCmd::Load { queue: tracks.clone(), index, context: context.clone(), position_ms });
+                        continue;
+                    }
                     Cmd::RestartPlayer => PlayerCmd::Restart,
+                    Cmd::Apple(st) => PlayerCmd::Apple(st),
                     Cmd::Relogin => {
                         auth::forget_web_login();
                         return Flow::Relogin;
@@ -2362,7 +2402,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             continue;
                         }
                         // Trocar a tarefa fecha o Soloist que estava aberto.
-                        soloist_ready = false;
+                        (soloist_ready, soloist_up) = (false, false);
                         _soloist = key.map(|key| soloist::start(ctx.http.clone(), key, soloist_tx.clone()));
                         ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
                         continue;

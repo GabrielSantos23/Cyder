@@ -331,7 +331,7 @@ fn ttml_plain(raw: &str) -> Vec<String> {
 }
 
 /// ISRC da gravação, para achar exatamente esta versão no Apple Music.
-async fn isrc(session: &librespot::core::Session, t: &Track) -> Option<String> {
+pub(crate) async fn isrc(session: &librespot::core::Session, t: &Track) -> Option<String> {
     use librespot::metadata::{Metadata, Track as MetaTrack};
     if !crate::internal::connected(session) {
         return None;

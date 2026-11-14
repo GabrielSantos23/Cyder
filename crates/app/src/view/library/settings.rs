@@ -221,6 +221,11 @@ impl Cyder {
         let mut rows = vec![
             status,
             self.soloist_row(cx),
+            Self::row(
+                "Tocar pelo Apple Music",
+                "Toca a sua fila do Spotify pelo Apple Music, achando cada música nele. Precisa de assinatura do Apple Music; na primeira vez abre uma janela para entrar com o Apple ID.".into(),
+                self.toggle("settings-apple-music", s.apple_music, |st| st.apple_music = !st.apple_music, true, cx),
+            ),
             Self::row("Nome do aparelho", "Como este computador aparece no Spotify Connect. Enter para salvar.".into(), self.device_field(window, cx)),
             dimmed(off, Self::row("Qualidade do áudio", "Mais qualidade usa mais internet e mais espaço no cache.".into(), quality)),
             dimmed(off, Self::row("Normalizar volume", "Deixa músicas altas e baixas num volume parecido.".into(),

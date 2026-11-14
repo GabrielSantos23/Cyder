@@ -49,6 +49,8 @@ pub enum PlayerCmd {
     MoveNext { from_uri: String, to_uri: String },
     /// Outro aparelho está tocando a faixa `index` da fila: o próximo play por aqui continua dela, nesse contexto.
     Follow { index: usize, context: Option<String>, position_ms: u32 },
+    /// Estado do MusicKit, só para a saída Apple Music (apple.rs).
+    Apple(crate::apple::AppleState),
 }
 
 pub enum PlayerOut {
@@ -263,6 +265,7 @@ impl State {
             PlayerCmd::Follow { .. } => {}
             PlayerCmd::MoveNext { from_uri, to_uri } if self.loaded => self.report(self.spirc.move_next_track(from_uri, to_uri)),
             PlayerCmd::MoveNext { .. } => {}
+            PlayerCmd::Apple(_) => {}
             PlayerCmd::Insert { at, track } => {
                 let at = at.min(self.queue.len());
                 self.queue.insert(at, track);

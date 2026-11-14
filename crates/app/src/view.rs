@@ -851,7 +851,11 @@ impl Cyder {
         cx.spawn(async move |this, cx| {
             while let Some(ev) = events.recv().await {
                 if this.update(cx, |s, cx| {
-                    s.apply(ev);
+                    match ev {
+                        #[cfg(windows)]
+                        AppEvent::Apple(cmd) => s.apple_cmd(cmd, cx),
+                        ev => s.apply(ev),
+                    }
                     s.sync_media();
                     #[cfg(windows)]
                     s.sync_jumplist();
@@ -1316,6 +1320,8 @@ impl Cyder {
             }
             AppEvent::Lastfm(user) => self.lastfm_user = user,
             AppEvent::Soloist(status) => self.soloist = status,
+            // No Windows, o laço dos eventos manda direto ao player (precisa do `cx`).
+            AppEvent::Apple(_) => {}
             AppEvent::AudioRefused => {
                 if self.dialog.is_none() {
                     self.dialog = Some(Dialog::Help(Help::Soloist));

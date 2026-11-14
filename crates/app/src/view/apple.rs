@@ -3,10 +3,8 @@
 //! O WebView2 roda numa thread própria, com uma janela dele: criado dentro da janela do GPUI, o `wry` processa as
 //! mensagens do Windows no meio de uma atualização do GPUI, e o GPUI entra nele mesmo (RefCell already borrowed).
 //! A mesma janela vira o "Entrar no Apple Music" quando falta o login.
-use std::time::Duration;
-
-use gpui::{Context, Window};
-use serde::Deserialize;
+use gpui::Context;
+use cyder_core::apple::{AppleCmd, AppleState};
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
@@ -16,6 +14,7 @@ use tao::{
 use wry::{WebContext, WebViewBuilder, WebViewBuilderExtWindows};
 
 use super::Cyder;
+use cyder_core::Cmd;
 
 const SITE: &str = "https://music.apple.com/";
 
@@ -32,7 +31,8 @@ const BRIDGE: &str = r#"
     const it = mk.nowPlayingItem;
     send({ authorized: mk.isAuthorized, playing: mk.isPlaying,
       position_ms: Math.round((mk.currentPlaybackTime || 0) * 1000), duration_ms: Math.round((mk.currentPlaybackDuration || 0) * 1000),
-      song: it ? String(it.id) : null });
+      song: it ? String(it.id) : null, storefront: mk.storefrontId || null,
+      ended: [MusicKit.PlaybackStates.ended, MusicKit.PlaybackStates.completed].includes(mk.playbackState) });
   };
   ready().then(mk => {
     // Logo depois do login o site ainda não sabe da assinatura e só toca a prévia (90 s); recarregado, toca a faixa inteira.
@@ -45,7 +45,8 @@ const BRIDGE: &str = r#"
     state(mk);
   });
   window.cyder = {
-    play: id => run(mk => mk.setQueue({ song: id, startPlaying: true })),
+    play: (id, ms) => run(async mk => { await mk.setQueue({ song: id, startPlaying: true }); if (ms > 0) await mk.seekToTime(ms / 1000); }),
+    resume: () => run(mk => mk.play()),
     toggle: () => run(mk => mk.isPlaying ? mk.pause() : mk.play()),
     pause: () => run(mk => mk.pause()),
     seek: ms => run(mk => mk.seekToTime(ms / 1000)),
@@ -53,17 +54,6 @@ const BRIDGE: &str = r#"
   };
 })();
 "#;
-
-/// O que o MusicKit contou por último.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(super) struct AppleState {
-    pub authorized: bool,
-    pub playing: bool,
-    pub position_ms: u32,
-    pub duration_ms: u32,
-    /// ID da música no catálogo da Apple.
-    pub song: Option<String>,
-}
 
 #[derive(Debug)]
 pub(super) enum AppleEvent {
@@ -102,22 +92,16 @@ impl ApplePlayer {
         let _ = self.proxy.send_event(Msg::Js(format!("window.cyder && window.cyder.{js}")));
     }
 
-    pub fn play(&self, song: &str) {
-        // O ID vira texto JSON: nada do catálogo entra cru no script.
-        self.call(&format!("play({})", serde_json::Value::from(song)));
-    }
-
-    pub fn toggle(&self) {
-        self.call("toggle()");
-    }
-
-    pub fn seek(&self, ms: u32) {
-        self.call(&format!("seek({ms})"));
-    }
-
-    /// 0.0 a 1.0.
-    pub fn volume(&self, v: f32) {
-        self.call(&format!("volume({})", v.clamp(0., 1.)));
+    /// Faz o que o engine pediu.
+    fn run(&self, cmd: AppleCmd) {
+        match cmd {
+            // O ID vira texto JSON: nada do catálogo entra cru no script.
+            AppleCmd::Play { song, start_ms } => self.call(&format!("play({}, {start_ms})", serde_json::Value::from(song))),
+            AppleCmd::Pause => self.call("pause()"),
+            AppleCmd::Resume => self.call("resume()"),
+            AppleCmd::Seek(ms) => self.call(&format!("seek({ms})")),
+            AppleCmd::Volume(v) => self.call(&format!("volume({})", v.clamp(0., 1.))),
+        }
     }
 
     /// Mostra a janela do site (para entrar com o Apple ID) ou esconde de novo.
@@ -173,8 +157,16 @@ fn run(ready: std::sync::mpsc::Sender<Result<EventLoopProxy<Msg>, String>>, even
 }
 
 impl Cyder {
+    /// Pedido do engine para o player; o primeiro abre o WebView2.
+    pub(super) fn apple_cmd(&mut self, cmd: AppleCmd, cx: &mut Context<Self>) {
+        self.start_apple(cx);
+        if let Some(apple) = &self.apple {
+            apple.run(cmd);
+        }
+    }
+
     /// Abre o player do Apple Music escondido.
-    pub fn start_apple(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_apple(&mut self, cx: &mut Context<Self>) {
         if self.apple.is_some() {
             return;
         }
@@ -198,13 +190,16 @@ impl Cyder {
             }
         })
         .detach();
-        self.apple_test(window, cx);
     }
 
     fn apple_event(&mut self, ev: AppleEvent) {
         let Some(apple) = self.apple.as_mut() else { return };
         match ev {
-            AppleEvent::Error(e) => log::warn!("apple music: {e}"),
+            AppleEvent::Error(e) => {
+                log::warn!("apple music: {e}");
+                let state = AppleState { error: Some(e), ..apple.state.clone() };
+                self.send(Cmd::Apple(state));
+            }
             AppleEvent::State(state) => {
                 if state.authorized != apple.state.authorized || state.playing != apple.state.playing || state.song != apple.state.song {
                     log::info!("apple music: {state:?}");
@@ -213,42 +208,10 @@ impl Cyder {
                 if state.authorized != apple.state.authorized || apple.state == AppleState::default() {
                     apple.show(!state.authorized);
                 }
-                apple.state = state;
+                apple.state = state.clone();
+                self.send(Cmd::Apple(state));
             }
         }
-    }
-
-    /// shortcut: teste da fase 1 (doc 13) por `CYDER_APPLE_TEST=<id da música>`, sem tela; sai quando o engine usar o player (fase 2).
-    fn apple_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(song) = std::env::var("CYDER_APPLE_TEST") else { return };
-        cx.spawn_in(window, async move |this, cx| {
-            let executor = cx.background_executor().clone();
-            let wait = |s| executor.timer(Duration::from_secs(s));
-            // Espera o login (a pessoa pode estar entrando agora).
-            loop {
-                wait(1).await;
-                match this.read_with(cx, |s, _| s.apple.as_ref().is_some_and(|a| a.state.authorized)) {
-                    Ok(true) => break,
-                    Ok(false) => {}
-                    Err(_) => return,
-                }
-            }
-            let steps: [(u64, &str, Box<dyn Fn(&ApplePlayer)>); 5] = [
-                (0, "tocar", Box::new(move |a| a.play(&song))),
-                (10, "ir para 1:00", Box::new(|a| a.seek(60_000))),
-                (5, "volume 30%", Box::new(|a| a.volume(0.3))),
-                (5, "pausar", Box::new(|a| a.toggle())),
-                (4, "continuar com volume 100%", Box::new(|a| { a.volume(1.); a.toggle(); })),
-            ];
-            for (after, name, step) in steps {
-                wait(after).await;
-                log::info!("apple music teste: {name}");
-                if this.update(cx, |s, _| s.apple.as_ref().map(|a| step(a))).is_err() {
-                    return;
-                }
-            }
-        })
-        .detach();
     }
 }
 

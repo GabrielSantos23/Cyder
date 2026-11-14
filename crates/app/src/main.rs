@@ -327,10 +327,6 @@ fn main() {
                     v.attach_jumplist(cx);
                     #[cfg(windows)]
                     v.attach_hotkeys(cx);
-                    #[cfg(windows)]
-                    if std::env::var_os("CYDER_APPLE_TEST").is_some() {
-                        v.start_apple(window, cx);
-                    }
                 });
                 window.focus(&view.read(cx).focus.clone(), cx);
                 view
