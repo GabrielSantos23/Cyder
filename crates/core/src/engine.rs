@@ -1515,7 +1515,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
         });
     };
     // A ordem do aleatório (e o que o autoplay escolheu) só o Spotify sabe; a fila dele vem pela Web API.
+    // Pelo Apple Music não: quem sorteia é o player dele, que manda a própria lista.
+    let apple_shuffle = std::sync::atomic::AtomicBool::new(config::settings().apple_music);
     let up_next = |ctx: &Ctx, delay_ms: u64| {
+        if apple_shuffle.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let ctx = ctx.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -2371,6 +2376,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     // Trocou a saída (librespot ou Apple Music): um player novo no lugar, na mesma fila e posição.
                     Cmd::RestartPlayer if config::settings().apple_music != apple_out => {
                         apple_out = !apple_out;
+                        apple_shuffle.store(apple_out, std::sync::atomic::Ordering::Relaxed);
                         soloist_ready = soloist_up && !apple_out;
                         let (tx, rx) = unbounded_channel();
                         // Fechar o canal encerra o player antigo.

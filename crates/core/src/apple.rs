@@ -50,6 +50,16 @@ const DRIFT_MS: u32 = 2000;
 /// Como no Spotify: depois de 3 s, o "anterior" volta ao começo da faixa.
 const PREV_RESTART_MS: u32 = 3000;
 
+/// Sorteio sem dependência (xorshift com semente do relógio): basta para embaralhar uma fila.
+fn shuffled(mut items: Vec<usize>) -> Vec<usize> {
+    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0x9E37_79B9, |d| d.as_nanos() as u64) | 1;
+    for i in (1..items.len()).rev() {
+        (x ^= x << 13, x ^= x >> 7, x ^= x << 17);
+        items.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+    items
+}
+
 fn norm(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
@@ -96,6 +106,8 @@ struct State {
     /// O MusicKit já tocou esta faixa: só então um "acabou" é dela (repetindo, o ID é o mesmo da vez anterior).
     heard: bool,
     misses: u32,
+    /// No aleatório, as próximas faixas (índices da fila) na ordem sorteada; cada uma toca uma vez.
+    order: Vec<usize>,
     /// Loja da conta, do MusicKit; até ela chegar, a faixa espera para ser procurada.
     storefront: Option<String>,
     authorized: bool,
@@ -125,6 +137,19 @@ impl State {
     fn set_playback(&mut self, playing: bool, position_ms: u32) {
         (self.playing, self.anchor) = (playing, (position_ms, Instant::now()));
         self.send(PlayerOut::Playback { playing, position_ms });
+    }
+
+    /// Sorteia de novo a ordem do aleatório (tudo menos a faixa atual) e mostra na tela.
+    fn reshuffle(&mut self) {
+        self.order = shuffled((0..self.queue.len()).filter(|&i| i != self.index).collect());
+        self.send_up_next();
+    }
+
+    /// No aleatório, a lista "a seguir" da tela é a ordem daqui (a do Spotify não vale para o Apple Music).
+    fn send_up_next(&self) {
+        if self.shuffle {
+            let _ = self.ui.send(AppEvent::UpNext(self.order.iter().take(100).filter_map(|&i| self.queue.get(i).cloned()).collect()));
+        }
     }
 
     fn send_modes(&self) {
@@ -189,10 +214,13 @@ impl State {
         }
         let next = if auto && self.repeat == Repeat::One {
             Some(self.index)
-        } else if self.shuffle && n > 1 {
-            // shortcut: aleatório sorteia a cada faixa (pode repetir antes de tocar todas); guardar uma ordem se incomodar.
-            let r = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
-            Some((self.index + 1 + r % (n - 1)) % n)
+        } else if self.shuffle {
+            if self.order.is_empty() && self.repeat == Repeat::All {
+                self.reshuffle();
+            }
+            let next = (!self.order.is_empty()).then(|| self.order.remove(0));
+            self.send_up_next();
+            next
         } else if self.index + 1 < n {
             Some(self.index + 1)
         } else {
@@ -214,6 +242,9 @@ impl State {
             PlayerCmd::Load { queue, index, position_ms, .. } | PlayerCmd::Reload { queue, index, position_ms } if !self.playing => {
                 (self.queue, self.index, self.start_ms, self.loaded) = (queue, index, position_ms, false);
                 self.set_playback(false, position_ms);
+                if self.shuffle {
+                    self.reshuffle();
+                }
             }
             PlayerCmd::Load { queue, index, position_ms, .. } | PlayerCmd::Reload { queue, index, position_ms } => {
                 let same = self.queue.get(self.index).map(|t| &t.uri) == queue.get(index).map(|t| &t.uri);
@@ -223,6 +254,9 @@ impl State {
                 } else {
                     self.start(index, position_ms);
                 }
+                if self.shuffle {
+                    self.reshuffle();
+                }
             }
             PlayerCmd::Play { queue, index, start_ms, shuffle_start, .. } => {
                 if queue.is_empty() {
@@ -231,6 +265,9 @@ impl State {
                 self.queue = queue;
                 let i = if shuffle_start { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize) % self.queue.len() } else { index };
                 self.start(i, start_ms);
+                if self.shuffle {
+                    self.reshuffle();
+                }
             }
             PlayerCmd::Toggle if !self.loaded => self.start(self.index, self.start_ms),
             PlayerCmd::Toggle => self.apple(if self.playing { AppleCmd::Pause } else { AppleCmd::Resume }),
@@ -247,6 +284,11 @@ impl State {
             PlayerCmd::Seek(ms) => self.start_ms = ms,
             PlayerCmd::SetShuffle(on) => {
                 self.shuffle = on;
+                if on {
+                    self.reshuffle();
+                } else {
+                    self.order.clear();
+                }
                 self.send_modes();
             }
             PlayerCmd::SetRepeat(r) => {
@@ -263,6 +305,12 @@ impl State {
                 self.queue.insert(at, track);
                 if at <= self.index && !self.queue.is_empty() && self.loaded {
                     self.index += 1;
+                }
+                // No aleatório, a que entrou na fila toca logo depois desta, como no Spotify.
+                if self.shuffle {
+                    self.order.iter_mut().filter(|i| **i >= at).for_each(|i| *i += 1);
+                    self.order.insert(0, at);
+                    self.send_up_next();
                 }
             }
             PlayerCmd::Follow { index, position_ms, .. } if !self.playing => (self.index, self.start_ms, self.loaded) = (index, position_ms, false),
@@ -332,7 +380,7 @@ pub async fn run(session: Session, credentials: Credentials, volume: u16, mut cm
     let (resolve, mut resolved) = unbounded_channel();
     let mut state = State {
         queue: Vec::new(), index: 0, start_ms: 0, loaded: false, playing: false, shuffle: false, repeat: Repeat::Off, volume,
-        anchor: (0, Instant::now()), song: None, heard: false, misses: 0, storefront: None, authorized: true, warned_login: false, warned_preview: false,
+        anchor: (0, Instant::now()), song: None, heard: false, misses: 0, order: Vec::new(), storefront: None, authorized: true, warned_login: false, warned_preview: false,
         out, ui, resolve, ids: HashMap::new(), http: reqwest::Client::new(), session,
     };
     state.apple(AppleCmd::Volume(volume as f32 / u16::MAX as f32));
@@ -362,6 +410,14 @@ mod tests {
 
     fn track(name: &str, artist: &str, ms: u32) -> Track {
         Track { id: String::new(), uri: String::new(), name: name.into(), artist: artist.into(), album: String::new(), album_id: String::new(), duration_ms: ms, cover_small: None, cover_large: None, artists: Vec::new() }
+    }
+
+    #[test]
+    fn shuffles_every_track_once() {
+        let mut s = shuffled((0..50).collect());
+        assert_ne!(s, (0..50).collect::<Vec<_>>());
+        s.sort();
+        assert_eq!(s, (0..50).collect::<Vec<_>>());
     }
 
     #[test]
