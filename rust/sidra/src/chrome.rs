@@ -102,7 +102,7 @@ fn control(ui: &mut Ui, glyph: &str, label: &str, close: bool) -> bool {
         let fill = if close {
             CLOSE_HOVER
         } else {
-            style::ROW_SELECTED
+            style::row_selected()
         };
         ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     }
@@ -110,7 +110,7 @@ fn control(ui: &mut Ui, glyph: &str, label: &str, close: bool) -> bool {
     let colour = if hovered {
         Color32::WHITE
     } else {
-        style::TEXT_MUTED
+        style::text_muted()
     };
     ui.painter().text(
         rect.center(),

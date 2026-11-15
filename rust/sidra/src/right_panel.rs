@@ -127,7 +127,7 @@ impl RightPanel {
 
 fn note(ui: &mut Ui, text: &str) {
     ui.add_space(24.0);
-    ui.label(RichText::new(text).color(style::TEXT_MUTED));
+    ui.label(RichText::new(text).color(style::text_muted()));
 }
 
 fn queue(ui: &mut Ui, cx: &mut Cx) {
@@ -158,7 +158,7 @@ fn queue(ui: &mut Ui, cx: &mut Cx) {
             ui.label(
                 RichText::new(format!("{} items", pb.queue.len()))
                     .font(style::small())
-                    .color(style::TEXT_MUTED),
+                    .color(style::text_muted()),
             );
         });
     });
@@ -180,7 +180,7 @@ fn queue(ui: &mut Ui, cx: &mut Cx) {
                 ui.label(
                     RichText::new(format!("{} of {}", pb.position + 1, pb.queue.len()))
                         .font(style::small())
-                        .color(style::TEXT_MUTED),
+                        .color(style::text_muted()),
                 );
             }
         });
@@ -210,7 +210,7 @@ fn heading(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(style::bold(15.0))
-            .color(style::TEXT),
+            .color(style::text()),
     );
 }
 
@@ -230,9 +230,9 @@ fn track_row(ui: &mut Ui, track: &Item, current: bool) -> egui::Response {
         return response;
     }
     let fill = if current {
-        style::ROW_SELECTED
+        style::row_selected()
     } else if response.hovered() {
-        style::ROW_HOVER
+        style::row_hover()
     } else {
         Color32::TRANSPARENT
     };
@@ -260,8 +260,8 @@ fn track_row(ui: &mut Ui, track: &Item, current: bool) -> egui::Response {
     );
     let top = rect.center().y - (title.size().y + detail.size().y + 2.0) / 2.0;
     let title_h = title.size().y;
-    ui.painter().galley(pos2(left, top), title, style::TEXT);
+    ui.painter().galley(pos2(left, top), title, style::text());
     ui.painter()
-        .galley(pos2(left, top + title_h + 2.0), detail, style::TEXT_MUTED);
+        .galley(pos2(left, top + title_h + 2.0), detail, style::text_muted());
     response.on_hover_text(format!("{} – {}", track.title, track.artist))
 }

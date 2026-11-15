@@ -11,25 +11,60 @@ use serde_json::json;
 use sidra_core::apple::{Artwork, Card, CardKind};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LibraryPage {
     RecentlyAdded,
     Albums,
     Artists,
     Songs,
     Playlists,
+    MusicVideos,
+    /// Apple Music (and other curators') playlists added to the library.
+    Curated,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl LibraryPage {
+    pub fn title_req(self) -> (&'static str, Req) {
+        match self {
+            LibraryPage::RecentlyAdded => ("Recently Added", Req::RecentlyAdded),
+            LibraryPage::Albums => ("Albums", Req::LibraryAlbums),
+            LibraryPage::Artists => ("Artists", Req::LibraryArtists),
+            LibraryPage::Songs => ("Songs", Req::LibrarySongs),
+            LibraryPage::Playlists => ("All Playlists", Req::LibraryPlaylists),
+            LibraryPage::MusicVideos => ("Music Videos", Req::LibraryVideos),
+            LibraryPage::Curated => ("Apple Music Playlists", Req::CuratedPlaylists),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Route {
     Home,
+    New,
+    Radio,
     Album(String),
     Playlist(String),
     Artist(String),
     Library(LibraryPage),
     Search(String),
-    /// A sidebar destination with no native page yet.
-    Unavailable(&'static str),
+    Settings,
+}
+
+impl Route {
+    /// What the page shows, for the Refresh Page menu item.
+    pub fn req(&self) -> Option<Req> {
+        Some(match self {
+            Route::Settings => return None,
+            Route::Home => Req::Recommendations,
+            Route::New => Req::Browse("music"),
+            Route::Radio => Req::Browse("radio"),
+            Route::Album(id) => Req::Album(id.clone()),
+            Route::Playlist(id) => Req::Playlist(id.clone()),
+            Route::Artist(id) => Req::Artist(id.clone()),
+            Route::Library(p) => p.title_req().1,
+            Route::Search(t) => Req::Search(t.clone()),
+        })
+    }
 }
 
 /// Back and forward history.
@@ -40,14 +75,18 @@ pub struct Nav {
 
 impl Default for Nav {
     fn default() -> Self {
-        Self {
-            history: vec![Route::Home],
-            index: 0,
-        }
+        Self::new(Route::Home)
     }
 }
 
 impl Nav {
+    pub fn new(start: Route) -> Self {
+        Self {
+            history: vec![start],
+            index: 0,
+        }
+    }
+
     pub fn current(&self) -> &Route {
         &self.history[self.index]
     }
@@ -86,6 +125,10 @@ pub struct Cx<'a> {
     pub store: &'a mut Store,
     pub nav: &'a mut Nav,
     pub list: &'a mut ListState,
+    pub settings: &'a mut crate::settings::Settings,
+    pub lastfm: &'a mut crate::lastfm::Lastfm,
+    /// Sidra's data folder.
+    pub dir: &'a std::path::Path,
     pub now: f64,
 }
 
@@ -107,15 +150,15 @@ pub fn show(ui: &mut Ui, cx: &mut Cx) {
         .show(ui, |ui| {
             let full = ui.max_rect();
             match &route {
-                Route::Home => padded(ui, |ui| home(ui, cx)),
+                Route::Home => padded(ui, |ui| shelves(ui, cx, "Home", Req::Recommendations)),
+                Route::New => padded(ui, |ui| shelves(ui, cx, "New", Req::Browse("music"))),
+                Route::Radio => padded(ui, |ui| shelves(ui, cx, "Radio", Req::Browse("radio"))),
                 Route::Album(id) => album(ui, cx, id, full),
                 Route::Playlist(id) => playlist(ui, cx, id, full),
                 Route::Artist(id) => artist(ui, cx, id, full),
                 Route::Library(page) => padded(ui, |ui| library(ui, cx, *page)),
                 Route::Search(term) => padded(ui, |ui| search(ui, cx, term)),
-                Route::Unavailable(name) => padded(ui, |ui| {
-                    widgets::empty(ui, name, "This page isn't built into Sidra yet.")
-                }),
+                Route::Settings => padded(ui, |ui| crate::settings::page(ui, cx)),
             }
         });
 }
@@ -164,13 +207,14 @@ fn tint(ui: &Ui, full: Rect, art: Option<&Artwork>) {
     style::vertical_fade(ui.painter(), rect, top, Color32::TRANSPARENT);
 }
 
-fn home(ui: &mut Ui, cx: &mut Cx) {
+/// A page of shelves: Home, New or Radio.
+fn shelves(ui: &mut Ui, cx: &mut Cx, title: &str, req: Req) {
     ui.horizontal(|ui| {
-        heading(ui, "Home", 30.0);
+        heading(ui, title, 30.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let loading = cx.store.is_loading(&Req::Recommendations);
+            let loading = cx.store.is_loading(&req);
             if disc_button(ui, icon::ARROW_CLOCKWISE, "Refresh", 32.0).clicked() && !loading {
-                cx.store.refresh(cx.engine, &Req::Recommendations);
+                cx.store.refresh(cx.engine, &req);
             }
             if loading {
                 ui.spinner();
@@ -178,15 +222,26 @@ fn home(ui: &mut Ui, cx: &mut Cx) {
         });
     });
     ui.add_space(18.0);
-    let width = 180.0;
-    // Recommendations already carry a recently played group, so it isn't fetched separately.
-    let Some(res) = load(ui, cx, &Req::Recommendations, "recommendations") else {
+    let Some(res) = load(ui, cx, &req, &title.to_lowercase()) else {
         return;
     };
-    if let Res::Shelves(shelves) = &*res {
-        for (i, s) in shelves.iter().enumerate() {
-            widgets::shelf(ui, cx, &format!("rec{i}"), &s.title, &s.cards, width);
+    match &*res {
+        Res::Shelves(s) if s.is_empty() => widgets::empty(
+            ui,
+            "Nothing here right now",
+            "Apple Music sent no shelves for this page.",
+        ),
+        Res::Shelves(s) => {
+            for (i, s) in s.iter().enumerate() {
+                let id = format!("{title}{i}");
+                if s.hero {
+                    widgets::hero_shelf(ui, cx, &id, &s.title, &s.cards);
+                } else {
+                    widgets::shelf(ui, cx, &id, &s.title, &s.cards, 180.0);
+                }
+            }
         }
+        _ => {}
     }
 }
 
@@ -199,6 +254,8 @@ struct Header<'a> {
     byline_route: Option<Route>,
     chips: Vec<(&'static str, String)>,
     description: Option<&'a str>,
+    /// The album or playlist id, to tell when the queue is playing it.
+    source: &'a str,
 }
 
 /// Returns (play, shuffle) clicks and leaves room for the caller's extra buttons.
@@ -222,7 +279,7 @@ fn header(
                 egui::Label::new(
                     RichText::new(h.title)
                         .font(style::bold(30.0))
-                        .color(style::TEXT),
+                        .color(style::text()),
                 )
                 .wrap(),
             );
@@ -235,7 +292,7 @@ fn header(
                 let label = egui::Label::new(
                     RichText::new(h.byline)
                         .font(style::bold(15.0))
-                        .color(style::TEXT_MUTED),
+                        .color(style::text_muted()),
                 )
                 .sense(egui::Sense::click());
                 let r = ui.add(label);
@@ -248,7 +305,7 @@ fn header(
             if let Some(d) = h.description {
                 ui.add_space(4.0);
                 ui.add(
-                    egui::Label::new(RichText::new(strip_html(d)).color(style::TEXT_MUTED))
+                    egui::Label::new(RichText::new(strip_html(d)).color(style::text_muted()))
                         .wrap()
                         .truncate(),
                 );
@@ -263,7 +320,29 @@ fn header(
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                play = pill_button(ui, icon::PLAY, "Play", true, 128.0).clicked();
+                // Playing this album or playlist already: the button pauses and resumes it.
+                let current = cx.engine.queued_from.as_deref() == Some(h.source);
+                let loading = cx
+                    .engine
+                    .loading
+                    .as_ref()
+                    .is_some_and(|l| l.source.as_deref() == Some(h.source));
+                if loading {
+                    ui.add_enabled_ui(false, |ui| {
+                        pill_button(ui, icon::CIRCLE_NOTCH, "Loading…", true, 128.0)
+                    });
+                } else if current {
+                    let (glyph, label) = if cx.engine.playback.playing {
+                        (icon::PAUSE, "Pause")
+                    } else {
+                        (icon::PLAY, "Resume")
+                    };
+                    if pill_button(ui, glyph, label, true, 128.0).clicked() {
+                        cx.engine.command("toggle", json!({}));
+                    }
+                } else {
+                    play = pill_button(ui, icon::PLAY, "Play", true, 128.0).clicked();
+                }
                 shuffle = pill_button(ui, icon::SHUFFLE, "Shuffle", false, 128.0).clicked();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| extra(ui, cx));
             });
@@ -271,6 +350,31 @@ fn header(
     });
     ui.add_space(28.0);
     (play, shuffle)
+}
+
+/// "Add", or "Added" once the album or playlist is in the library; clicking "Added" removes it.
+fn add_button(ui: &mut Ui, cx: &mut Cx, kind: &str, id: &str, library_id: Option<&str>, page: Req) {
+    let just_added = cx.store.added.contains(id);
+    match library_id {
+        Some(lid) => {
+            let r = pill_button(ui, icon::CHECK, "Added", false, 96.0)
+                .on_hover_text("Remove from Library");
+            if r.clicked() {
+                cx.store.remove_collection(cx.engine, kind, id, lid, page);
+            }
+        }
+        // Added a moment ago: the page is reloading to learn the library id removal needs.
+        None if just_added => {
+            ui.add_enabled_ui(false, |ui| {
+                pill_button(ui, icon::CHECK, "Added", false, 96.0)
+            });
+        }
+        None => {
+            if pill_button(ui, icon::PLUS, "Add", false, 84.0).clicked() {
+                cx.store.add_collection(cx.engine, kind, id, page);
+            }
+        }
+    }
 }
 
 fn strip_html(s: &str) -> String {
@@ -353,6 +457,7 @@ fn album(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
                 byline_route: a.artist_id.clone().map(Route::Artist),
                 chips,
                 description: None,
+                source: &a.id,
             },
             |ui, cx| {
                 let more = disc_button(ui, icon::DOTS_THREE, "More", 34.0);
@@ -364,9 +469,14 @@ fn album(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
                         cx.nav.push(Route::Artist(artist.clone()));
                     }
                 });
-                if !a.library && pill_button(ui, icon::PLUS, "Add", false, 84.0).clicked() {
-                    cx.store.add_to_library(cx.engine, "albums", &a.id);
-                }
+                add_button(
+                    ui,
+                    cx,
+                    "albums",
+                    &a.id,
+                    a.library_id.as_deref(),
+                    Req::Album(id.to_owned()),
+                );
             },
         );
         if play || shuffle {
@@ -379,7 +489,7 @@ fn album(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
             ui.label(
                 RichText::new(c)
                     .font(style::small())
-                    .color(style::TEXT_MUTED),
+                    .color(style::text_muted()),
             );
         }
     });
@@ -438,6 +548,7 @@ fn playlist(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
                 byline_route: None,
                 chips,
                 description: p.description.as_deref(),
+                source: &p.id,
             },
             |ui, cx| {
                 let more = disc_button(ui, icon::DOTS_THREE, "More", 34.0);
@@ -447,8 +558,16 @@ fn playlist(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
                         cx.store.refresh(cx.engine, &Req::Playlist(p.id.clone()));
                     }
                 });
-                if !p.library && pill_button(ui, icon::PLUS, "Add", false, 84.0).clicked() {
-                    cx.store.add_to_library(cx.engine, "playlists", &p.id);
+                // The user's own playlist is theirs, not "added": removing it would delete it.
+                if !p.editable {
+                    add_button(
+                        ui,
+                        cx,
+                        "playlists",
+                        &p.id,
+                        p.library_id.as_deref(),
+                        Req::Playlist(id.to_owned()),
+                    );
                 }
             },
         );
@@ -501,29 +620,47 @@ fn artist(ui: &mut Ui, cx: &mut Cx, id: &str, full: Rect) {
             art.url(px)
         };
         if let Some(url) = url {
-            egui::Image::new(url)
-                .fit_to_exact_size(hero.size())
-                .maintain_aspect_ratio(false)
-                .corner_radius(egui::CornerRadius {
-                    nw: 12,
-                    ne: 12,
-                    sw: 0,
-                    se: 0,
-                })
-                .show_loading_spinner(false)
-                .paint_at(ui, hero);
+            let corners = egui::CornerRadius {
+                nw: 12,
+                ne: 12,
+                sw: 0,
+                se: 0,
+            };
+            widgets::paint_cover(ui, &url, hero, corners);
         }
     }
     let fade = Rect::from_min_max(pos2(hero.left(), hero.bottom() - hero_h * 0.6), hero.max);
-    style::vertical_fade(ui.painter(), fade, Color32::TRANSPARENT, style::CONTENT);
+    style::vertical_fade(ui.painter(), fade, Color32::TRANSPARENT, style::content());
     let name_pos = pos2(hero.left() + PAD_X, hero.bottom() - 100.0);
-    ui.painter().text(
-        name_pos,
-        egui::Align2::LEFT_BOTTOM,
-        &a.name,
-        style::bold(46.0),
-        Color32::WHITE,
+    // Some artists have their name as a logo; it falls back to text until it loads.
+    let logo_box = Rect::from_min_max(
+        pos2(name_pos.x, name_pos.y - 110.0),
+        pos2((name_pos.x + 460.0).min(hero.right() - PAD_X), name_pos.y),
     );
+    let logo = a
+        .logo
+        .as_ref()
+        // As PNG inside a bounding box: the logo is transparent, and a JPEG fills that with white.
+        .filter(|l| !l.template.is_empty())
+        .map(|l| {
+            l.template
+                .replace("{w}", "920")
+                .replace("{h}", "220")
+                .replace("{c}", "bb")
+                .replace("{f}", "png")
+                // Apple usually bakes the extension in (`…/{w}x{h}bb.jpg`).
+                .replace(".jpg", ".png")
+        })
+        .is_some_and(|url| widgets::paint_fit(ui, &url, logo_box));
+    if !logo {
+        ui.painter().text(
+            name_pos,
+            egui::Align2::LEFT_BOTTOM,
+            &a.name,
+            style::bold(46.0),
+            Color32::WHITE,
+        );
+    }
     let buttons = Rect::from_min_size(
         pos2(hero.left() + PAD_X, hero.bottom() - 84.0),
         vec2(300.0, 48.0),
@@ -633,12 +770,12 @@ fn top_songs(ui: &mut Ui, cx: &mut Cx, a: &sidra_core::apple::Artist) {
                     ui.painter().galley(
                         pos2(art.right() + 10.0, rect.top() + 9.0),
                         title,
-                        style::TEXT,
+                        style::text(),
                     );
                     ui.painter().galley(
                         pos2(art.right() + 10.0, rect.top() + 27.0),
                         sub,
-                        style::TEXT_MUTED,
+                        style::text_muted(),
                     );
                     if resp.double_clicked() || resp.clicked() {
                         cx.engine
@@ -652,13 +789,7 @@ fn top_songs(ui: &mut Ui, cx: &mut Cx, a: &sidra_core::apple::Artist) {
 }
 
 fn library(ui: &mut Ui, cx: &mut Cx, page: LibraryPage) {
-    let (title, req) = match page {
-        LibraryPage::RecentlyAdded => ("Recently Added", Req::RecentlyAdded),
-        LibraryPage::Albums => ("Albums", Req::LibraryAlbums),
-        LibraryPage::Artists => ("Artists", Req::LibraryArtists),
-        LibraryPage::Songs => ("Songs", Req::LibrarySongs),
-        LibraryPage::Playlists => ("All Playlists", Req::LibraryPlaylists),
-    };
+    let (title, req) = page.title_req();
     ui.horizontal(|ui| {
         heading(ui, title, 30.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

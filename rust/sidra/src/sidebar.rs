@@ -42,18 +42,13 @@ const fn item(icon: &'static str, label: &'static str, route: fn() -> Route) -> 
     }
 }
 
-const BROWSE: [Item; 4] = [
+const BROWSE: [Item; 3] = [
     item(icon::HOUSE, "Home", || Route::Home),
-    item(icon::SQUARES_FOUR, "New", || Route::Unavailable("New")),
-    item(icon::BROADCAST, "Radio", || Route::Unavailable("Radio")),
-    item(icon::TICKET, "Concerts", || Route::Unavailable("Concerts")),
+    item(icon::SQUARES_FOUR, "New", || Route::New),
+    item(icon::BROADCAST, "Radio", || Route::Radio),
 ];
 
-const LIBRARY: [Item; 7] = [
-    Item {
-        more: true,
-        ..item(icon::PUSH_PIN, "Pins", || Route::Unavailable("Pins"))
-    },
+const LIBRARY: [Item; 5] = [
     item(icon::CLOCK, "Recently Added", || {
         Route::Library(LibraryPage::RecentlyAdded)
     }),
@@ -67,10 +62,7 @@ const LIBRARY: [Item; 7] = [
         Route::Library(LibraryPage::Artists)
     }),
     item(icon::MONITOR_PLAY, "Music Videos", || {
-        Route::Unavailable("Music Videos")
-    }),
-    item(icon::APPLE_PODCASTS_LOGO, "Podcasts", || {
-        Route::Unavailable("Podcasts")
+        Route::Library(LibraryPage::MusicVideos)
     }),
 ];
 
@@ -122,7 +114,7 @@ impl Sidebar {
         }
 
         ui.add_space(SECTION_GAP);
-        let apple = Route::Unavailable("Apple Music Playlists");
+        let apple = Route::Library(LibraryPage::Curated);
         if link_header(ui, "Apple Music Playlists", cx.nav.current() == &apple).clicked() {
             cx.nav.push(apple);
         }
@@ -204,13 +196,13 @@ impl Sidebar {
         let (rect, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), SEARCH_HEIGHT), Sense::hover());
         let radius = CornerRadius::same(10);
-        ui.painter().rect_filled(rect, radius, style::FIELD);
+        ui.painter().rect_filled(rect, radius, style::field());
 
         let text_rect = Rect::from_min_max(rect.min + vec2(12.0, 0.0), rect.max - vec2(32.0, 0.0));
         let edit = TextEdit::singleline(&mut self.search)
-            .hint_text(RichText::new("Search").color(style::TEXT_MUTED))
+            .hint_text(RichText::new("Search").color(style::text_muted()))
             .font(style::body())
-            .text_color(style::TEXT)
+            .text_color(style::text())
             .frame(false)
             .vertical_align(Align::Center)
             .desired_width(text_rect.width());
@@ -223,9 +215,9 @@ impl Sidebar {
         }
 
         let border = if response.has_focus() {
-            style::FOCUS
+            style::focus()
         } else {
-            style::FIELD_BORDER
+            style::field_border()
         };
         ui.painter()
             .rect_stroke(rect, radius, Stroke::new(1.0, border), StrokeKind::Inside);
@@ -234,7 +226,7 @@ impl Sidebar {
             Align2::CENTER_CENTER,
             icon::MAGNIFYING_GLASS,
             style::icon(),
-            style::TEXT_MUTED,
+            style::text_muted(),
         );
     }
 
@@ -248,7 +240,7 @@ impl Sidebar {
             ui.label(
                 RichText::new("New Playlist")
                     .font(style::bold(16.0))
-                    .color(style::TEXT),
+                    .color(style::text()),
             );
             ui.add_space(8.0);
             let r = ui.add(
@@ -301,44 +293,80 @@ fn account_row(ui: &mut Ui, cx: &mut Cx) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ACCOUNT_HEIGHT), Sense::click());
     let signed_in = cx.engine.authorized == Some(true);
-    let label = if signed_in {
-        "Apple Music"
-    } else {
-        "Not signed in"
+    // The Apple Music profile, when the account has one; a missing profile falls back to the storefront.
+    let profile = signed_in
+        .then(|| cx.store.res(cx.engine, &Req::Profile))
+        .flatten();
+    let (name, handle, photo) = match profile.as_deref() {
+        Some(Res::Profile {
+            name,
+            handle,
+            artwork,
+        }) => (Some(name.clone()), handle.clone(), artwork.clone()),
+        _ => (None, None, None),
+    };
+    let label = match (&name, signed_in) {
+        (Some(n), _) => n.as_str(),
+        (None, true) => "Apple Music",
+        (None, false) => "Not signed in",
     };
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), label));
     let fill = if response.hovered() {
-        style::ROW_SELECTED
+        style::row_selected()
     } else {
-        style::FIELD
+        style::field()
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(10), fill);
     focus_ring(ui, &response, rect, 10);
 
     let avatar = pos2(rect.left() + 8.0 + 12.0, rect.center().y);
-    painter.circle_filled(avatar, 12.0, style::AVATAR);
-    painter.text(
-        avatar,
-        Align2::CENTER_CENTER,
-        icon::USER,
-        style::small(),
-        style::TEXT,
-    );
+    painter.circle_filled(avatar, 12.0, style::avatar());
+    if photo.is_some() {
+        let r = Rect::from_center_size(avatar, vec2(24.0, 24.0));
+        crate::widgets::paint_art(ui, r, photo.as_ref(), 0, true);
+    } else if let Some(initial) = name.as_ref().and_then(|n| n.chars().next()) {
+        painter.text(
+            avatar,
+            Align2::CENTER_CENTER,
+            initial.to_uppercase().to_string(),
+            style::bold(12.0),
+            style::text(),
+        );
+    } else {
+        painter.text(
+            avatar,
+            Align2::CENTER_CENTER,
+            icon::USER,
+            style::small(),
+            style::text(),
+        );
+    }
+    let painter = ui.painter();
 
     let left = avatar.x + 12.0 + ICON_GAP;
     let width = rect.right() - ROW_PAD - left;
     let galley = truncated(ui, label, style::body(), width);
-    let storefront = if signed_in {
-        format!("Storefront: {}", cx.engine.storefront.to_uppercase())
-    } else {
-        "Click Sign In to start".to_owned()
+    let storefront = match (handle, signed_in) {
+        (Some(h), _) => format!("@{}", h.trim_start_matches('@')),
+        (None, true) => {
+            if name.is_some() {
+                "Apple Music".to_owned()
+            } else {
+                "Signed in".to_owned()
+            }
+        }
+        (None, false) => "Click Sign In to start".to_owned(),
     };
     let sub = truncated(ui, &storefront, style::small(), width);
-    painter.galley(pos2(left, rect.center().y - 16.0), galley, style::TEXT);
-    painter.galley(pos2(left, rect.center().y + 1.0), sub, style::TEXT_MUTED);
+    painter.galley(pos2(left, rect.center().y - 16.0), galley, style::text());
+    painter.galley(pos2(left, rect.center().y + 1.0), sub, style::text_muted());
 
     egui::Popup::menu(&response).show(|ui| {
+        if ui.button("Settings").clicked() {
+            cx.nav.push(Route::Settings);
+        }
+        ui.separator();
         if signed_in && ui.button("Sign Out").clicked() {
             cx.engine.command("signOut", serde_json::json!({}));
         }
@@ -366,9 +394,9 @@ fn row(ui: &mut Ui, glyph: &str, label: &str, selected: bool, more: bool) -> Res
     }
 
     let fill = if selected {
-        style::ROW_SELECTED
+        style::row_selected()
     } else if response.hovered() {
-        style::ROW_HOVER
+        style::row_hover()
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -382,7 +410,7 @@ fn row(ui: &mut Ui, glyph: &str, label: &str, selected: bool, more: bool) -> Res
         Align2::CENTER_CENTER,
         glyph,
         style::icon(),
-        style::TEXT,
+        style::text(),
     );
 
     let left = rect.left() + ROW_PAD + style::ICON_SIZE + ICON_GAP;
@@ -397,7 +425,7 @@ fn row(ui: &mut Ui, glyph: &str, label: &str, selected: bool, more: bool) -> Res
     painter.galley(
         pos2(left, rect.center().y - galley.size().y / 2.0),
         galley,
-        style::TEXT,
+        style::text(),
     );
 
     if more {
@@ -415,7 +443,7 @@ fn chevron(ui: &Ui, rect: Rect, glyph: &str) {
         Align2::CENTER_CENTER,
         glyph,
         egui::FontId::proportional(13.0),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
 }
 
@@ -424,9 +452,9 @@ fn header_rect(ui: &mut Ui, label: &str, selected: bool) -> (Rect, Response) {
         ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::click());
     if selected || response.hovered() {
         let fill = if selected {
-            style::ROW_SELECTED
+            style::row_selected()
         } else {
-            style::ROW_HOVER
+            style::row_hover()
         };
         ui.painter()
             .rect_filled(rect, CornerRadius::same(ROW_RADIUS), fill);
@@ -437,7 +465,7 @@ fn header_rect(ui: &mut Ui, label: &str, selected: bool) -> (Rect, Response) {
         Align2::LEFT_CENTER,
         label,
         style::small(),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
     (rect, response)
 }
@@ -489,7 +517,7 @@ fn playlists_header(ui: &mut Ui, open: bool) -> (Response, Response) {
     });
     if options.hovered() {
         ui.painter()
-            .rect_filled(button, CornerRadius::same(6), style::ROW_SELECTED);
+            .rect_filled(button, CornerRadius::same(6), style::row_selected());
     }
     focus_ring(ui, &options, button, 6);
     ui.painter().text(
@@ -497,7 +525,7 @@ fn playlists_header(ui: &mut Ui, open: bool) -> (Response, Response) {
         Align2::CENTER_CENTER,
         icon::DOTS_THREE,
         style::icon(),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
     (header, options.on_hover_text("Playlist options"))
 }

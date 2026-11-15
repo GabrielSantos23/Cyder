@@ -83,6 +83,7 @@ pub enum CardKind {
     Artist,
     Station,
     Song,
+    MusicVideo,
 }
 
 /// One tile on a shelf: enough to draw it and to open or play what it points at.
@@ -93,12 +94,24 @@ pub struct Card {
     pub title: String,
     pub subtitle: String,
     pub artwork: Option<Artwork>,
+    /// Why Apple recommends it ("Made for You", "Featuring …"), on Home's Top Picks.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Apple's tall 3:4 editorial image, for Top Picks cards.
+    #[serde(default)]
+    pub tall: Option<Artwork>,
+    /// Apple's one-line editorial note, shown under the title on Top Picks cards.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Shelf {
     pub title: String,
     pub cards: Vec<Card>,
+    /// Drawn as tall editorial cards (Home's Top Picks) rather than square covers.
+    #[serde(default)]
+    pub hero: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -116,6 +129,12 @@ pub struct Album {
     pub url: Option<String>,
     pub copyright: Option<String>,
     pub library: bool,
+    /// A catalogue item the user has added (`relate=library`).
+    #[serde(default)]
+    pub in_library: bool,
+    /// The library item's id, for removing it; `None` when it isn't in the library.
+    #[serde(default)]
+    pub library_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -129,6 +148,12 @@ pub struct Playlist {
     pub tracks: Vec<Track>,
     pub url: Option<String>,
     pub library: bool,
+    /// A catalogue item the user has added (`relate=library`).
+    #[serde(default)]
+    pub in_library: bool,
+    /// The library item's id, for removing it; `None` when it isn't in the library.
+    #[serde(default)]
+    pub library_id: Option<String>,
     pub editable: bool,
 }
 
@@ -139,6 +164,9 @@ pub struct Artist {
     pub artwork: Option<Artwork>,
     /// The wide editorial image Apple puts behind an artist's name.
     pub hero: Option<Artwork>,
+    /// The artist's name drawn as a logo, for the artists Apple has one for.
+    #[serde(default)]
+    pub logo: Option<Artwork>,
     pub genre: Option<String>,
     pub top_songs: Vec<Track>,
     pub latest: Option<Card>,
@@ -175,6 +203,15 @@ fn rel<'a>(v: &'a Value, name: &str) -> &'a [Value] {
     v.pointer(&format!("/relationships/{name}/data"))
         .and_then(Value::as_array)
         .map_or(&[], Vec::as_slice)
+}
+
+/// The library id of an album or playlist: its own when it is a library item, else
+/// the one `relate=library` attached, when the user has added it.
+fn library_id(v: &Value, library_type: &str) -> Option<String> {
+    if s(v, "type").as_deref() == Some(library_type) {
+        return s(v, "id");
+    }
+    rel(v, "library").first().and_then(|l| s(l, "id"))
 }
 
 fn hex_colour(text: &str) -> Option<[u8; 3]> {
@@ -255,7 +292,8 @@ pub fn card(v: &Value) -> Option<Card> {
         "playlists" | "library-playlists" => CardKind::Playlist,
         "artists" | "library-artists" => CardKind::Artist,
         "stations" => CardKind::Station,
-        "songs" | "library-songs" | "music-videos" => CardKind::Song,
+        "songs" | "library-songs" => CardKind::Song,
+        "music-videos" | "library-music-videos" => CardKind::MusicVideo,
         _ => return None,
     };
     let title = s(a, "name")?;
@@ -270,7 +308,7 @@ pub fn card(v: &Value) -> Option<Card> {
         CardKind::Playlist => s(a, "curatorName").unwrap_or_else(|| "Playlist".into()),
         CardKind::Artist => "Artist".into(),
         CardKind::Station => "Station".into(),
-        CardKind::Song => s(a, "artistName").unwrap_or_default(),
+        CardKind::Song | CardKind::MusicVideo => s(a, "artistName").unwrap_or_default(),
     };
     Some(Card {
         kind,
@@ -278,6 +316,17 @@ pub fn card(v: &Value) -> Option<Card> {
         title,
         subtitle,
         artwork: artwork(a.get("artwork")),
+        reason: v
+            .pointer("/meta/reason/stringForDisplay")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        tall: a
+            .pointer("/editorialArtwork/superHeroTall")
+            .and_then(|t| artwork(Some(t))),
+        note: a
+            .pointer("/plainEditorialNotes/short")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -314,6 +363,8 @@ pub fn album(doc: &Value) -> Option<Album> {
         url: s(a, "url"),
         copyright: s(a, "copyright"),
         library: s(v, "type").as_deref() == Some("library-albums"),
+        in_library: !rel(v, "library").is_empty(),
+        library_id: library_id(v, "library-albums"),
     })
 }
 
@@ -340,6 +391,8 @@ pub fn playlist(doc: &Value) -> Option<Playlist> {
         artwork: artwork(a.get("artwork")),
         last_modified: s(a, "lastModifiedDate"),
         tracks: rel(v, "tracks").iter().map(track).collect(),
+        in_library: !rel(v, "library").is_empty(),
+        library_id: library_id(v, "library-playlists"),
         url: s(a, "url"),
         library,
         editable: a.get("canEdit").and_then(Value::as_bool).unwrap_or(false),
@@ -384,6 +437,7 @@ pub fn artist(doc: &Value) -> Option<Artist> {
             (!cards.is_empty()).then(|| Shelf {
                 title: title.unwrap_or_else(|| (*name).into()),
                 cards,
+                hero: false,
             })
         })
         .collect();
@@ -392,6 +446,9 @@ pub fn artist(doc: &Value) -> Option<Artist> {
         name: s(a, "name").unwrap_or_default(),
         artwork: artwork(a.get("artwork")),
         hero,
+        logo: a
+            .pointer("/editorialArtwork/musicContentColorLogoTrimmed")
+            .and_then(|l| artwork(Some(l))),
         genre: a
             .get("genreNames")
             .and_then(|g| g.get(0))
@@ -416,8 +473,55 @@ pub fn recommendations(doc: &Value) -> Vec<Shelf> {
                 .and_then(Value::as_str)?
                 .to_owned();
             let cards = cards(rel(g, "contents"));
-            (!cards.is_empty()).then_some(Shelf { title, cards })
+            let hero = g
+                .pointer("/attributes/display/kind")
+                .and_then(Value::as_str)
+                == Some("MusicNotesHeroShelf");
+            (!cards.is_empty()).then_some(Shelf { title, cards, hero })
         })
+        .collect()
+}
+
+/// `GET /v1/editorial/{sf}/groupings?name=…` (the New and Radio pages): one shelf per
+/// editorial element of the first tab. An element whose children are themselves
+/// elements (a hero carousel) contributes the first item of each child.
+pub fn editorial(doc: &Value) -> Vec<Shelf> {
+    let tab = rel(first(doc), "tabs").first().unwrap_or(&Value::Null);
+    rel(tab, "children")
+        .iter()
+        .filter_map(|e| {
+            let a = attrs(e);
+            let title = s(a, "name")
+                .or_else(|| {
+                    a.pointer("/title/stringForDisplay")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default();
+            let mut cards = cards(rel(e, "contents"));
+            if cards.is_empty() {
+                cards = rel(e, "children")
+                    .iter()
+                    .filter_map(|c| rel(c, "contents").iter().find_map(card).or_else(|| card(c)))
+                    .collect();
+            }
+            (!cards.is_empty()).then_some(Shelf {
+                title,
+                cards,
+                hero: false,
+            })
+        })
+        .collect()
+}
+
+/// Library playlists the user can't edit: Apple's (and other curators') playlists they added.
+pub fn curated_playlists(doc: &Value) -> Vec<Card> {
+    doc.get("data")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter(|v| attrs(v).get("canEdit").and_then(Value::as_bool) == Some(false))
+        .filter_map(card)
         .collect()
 }
 
@@ -485,6 +589,56 @@ pub fn lyrics_ttml(doc: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn editorial_shelves_and_heroes() {
+        let album = |id: &str| json!({"id": id, "type": "albums", "attributes": {"name": "A", "artistName": "X"}});
+        let doc = json!({"data": [{"relationships": {"tabs": {"data": [{"relationships": {"children": {"data": [
+            {"attributes": {"name": "Hero"}, "relationships": {"children": {"data": [
+                {"relationships": {"contents": {"data": [album("1")]}}},
+                {"relationships": {"contents": {"data": [album("2")]}}}
+            ]}}},
+            {"attributes": {"name": "New Music"}, "relationships": {"contents": {"data": [album("3"), {"type": "rooms"}]}}},
+            {"attributes": {"name": "Empty"}}
+        ]}}}]}}}]});
+        let shelves = editorial(&doc);
+        assert_eq!(shelves.len(), 2);
+        assert_eq!(
+            shelves[0]
+                .cards
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+        assert_eq!(shelves[1].title, "New Music");
+        assert_eq!(shelves[1].cards.len(), 1);
+    }
+
+    #[test]
+    fn library_id_from_relate_or_own_id() {
+        let catalog = json!({"data": [{"id": "1", "type": "albums", "attributes": {"name": "A"},
+            "relationships": {"library": {"data": [{"id": "l.9", "type": "library-albums"}]}}}]});
+        assert_eq!(album(&catalog).unwrap().library_id.as_deref(), Some("l.9"));
+        let own =
+            json!({"data": [{"id": "l.5", "type": "library-albums", "attributes": {"name": "A"}}]});
+        assert_eq!(album(&own).unwrap().library_id.as_deref(), Some("l.5"));
+        let absent = json!({"data": [{"id": "2", "type": "albums", "attributes": {"name": "A"}}]});
+        assert_eq!(album(&absent).unwrap().library_id, None);
+    }
+
+    #[test]
+    fn curated_playlists_skip_editable_ones() {
+        let pl = |id: &str, edit: bool| json!({"id": id, "type": "library-playlists", "attributes": {"name": "P", "canEdit": edit}});
+        let doc = json!({"data": [pl("p.1", true), pl("p.2", false)]});
+        assert_eq!(
+            curated_playlists(&doc)
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["p.2"]
+        );
+    }
 
     #[test]
     fn artwork_fills_the_template() {

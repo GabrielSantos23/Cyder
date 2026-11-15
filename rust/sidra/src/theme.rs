@@ -43,7 +43,7 @@ pub fn light() -> bool {
 }
 
 pub fn bg() -> Color32 {
-    crate::style::FRAME
+    crate::style::frame()
 }
 
 pub fn system_accent() -> Option<Color32> {

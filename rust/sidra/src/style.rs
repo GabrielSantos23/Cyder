@@ -10,23 +10,105 @@ use egui::{
 };
 use std::sync::Arc;
 
-/// Window frame and sidebar background.
-pub const FRAME: Color32 = Color32::from_rgb(11, 11, 11);
-/// The inset content panel and its hairline border.
-pub const CONTENT: Color32 = Color32::from_rgb(18, 17, 16);
-pub const CONTENT_BORDER: Color32 = Color32::from_rgb(40, 38, 36);
-/// Primary text: 17:1 on FRAME.
-pub const TEXT: Color32 = Color32::from_rgb(232, 232, 232);
-/// Section labels and placeholders: 6.4:1 on FRAME, above the 4.5:1 floor.
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(150, 150, 150);
-pub const ROW_HOVER: Color32 = Color32::from_rgb(24, 24, 24);
-pub const ROW_SELECTED: Color32 = Color32::from_rgb(34, 34, 34);
-pub const FIELD: Color32 = Color32::from_rgb(25, 25, 25);
-pub const FIELD_BORDER: Color32 = Color32::from_rgb(46, 46, 46);
-/// Keyboard focus ring.
-pub const FOCUS: Color32 = Color32::from_rgb(190, 190, 190);
-/// Avatar placeholder behind the account initial.
-pub const AVATAR: Color32 = Color32::from_rgb(74, 58, 48);
+/// Sidra's colours. The default is the Apple Music look; a theme from Settings replaces it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    /// Window frame and sidebar background.
+    pub frame: Color32,
+    /// The inset content panel and its hairline border.
+    pub content: Color32,
+    pub content_border: Color32,
+    /// Primary text: 17:1 on the frame.
+    pub text: Color32,
+    /// Section labels and placeholders: 6.4:1 on the frame, above the 4.5:1 floor.
+    pub text_muted: Color32,
+    pub row_hover: Color32,
+    pub row_selected: Color32,
+    pub field: Color32,
+    pub field_border: Color32,
+    /// Keyboard focus ring.
+    pub focus: Color32,
+    /// Avatar placeholder behind the account initial.
+    pub avatar: Color32,
+    /// Key colour: the playing track, loved songs, LIVE.
+    pub accent: Color32,
+    /// The player bar.
+    pub bar: Color32,
+}
+
+pub const APPLE_MUSIC: Palette = Palette {
+    frame: Color32::from_rgb(11, 11, 11),
+    content: Color32::from_rgb(18, 17, 16),
+    content_border: Color32::from_rgb(40, 38, 36),
+    text: Color32::from_rgb(232, 232, 232),
+    text_muted: Color32::from_rgb(150, 150, 150),
+    row_hover: Color32::from_rgb(24, 24, 24),
+    row_selected: Color32::from_rgb(34, 34, 34),
+    field: Color32::from_rgb(25, 25, 25),
+    field_border: Color32::from_rgb(46, 46, 46),
+    focus: Color32::from_rgb(190, 190, 190),
+    avatar: Color32::from_rgb(74, 58, 48),
+    accent: Color32::from_rgb(250, 45, 85),
+    bar: Color32::from_rgb(26, 26, 26),
+};
+
+static PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(APPLE_MUSIC);
+
+fn palette() -> Palette {
+    *PALETTE.read().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Palette {
+    /// A theme's dark scheme on Sidra's slots, or `None` when a colour isn't `#rrggbb`.
+    pub fn from_scheme<S: AsRef<str>>(c: &sidra_core::theme::SchemeColours<S>) -> Option<Self> {
+        let hex = |s: &S| {
+            let s = s.as_ref().trim_start_matches('#');
+            let n = u32::from_str_radix(s, 16).ok().filter(|_| s.len() == 6)?;
+            Some(Color32::from_rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
+        };
+        Some(Self {
+            frame: hex(&c.crust)?,
+            content: hex(&c.base)?,
+            content_border: hex(&c.surface0)?,
+            text: hex(&c.text)?,
+            text_muted: hex(&c.subtext0)?,
+            row_hover: hex(&c.mantle)?,
+            row_selected: hex(&c.surface0)?,
+            field: hex(&c.mantle)?,
+            field_border: hex(&c.surface1)?,
+            focus: hex(&c.overlay)?,
+            avatar: hex(&c.surface2)?,
+            accent: hex(&c.accent)?,
+            bar: hex(&c.mantle)?,
+        })
+    }
+}
+
+/// Switches every colour and egui's own widget colours to `p`.
+pub fn set_palette(ctx: &egui::Context, p: Palette) {
+    *PALETTE.write().unwrap_or_else(|e| e.into_inner()) = p;
+    visuals(ctx);
+    ctx.request_repaint();
+}
+
+macro_rules! colours {
+    ($($name:ident),*) => { $(pub fn $name() -> Color32 { palette().$name })* };
+}
+colours!(
+    frame,
+    content,
+    content_border,
+    text,
+    text_muted,
+    row_hover,
+    row_selected,
+    field,
+    field_border,
+    focus,
+    avatar,
+    accent,
+    bar
+);
 
 const BOLD: &str = "bold";
 
@@ -54,8 +136,8 @@ pub fn icon() -> FontId {
 /// The inset panel the Apple Music page will fill.
 pub fn content_frame() -> Frame {
     Frame::new()
-        .fill(CONTENT)
-        .stroke(Stroke::new(1.0, CONTENT_BORDER))
+        .fill(content())
+        .stroke(Stroke::new(1.0, content_border()))
         .corner_radius(CornerRadius::same(12))
 }
 
@@ -85,12 +167,8 @@ pub fn install(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name(BOLD.into()), bold);
     ctx.set_fonts(fonts);
 
-    ctx.set_visuals(egui::Visuals::dark());
+    visuals(ctx);
     ctx.style_mut(|s| {
-        s.visuals.panel_fill = FRAME;
-        s.visuals.window_fill = FRAME;
-        s.visuals.extreme_bg_color = FIELD;
-        s.visuals.selection.stroke = Stroke::new(1.0, FOCUS);
         s.spacing.scroll = egui::style::ScrollStyle::floating();
         s.text_styles.insert(
             TextStyle::Body,
@@ -103,9 +181,25 @@ pub fn install(ctx: &egui::Context) {
     });
 }
 
+fn visuals(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = frame();
+    v.window_fill = frame();
+    v.extreme_bg_color = field();
+    v.override_text_color = Some(text());
+    v.selection.stroke = Stroke::new(1.0, focus());
+    v.selection.bg_fill = accent().gamma_multiply(0.6);
+    v.hyperlink_color = accent();
+    v.widgets.inactive.weak_bg_fill = field();
+    v.widgets.inactive.bg_fill = field();
+    v.widgets.hovered.weak_bg_fill = row_selected();
+    v.widgets.hovered.bg_fill = row_selected();
+    ctx.set_visuals(v);
+}
+
 /// A single line of text cut off with "…" when it would pass `max_width`.
 pub fn truncated(ui: &Ui, text: &str, font: FontId, max_width: f32) -> Arc<Galley> {
-    let mut job = LayoutJob::simple_singleline(text.to_owned(), font, TEXT);
+    let mut job = LayoutJob::simple_singleline(text.to_owned(), font, self::text());
     job.wrap = TextWrapping::truncate_at_width(max_width.max(0.0));
     ui.painter().layout_job(job)
 }
@@ -115,7 +209,7 @@ pub fn focus_ring(ui: &Ui, response: &Response, rect: Rect, radius: u8) {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(radius),
-            Stroke::new(1.0, FOCUS),
+            Stroke::new(1.0, focus()),
             StrokeKind::Inside,
         );
     }
@@ -148,9 +242,9 @@ pub fn icon_button(
         .rect_filled(rect, CornerRadius::same(radius), fill);
     focus_ring(ui, &response, rect, radius);
     let colour = if on || response.hovered() {
-        TEXT
+        text()
     } else {
-        TEXT_MUTED
+        text_muted()
     };
     ui.painter()
         .text(rect.center(), Align2::CENTER_CENTER, glyph, icon(), colour);
@@ -160,8 +254,8 @@ pub fn icon_button(
 /// The rounded group the toolbar's toggles sit in.
 pub fn pill_frame() -> Frame {
     Frame::new()
-        .fill(FIELD)
-        .stroke(Stroke::new(1.0, FIELD_BORDER))
+        .fill(field())
+        .stroke(Stroke::new(1.0, field_border()))
         .corner_radius(CornerRadius::same(255))
         .inner_margin(egui::Margin::same(3))
 }

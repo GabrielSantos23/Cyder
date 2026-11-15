@@ -2,7 +2,7 @@
 
 use crate::pages::{Cx, Route};
 use crate::style::{self, icon_button, truncated};
-use crate::widgets::{ACCENT, duration};
+use crate::widgets::duration;
 use egui::{
     Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
@@ -11,11 +11,10 @@ use serde_json::json;
 use sidra_core::apple::Artwork;
 
 pub const HEIGHT: f32 = 92.0;
-const FILL: Color32 = Color32::from_rgb(26, 26, 26);
 
 pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(16), FILL);
+    p.rect_filled(rect, CornerRadius::same(16), style::bar());
     p.rect_stroke(
         rect,
         CornerRadius::same(16),
@@ -36,10 +35,18 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
         pos2(seek_row.left() + time_w, seek_row.center().y - 8.0),
         pos2(seek_row.right() - time_w, seek_row.center().y + 8.0),
     );
-    let seek = ui.interact(track, ui.id().with("seek"), Sense::click_and_drag());
+    let seekable = pb.can_seek && pb.duration > 0.0;
+    let sense = if seekable {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let seek = ui.interact(track, ui.id().with("seek"), sense);
     seek.widget_info(|| egui::WidgetInfo::slider(true, pos, "Playback position"));
     let frac_at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
-    let mut shown = if pb.duration > 0.0 {
+    let mut shown = if pb.live {
+        1.0
+    } else if pb.duration > 0.0 {
         pos / pb.duration
     } else {
         0.0
@@ -48,7 +55,7 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
         shown = frac_at(p.x);
     }
     if (seek.drag_stopped() || seek.clicked())
-        && pb.duration > 0.0
+        && seekable
         && let Some(p) = seek.interact_pointer_pos().or(seek.hover_pos())
     {
         cx.engine
@@ -58,7 +65,7 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
         track.center(),
         vec2(
             track.width(),
-            if seek.hovered() || seek.dragged() {
+            if seekable && (seek.hovered() || seek.dragged()) {
                 6.0
             } else {
                 4.0
@@ -71,28 +78,42 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
     p.rect_filled(
         filled,
         CornerRadius::same(3),
-        Color32::from_white_alpha(230),
+        Color32::from_white_alpha(if pb.live { 90 } else { 230 }),
     );
-    let shown_secs = shown * pb.duration;
-    p.text(
-        pos2(seek_row.left(), seek_row.center().y),
-        Align2::LEFT_CENTER,
-        duration((shown_secs * 1000.0) as u64),
-        style::small(),
-        style::TEXT_MUTED,
-    );
-    let left = ((pb.duration - shown_secs).max(0.0) * 1000.0) as u64;
-    p.text(
-        pos2(seek_row.right(), seek_row.center().y),
-        Align2::RIGHT_CENTER,
-        format!("-{}", duration(left)),
-        style::small(),
-        style::TEXT_MUTED,
-    );
+    if pb.live {
+        p.text(
+            pos2(seek_row.left(), seek_row.center().y),
+            Align2::LEFT_CENTER,
+            "LIVE",
+            style::bold(11.0),
+            style::accent(),
+        );
+    } else {
+        let shown_secs = shown * pb.duration;
+        p.text(
+            pos2(seek_row.left(), seek_row.center().y),
+            Align2::LEFT_CENTER,
+            duration((shown_secs * 1000.0) as u64),
+            style::small(),
+            style::text_muted(),
+        );
+        let left = ((pb.duration - shown_secs).max(0.0) * 1000.0) as u64;
+        p.text(
+            pos2(seek_row.right(), seek_row.center().y),
+            Align2::RIGHT_CENTER,
+            format!("-{}", duration(left)),
+            style::small(),
+            style::text_muted(),
+        );
+    }
 
     // Control row.
     let row = Rect::from_min_max(pos2(inner.left(), seek_row.bottom() + 6.0), inner.max);
-    let catalog = pb.now.as_ref().and_then(|n| n.catalog().map(str::to_owned));
+    let catalog = pb
+        .now
+        .as_ref()
+        .filter(|_| !pb.live)
+        .and_then(|n| n.catalog().map(str::to_owned));
     let loved = catalog.as_deref().is_some_and(|c| {
         cx.store
             .loved(cx.engine, &[c])
@@ -109,36 +130,77 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if icon_button(ui, icon::SHUFFLE, "Shuffle", size, Some(pb.shuffle)).clicked() {
-                cx.engine.command("shuffle", json!({"on": !pb.shuffle}));
-            }
-            if icon_button(ui, icon::SKIP_BACK, "Previous", size, None).clicked() {
-                cx.engine.command("prev", json!({}));
-            }
-            let (glyph, label) = if pb.playing {
-                (icon::PAUSE, "Pause")
-            } else {
-                (icon::PLAY, "Play")
+            let playing_something = pb.now.is_some();
+            let enabled = |ui: &mut Ui, on: bool, add: &mut dyn FnMut(&mut Ui)| {
+                ui.add_enabled_ui(on && playing_something, |ui| add(ui));
             };
-            if icon_button(ui, glyph, label, vec2(40.0, 40.0), None).clicked() {
-                cx.engine.command("toggle", json!({}));
+            enabled(ui, pb.can_edit, &mut |ui| {
+                if icon_button(
+                    ui,
+                    icon::SHUFFLE,
+                    "Shuffle",
+                    size,
+                    Some(pb.shuffle && pb.can_edit),
+                )
+                .clicked()
+                {
+                    cx.engine.command("shuffle", json!({"on": !pb.shuffle}));
+                }
+            });
+            enabled(ui, pb.can_prev, &mut |ui| {
+                if icon_button(ui, icon::SKIP_BACK, "Previous", size, None).clicked() {
+                    cx.engine.command("prev", json!({}));
+                }
+            });
+            // Live radio can't pause: Apple's player offers Stop in its place.
+            let (glyph, label) = match (pb.playing, pb.can_pause) {
+                (true, true) => (icon::PAUSE, "Pause"),
+                (true, false) => (icon::STOP, "Stop"),
+                _ => (icon::PLAY, "Play"),
+            };
+            if cx.engine.loading.is_some() {
+                let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                egui::Spinner::new()
+                    .size(20.0)
+                    .color(style::text())
+                    .paint_at(ui, Rect::from_center_size(r.center(), vec2(20.0, 20.0)));
+                ui.ctx().request_repaint();
+            } else {
+                enabled(ui, true, &mut |ui| {
+                    if icon_button(ui, glyph, label, vec2(40.0, 40.0), None).clicked() {
+                        cx.engine.command("toggle", json!({}));
+                    }
+                });
             }
-            if icon_button(ui, icon::SKIP_FORWARD, "Next", size, None).clicked() {
-                cx.engine.command("next", json!({}));
-            }
+            enabled(ui, pb.can_next, &mut |ui| {
+                if icon_button(ui, icon::SKIP_FORWARD, "Next", size, None).clicked() {
+                    cx.engine.command("next", json!({}));
+                }
+            });
             // MusicKit's repeat modes: 0 off, 1 one, 2 all. The button cycles off, all, one.
             let (glyph, label) = match pb.repeat {
                 1 => (icon::REPEAT_ONCE, "Repeat one"),
                 2 => (icon::REPEAT, "Repeat all"),
                 _ => (icon::REPEAT, "Repeat"),
             };
-            if icon_button(ui, glyph, label, size, Some(pb.repeat != 0)).clicked() {
-                let next = match pb.repeat {
-                    0 => 2,
-                    2 => 1,
-                    _ => 0,
-                };
-                cx.engine.command("repeat", json!({"mode": next}));
+            enabled(ui, pb.can_edit, &mut |ui| {
+                if icon_button(ui, glyph, label, size, Some(pb.repeat != 0 && pb.can_edit))
+                    .clicked()
+                {
+                    let next = match pb.repeat {
+                        0 => 2,
+                        2 => 1,
+                        _ => 0,
+                    };
+                    cx.engine.command("repeat", json!({"mode": next}));
+                }
+            });
+            if pb.now.as_ref().is_some_and(|n| n.is_video()) {
+                let open = cx.engine.video_open;
+                let label = if open { "Hide Video" } else { "Show Video" };
+                if icon_button(ui, icon::MONITOR_PLAY, label, size, Some(open)).clicked() {
+                    cx.engine.video_open = !open;
+                }
             }
             ui.add_space(8.0);
             ui.add_enabled_ui(catalog.is_some() && !in_library, |ui| {
@@ -176,7 +238,7 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
                         Align2::CENTER_CENTER,
                         icon::STAR,
                         style::icon(),
-                        ACCENT,
+                        style::accent(),
                     );
                 }
                 if r.clicked()
@@ -234,12 +296,12 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
         ui.painter().galley(
             pos2(art.right() + 10.0, card.top() + 5.0),
             title,
-            style::TEXT,
+            style::text(),
         );
         ui.painter().galley(
             pos2(art.right() + 10.0, card.top() + 23.0),
             sub,
-            style::TEXT_MUTED,
+            style::text_muted(),
         );
         if r.on_hover_text("Go to album").clicked() {
             match (now.album_id(), now.catalog()) {
@@ -254,7 +316,7 @@ pub fn bar(ui: &mut Ui, cx: &mut Cx, rect: Rect) {
             Align2::CENTER_CENTER,
             "Not playing",
             style::body(),
-            style::TEXT_MUTED,
+            style::text_muted(),
         );
     }
 

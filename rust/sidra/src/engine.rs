@@ -50,12 +50,49 @@ const BRIDGE: &str = r#"
     durationMs: (it.attributes && it.attributes.durationInMillis) || it.playbackDuration || 0,
     url: (it.attributes && it.attributes.url) || null
   }) : null;
+  // MusicKit keeps more than one media element (the next song preloads for gapless play), so
+  // the first in the page can belong to the wrong song. Its whole-second time picks the right one.
+  const playhead = () => {
+    const whole = mk.currentPlaybackTime || 0;
+    const el = [...document.querySelectorAll('audio, video')]
+      .find(e => !e.paused && Math.abs(e.currentTime - whole) < 1.5);
+    return el ? el.currentTime : whole;
+  };
   const state = () => mk && send({ t: 'state', playing: !!mk.isPlaying, ps: mk.playbackState,
     preview: !!mk.previewOnly, hasItem: !!mk.nowPlayingItem,
     // currentPlaybackTime is whole seconds, which pulls the bar back between reports.
-    time: (document.querySelector('audio, video') || {}).currentTime || mk.currentPlaybackTime || 0, duration: mk.currentPlaybackDuration || 0,
+    time: playhead(), duration: mk.currentPlaybackDuration || 0,
     volume: mk.volume, shuffle: mk.shuffleMode === 1, repeat: mk.repeatMode || 0,
-    autoplay: !!mk.autoplayEnabled });
+    autoplay: !!mk.autoplayEnabled, ...caps() });
+  // What the current item allows, as Apple's own player reads it: stations can't be
+  // shuffled or rewound, and live radio can't be paused or seeked either.
+  const caps = () => {
+    const c = mk.capabilities || {}, ni = mk.nowPlayingItem;
+    const live = !!ni && (!!ni.isLiveRadioStation || pp(ni).kind === 'radioStation');
+    const radio = live || (!!ni && (ni.type === 'stations' || (ni.container && ni.container.type === 'stations')));
+    return { radio, live, canPause: c.canPause !== false && !live, canSeek: c.canSeek !== false && !live,
+      canNext: c.canSkipToNextItem !== false, canPrev: c.canSkipToPreviousItem !== false && !radio,
+      canEdit: c.canEditPlaybackQueue !== false && !radio };
+  };
+  // Music videos play in a <video> MusicKit puts somewhere in Apple's page. Showing one moves
+  // it to <body> (a move keeps it playing) and lets it fill the viewport over everything else.
+  // Added on first use: this script runs before the page has a document to put it in.
+  let style = null;
+  const css = () => {
+    if (style) return;
+    style = document.createElement('style');
+    style.textContent = 'html.sidra-video,html.sidra-video body{background:#000!important;overflow:hidden!important}' +
+    'html.sidra-video video{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;' +
+    'max-width:none!important;max-height:none!important;z-index:2147483647!important;background:#000!important;' +
+    'object-fit:contain!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important}';
+    document.head.appendChild(style);
+  };
+  const video = on => {
+    css();
+    document.documentElement.classList.toggle('sidra-video', on);
+    const v = document.querySelector('video');
+    if (on && v && v.parentElement !== document.body) document.body.appendChild(v);
+  };
   const queue = () => mk && send({ t: 'queue', position: mk.queue.position,
     items: mk.queue.items.map(item) });
   const now = () => mk && send({ t: 'now', item: item(mk.nowPlayingItem) });
@@ -86,7 +123,11 @@ const BRIDGE: &str = r#"
     mk.addEventListener('authorizationStatusDidChange', auth);
     mk.addEventListener('mediaPlaybackError', e => send({ t: 'error', what: 'playback',
       error: String((e && (e.errorCode || e.name || e.message)) || e) }));
-    mk.addEventListener('nowPlayingItemDidChange', () => { now(); queue(); state(); });
+    mk.addEventListener('nowPlayingItemDidChange', () => {
+      now(); queue(); state();
+      // A new video element can come with the next item.
+      if (document.documentElement.classList.contains('sidra-video')) setTimeout(() => video(true), 300);
+    });
     for (const e of ['playbackStateDidChange', 'repeatModeDidChange', 'playbackVolumeDidChange']) mk.addEventListener(e, state);
     for (const e of ['queueItemsDidChange', 'queuePositionDidChange', 'shuffleModeDidChange']) mk.addEventListener(e, () => { queue(); state(); });
     state(); now(); queue();
@@ -116,14 +157,22 @@ const BRIDGE: &str = r#"
       headers: { 'Authorization': 'Bearer ' + mk.developerToken, 'Music-User-Token': mk.musicUserToken,
         'Content-Type': 'application/json' } });
     const text = await r.text();
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {
+      // Apple's own reason (such as an invalid parameter) says what to fix; it carries no user data.
+      let why = '';
+      try { const e = JSON.parse(text).errors[0]; why = ': ' + (e.detail || e.title || e.code); } catch (e) {}
+      throw new Error('HTTP ' + r.status + why);
+    }
     return text ? JSON.parse(text) : {};
   };
   window.__sidra = {
     async req(id, path, o) {
       o = o || {};
       try {
-        const doc = await call(path, o.method, o.body);
+        // `{tz}` is the local UTC offset as Apple's web app sends it (`-03:00`).
+        const m = -new Date().getTimezoneOffset(), h = Math.abs(m);
+        const tz = (m < 0 ? '-' : '+') + String(Math.floor(h / 60)).padStart(2, '0') + ':' + String(h % 60).padStart(2, '0');
+        const doc = await call(path.replace('{tz}', encodeURIComponent(tz)), o.method, o.body);
         // Follow a relationship's pages (a playlist's tracks) up to `pageRel` limit.
         const res = o.pageRel && doc.data && doc.data[0];
         const rel = res && res.relationships && res.relationships[o.pageRel];
@@ -146,7 +195,12 @@ const BRIDGE: &str = r#"
             mk.shuffleMode = a.shuffle ? 1 : 0;
             await mk.setQueue(Object.assign({ startPlaying: true }, a.opts));
             break;
-          case 'toggle': mk.isPlaying ? mk.pause() : await mk.play(); break;
+          case 'toggle':
+            if (!mk.isPlaying) await mk.play();
+            else if (caps().canPause) mk.pause();
+            else await mk.stop();
+            break;
+          case 'video': video(!!a.on); break;
           case 'next': await mk.skipToNextItem(); break;
           case 'prev': await mk.skipToPreviousItem(); break;
           case 'seek': await mk.seekToTime(a.t); break;
@@ -167,6 +221,7 @@ const BRIDGE: &str = r#"
           }
         }
       } catch (e) { send({ t: 'error', what: name, error: String((e && e.message) || e) }); }
+      send({ t: 'done', name });
       state(); queue();
     }
   };
@@ -177,6 +232,8 @@ const BRIDGE: &str = r#"
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Item {
     pub id: String,
+    /// MusicKit's item type, such as `song` or `musicVideo`.
+    pub kind: String,
     pub catalog_id: Option<String>,
     pub title: String,
     pub artist: String,
@@ -202,8 +259,13 @@ impl Item {
             artwork: opt("artwork"),
             duration_ms: v.get("durationMs").and_then(Value::as_f64).unwrap_or(0.0) as u64,
             url: opt("url"),
+            kind: st("kind"),
             id,
         })
+    }
+
+    pub fn is_video(&self) -> bool {
+        self.kind.to_ascii_lowercase().contains("video")
     }
 
     pub fn catalog(&self) -> Option<&str> {
@@ -232,11 +294,32 @@ pub struct Playback {
     /// 0 off, 1 one, 2 all: MusicKit's `repeatMode`.
     pub repeat: u8,
     pub autoplay: bool,
+    /// Playing a station (live or algorithmic).
+    pub radio: bool,
+    /// Playing a live station, which has no position and no pause.
+    pub live: bool,
+    pub can_pause: bool,
+    pub can_seek: bool,
+    pub can_next: bool,
+    pub can_prev: bool,
+    /// Shuffle, repeat and the queue can be changed.
+    pub can_edit: bool,
     pub now: Option<Item>,
     pub queue: Vec<Item>,
     pub position: usize,
     /// When `time` was reported, so the bar can move between reports.
     pub reported_at: f64,
+}
+
+/// A play on its way: what was clicked, so that row and button can show a spinner.
+pub struct Loading {
+    /// The album, playlist or station being queued.
+    pub source: Option<String>,
+    /// The song that will play first, when known.
+    pub track: Option<String>,
+    since: std::time::Instant,
+    /// MusicKit has taken the queue; the spinner stays until audio actually plays.
+    queued: bool,
 }
 
 pub enum Event {
@@ -266,6 +349,15 @@ pub struct Engine {
     pub playback: Playback,
     /// Shows Apple's whole page for signing in, when its sign-in window can't open.
     pub show_page: bool,
+    /// The user wants the playing music video on screen.
+    pub video_open: bool,
+    video_shown: bool,
+    /// A play Sidra asked for that hasn't started yet.
+    pub loading: Option<Loading>,
+    /// The album or playlist the queue was started from, while it still is.
+    pub queued_from: Option<String>,
+    /// egui's zoom: the webview is placed in logical pixels, which are points times this.
+    zoom: f32,
 }
 
 impl Engine {
@@ -279,6 +371,11 @@ impl Engine {
             next_id: 0,
             waiting: Vec::new(),
             bounds: None,
+            video_open: false,
+            video_shown: false,
+            loading: None,
+            queued_from: None,
+            zoom: 1.0,
             authorized: None,
             storefront,
             playback: Playback {
@@ -337,15 +434,33 @@ impl Engine {
     }
 
     /// Shows the page over `rect` (to sign in) or shrinks it to one pixel.
+    /// Makes Apple's page show only the playing music video, or puts it back.
+    pub fn set_video(&mut self, on: bool) {
+        if self.video_shown != on {
+            self.video_shown = on;
+            self.command("video", serde_json::json!({ "on": on }));
+        }
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32) {
+        if self.zoom != zoom {
+            self.zoom = zoom;
+            let rect = self.bounds;
+            self.bounds = Some(egui::Rect::NOTHING);
+            self.place(rect);
+        }
+    }
+
     pub fn place(&mut self, rect: Option<egui::Rect>) {
         if self.bounds == rect {
             return;
         }
         self.bounds = rect;
         let Some(w) = &self.webview else { return };
+        let z = self.zoom as f64;
         let bounds = rect.map_or_else(pixel, |r| Rect {
-            position: dpi::LogicalPosition::new(r.left() as f64, r.top() as f64).into(),
-            size: dpi::LogicalSize::new(r.width() as f64, r.height() as f64).into(),
+            position: dpi::LogicalPosition::new(r.left() as f64 * z, r.top() as f64 * z).into(),
+            size: dpi::LogicalSize::new(r.width() as f64 * z, r.height() as f64 * z).into(),
         });
         let _ = w.set_bounds(bounds);
     }
@@ -356,13 +471,17 @@ impl Engine {
             if std::env::var_os("SIDRA_DEBUG").is_some() && v["t"] != "res" {
                 // Types, states and errors only: no titles, artists or URLs.
                 eprintln!(
-                    "engine: t={} ps={} playing={} time={} preview={} item={} ks={} ok={} err={}",
+                    "engine: t={} ps={} playing={} time={} preview={} item={} radio={} live={} pause={} next={} ks={} ok={} err={}",
                     v["t"],
                     v["ps"],
                     v["playing"],
                     v["time"],
                     v["preview"],
                     v["hasItem"],
+                    v["radio"],
+                    v["live"],
+                    v["canPause"],
+                    v["canNext"],
                     v["ks"],
                     v["ok"],
                     v["error"]
@@ -402,11 +521,27 @@ impl Engine {
                     p.shuffle = v["shuffle"].as_bool().unwrap_or(false);
                     p.repeat = v["repeat"].as_u64().unwrap_or(0) as u8;
                     p.autoplay = v["autoplay"].as_bool().unwrap_or(false);
+                    let flag = |k: &str, d: bool| v[k].as_bool().unwrap_or(d);
+                    p.radio = flag("radio", false);
+                    p.live = flag("live", false);
+                    p.can_pause = flag("canPause", true);
+                    p.can_seek = flag("canSeek", true);
+                    p.can_next = flag("canNext", true);
+                    p.can_prev = flag("canPrev", true);
+                    p.can_edit = flag("canEdit", true);
                     p.reported_at = now;
                     out.push(Event::Changed);
                 }
                 "now" => {
-                    self.playback.now = Item::from(&v["item"]);
+                    let item = Item::from(&v["item"]);
+                    // Show a music video when one starts; the user can hide it from the bar.
+                    if let Some(i) = &item
+                        && i.is_video()
+                        && self.playback.now.as_ref().map(|n| &n.id) != Some(&i.id)
+                    {
+                        self.video_open = true;
+                    }
+                    self.playback.now = item;
                     out.push(Event::Changed);
                 }
                 "queue" => {
@@ -415,12 +550,29 @@ impl Engine {
                     self.playback.position = v["position"].as_u64().unwrap_or(0) as usize;
                     out.push(Event::Changed);
                 }
+                "done" if v["name"] == "setQueue" => {
+                    if let Some(l) = &mut self.loading {
+                        l.queued = true;
+                    }
+                }
                 "error" => out.push(Event::Error(format!(
                     "{} failed: {}",
                     v["what"].as_str().unwrap_or("command"),
                     v["error"].as_str().unwrap_or("unknown error")
                 ))),
                 _ => {}
+            }
+        }
+        // A play ends its spinner once audio runs, or when it failed or never answered.
+        if let Some(l) = &self.loading {
+            let failed = out
+                .iter()
+                .any(|e| matches!(e, Event::Error(m) if m.starts_with("setQueue")));
+            if failed || (l.queued && self.playback.playing) || l.since.elapsed().as_secs() > 30 {
+                self.loading = None;
+                if failed {
+                    self.queued_from = None;
+                }
             }
         }
         out
@@ -464,6 +616,25 @@ impl Engine {
     }
 
     pub fn command(&mut self, name: &str, args: Value) {
+        if name == "setQueue" {
+            let o = &args["opts"];
+            let id = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_owned);
+            let source = id("album")
+                .or_else(|| id("playlist"))
+                .or_else(|| id("station"));
+            self.queued_from = source.clone().filter(|_| o.get("station").is_none());
+            self.loading = Some(Loading {
+                source,
+                track: id("song").or_else(|| {
+                    o.get("songs")
+                        .and_then(|s| s.get(0))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                }),
+                since: std::time::Instant::now(),
+                queued: false,
+            });
+        }
         self.run(format!(
             "window.__sidra && window.__sidra.cmd({}, {args})",
             json!(name)

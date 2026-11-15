@@ -16,6 +16,8 @@ pub enum Req {
     Playlist(String),
     Artist(String),
     Recommendations,
+    /// An editorial grouping: `"music"` is the New page, `"radio"` the Radio page.
+    Browse(&'static str),
     /// The children of a library playlist folder.
     Folder(String),
     LibraryAlbums,
@@ -23,6 +25,9 @@ pub enum Req {
     LibraryPlaylists,
     LibraryArtists,
     LibrarySongs,
+    LibraryVideos,
+    /// Library playlists the user can't edit, from the same response as `LibraryPlaylists`.
+    CuratedPlaylists,
     /// Syllable-timed lyrics, where Apple has them.
     Lyrics(String),
     /// Line-timed lyrics, for songs without syllable timing.
@@ -30,6 +35,8 @@ pub enum Req {
     /// Loved state of up to 100 catalogue songs, comma-separated.
     Ratings(String),
     Search(String),
+    /// The account's Apple Music profile: name, handle and photo.
+    Profile,
 }
 
 pub const ROOT_FOLDER: &str = "p.playlistsroot";
@@ -47,6 +54,11 @@ pub enum Res {
     Search {
         songs: Vec<Track>,
         cards: Vec<Card>,
+    },
+    Profile {
+        name: String,
+        handle: Option<String>,
+        artwork: Option<sidra_core::apple::Artwork>,
     },
     /// A library item that is shown through its catalogue page.
     Redirect(Route),
@@ -70,11 +82,15 @@ impl Req {
             Req::Album(id) if id.starts_with("l.") => {
                 format!("/v1/me/library/albums/{id}?include=tracks,artists")
             }
-            Req::Album(id) => format!("/v1/catalog/{sf}/albums/{id}?include=tracks,artists"),
+            Req::Album(id) => {
+                format!("/v1/catalog/{sf}/albums/{id}?include=tracks,artists&relate=library")
+            }
             Req::Playlist(id) if id.starts_with("p.") => {
                 format!("/v1/me/library/playlists/{id}?include=tracks")
             }
-            Req::Playlist(id) => format!("/v1/catalog/{sf}/playlists/{id}?include=tracks"),
+            Req::Playlist(id) => {
+                format!("/v1/catalog/{sf}/playlists/{id}?include=tracks&relate=library")
+            }
             Req::Artist(id) if id.starts_with("r.") => {
                 format!("/v1/me/library/artists/{id}?include=catalog")
             }
@@ -82,15 +98,23 @@ impl Req {
                 "/v1/catalog/{sf}/artists/{id}?views={}&extend=editorialArtwork",
                 apple::ARTIST_VIEWS
             ),
-            Req::Recommendations => "/v1/me/recommendations?limit=12".into(),
+            // Apple's own Home ("listen-now"), which alone carries Top Picks; `{tz}` is filled in by the page.
+            Req::Recommendations => "/v1/me/recommendations?name=listen-now&platform=web&timezone={tz}&with=marketingItems&extend=editorialArtwork,plainEditorialNotes".into(),
+            Req::Browse(name) => format!(
+                "/v1/editorial/{sf}/groupings?name={name}&platform=web&tabs=subscriber&omit[resource:artists]=autos&extend=editorialArtwork"
+            ),
             Req::Folder(id) => format!("/v1/me/library/playlist-folders/{id}/children?limit=100"),
             Req::LibraryAlbums => "/v1/me/library/albums?limit=100&sort=-dateAdded".into(),
             Req::RecentlyAdded => "/v1/me/library/recently-added?limit=25".into(),
-            Req::LibraryPlaylists => "/v1/me/library/playlists?limit=100".into(),
+            Req::LibraryPlaylists | Req::CuratedPlaylists => {
+                "/v1/me/library/playlists?limit=100".into()
+            }
+            Req::LibraryVideos => "/v1/me/library/music-videos?limit=100".into(),
             Req::LibraryArtists => "/v1/me/library/artists?limit=100".into(),
             Req::LibrarySongs => "/v1/me/library/songs?limit=100".into(),
             Req::Lyrics(id) => format!("/v1/catalog/{sf}/songs/{id}/syllable-lyrics"),
             Req::LineLyrics(id) => format!("/v1/catalog/{sf}/songs/{id}/lyrics"),
+            Req::Profile => "/v1/me/social/profile?extend=artwork,handle".into(),
             Req::Ratings(ids) => format!("/v1/me/ratings/songs?ids={ids}"),
             Req::Search(term) => format!(
                 "/v1/catalog/{sf}/search?term={}&types=songs,albums,artists,playlists&limit=15",
@@ -105,7 +129,11 @@ impl Req {
             Req::Folder(_) => json!({"all": 500}),
             Req::RecentlyAdded => json!({"all": 100}),
             // shortcut: library lists stop at these sizes; page them on scroll if users hit the cap.
-            Req::LibraryAlbums | Req::LibraryPlaylists | Req::LibraryArtists => {
+            Req::LibraryAlbums
+            | Req::LibraryPlaylists
+            | Req::CuratedPlaylists
+            | Req::LibraryArtists
+            | Req::LibraryVideos => {
                 json!({"all": 2000})
             }
             Req::LibrarySongs => json!({"all": 3000}),
@@ -124,6 +152,8 @@ impl Req {
                 .map(|c| Res::Redirect(Route::Artist(c.to_owned())))),
             Req::Artist(_) => opt(apple::artist(doc).map(Res::Artist)),
             Req::Recommendations => Res::Shelves(apple::recommendations(doc)),
+            Req::Browse(_) => Res::Shelves(apple::editorial(doc)),
+            Req::CuratedPlaylists => Res::Cards(apple::curated_playlists(doc)),
             Req::Folder(_) => Res::Entries(apple::library_entries(doc)),
             Req::LibrarySongs => Res::Tracks(apple::track_list(doc)),
             Req::Lyrics(_) | Req::LineLyrics(_) => opt(apple::lyrics_ttml(doc)
@@ -139,6 +169,27 @@ impl Req {
                 })
                 .map(Res::Lyrics)),
             Req::Ratings(_) => Res::Loved(apple::loved_ids(doc)),
+            Req::Profile => {
+                let a = doc.pointer("/data/0/attributes").unwrap_or(&Value::Null);
+                let text = |k: &str| {
+                    a.get(k)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                };
+                opt(text("name").map(|name| Res::Profile {
+                    name,
+                    // Without a handle attribute, the profile URL ends in it (`…/profile/<handle>`).
+                    handle: text("handle").or_else(|| {
+                        text("url")?
+                            .split("/profile/")
+                            .nth(1)
+                            .map(|h| h.trim_matches('/').to_owned())
+                            .filter(|h| !h.is_empty())
+                    }),
+                    artwork: apple::artwork(a.get("artwork")),
+                }))
+            }
             Req::Search(_) => Res::Search {
                 songs: doc
                     .pointer("/results/songs/data")
@@ -168,7 +219,7 @@ impl Req {
                 },
             },
             Req::Artist(_) => Kind::Artist,
-            Req::Recommendations | Req::Search(_) => Kind::Home,
+            Req::Recommendations | Req::Browse(_) | Req::Search(_) => Kind::Home,
             Req::Lyrics(_) | Req::LineLyrics(_) => Kind::Lyrics,
             _ => Kind::Library,
         }
@@ -179,6 +230,12 @@ impl Req {
 pub enum Done {
     /// The library changed: drop library responses and say so.
     Library(String),
+    /// An album or playlist was added or removed: as `Library`, then reload `page`
+    /// so it learns the library id it now has, or that it has none.
+    Collection {
+        msg: String,
+        page: Req,
+    },
     Loved(String, bool),
 }
 
@@ -199,6 +256,10 @@ pub struct Store {
     loved: HashMap<String, bool>,
     pub toasts: Vec<(String, f64)>,
     pub goto: Option<Route>,
+    /// Ids added to the library this session, ahead of the cached pages that predate it.
+    pub added: std::collections::HashSet<String>,
+    /// Pages to reload the next time they are read, without blanking them meanwhile.
+    stale: Vec<Req>,
 }
 
 impl Store {
@@ -210,6 +271,8 @@ impl Store {
             loved: HashMap::new(),
             toasts: Vec::new(),
             goto: None,
+            added: Default::default(),
+            stale: Vec::new(),
         }
     }
 
@@ -219,6 +282,10 @@ impl Store {
 
     /// The slot for `req`, loading it from disk or the network on first use.
     pub fn get(&mut self, engine: &mut Engine, req: &Req) -> &Slot {
+        if let Some(i) = self.stale.iter().position(|r| r == req) {
+            self.stale.swap_remove(i);
+            self.fetch(engine, req);
+        }
         if !self.slots.contains_key(req) {
             let mut slot = Slot::default();
             let key = Self::key(req, &engine.storefront);
@@ -314,6 +381,12 @@ impl Store {
                 slot.error = Some(e);
             }
             (Pending::Change(done), Ok(_)) => match done {
+                Done::Collection { msg, page } => {
+                    self.clear_library();
+                    self.cache.remove(&Self::key(&page, &engine.storefront));
+                    self.stale.push(page);
+                    self.toast(msg, now);
+                }
                 Done::Library(msg) => {
                     self.clear_library();
                     self.toast(msg, now);
@@ -417,7 +490,37 @@ impl Store {
     }
 
     /// `kind` is the API's plural type: `songs`, `albums` or `playlists`.
+    /// Adds an album or playlist and reloads its `page`, which then knows its library id.
+    pub fn add_collection(&mut self, engine: &mut Engine, kind: &str, id: &str, page: Req) {
+        self.added.insert(id.to_owned());
+        let path = format!("/v1/me/library?ids[{kind}]={id}");
+        let msg = "Added to your library".into();
+        self.change(engine, "POST", &path, None, Done::Collection { msg, page });
+    }
+
+    /// Removes an album or playlist from the library by its library id.
+    pub fn remove_collection(
+        &mut self,
+        engine: &mut Engine,
+        kind: &str,
+        id: &str,
+        library_id: &str,
+        page: Req,
+    ) {
+        self.added.remove(id);
+        let path = format!("/v1/me/library/{kind}/{library_id}");
+        let msg = "Removed from your library".into();
+        self.change(
+            engine,
+            "DELETE",
+            &path,
+            None,
+            Done::Collection { msg, page },
+        );
+    }
+
     pub fn add_to_library(&mut self, engine: &mut Engine, kind: &str, id: &str) {
+        self.added.insert(id.to_owned());
         let path = format!("/v1/me/library?ids[{kind}]={id}");
         self.change(
             engine,

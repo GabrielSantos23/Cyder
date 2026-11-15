@@ -7,12 +7,15 @@ mod art;
 mod bidi;
 mod chrome;
 mod engine;
+mod integrations;
 mod karaoke;
+mod lastfm;
 mod lyrics;
 mod pages;
 mod player;
 mod preset;
 mod right_panel;
+mod settings;
 mod shader;
 mod shell;
 mod sidebar;
@@ -81,6 +84,16 @@ struct App {
     saved_storefront: String,
     /// The route the list filter belongs to; a new page starts unfiltered.
     list_route: pages::Route,
+    settings: settings::Settings,
+    /// The settings as last saved, so a change is written once.
+    saved_settings: settings::Settings,
+    /// The theme and zoom egui is drawing with.
+    applied: Option<(String, f32)>,
+    lastfm: lastfm::Lastfm,
+    notifier: integrations::Notifier,
+    discord: integrations::Discord,
+    #[cfg(windows)]
+    tray: integrations::tray::Tray,
 }
 
 impl App {
@@ -91,7 +104,19 @@ impl App {
             .map(|s| s.trim().to_owned())
             .filter(|s| s.len() == 2 && s.chars().all(|c| c.is_ascii_lowercase()))
             .unwrap_or_else(|| "us".into());
+        let settings = settings::Settings::load(&dir);
+        #[cfg(windows)]
+        integrations::register_app_id(&dir);
         Self {
+            nav: Nav::new(settings.start_route()),
+            lastfm: lastfm::Lastfm::new(&dir, &settings.lastfm),
+            saved_settings: settings.clone(),
+            settings,
+            applied: None,
+            notifier: Default::default(),
+            discord: Default::default(),
+            #[cfg(windows)]
+            tray: Default::default(),
             saved_storefront: storefront.clone(),
             // SIDRA_WEBVIEW_DIR points the engine at another WebView2 profile, for diagnosing playback.
             engine: engine::Engine::new(
@@ -102,7 +127,6 @@ impl App {
             ),
             store: store::Store::new(dir.join("cache").join("api")),
             dir,
-            nav: Nav::default(),
             list: Default::default(),
             sidebar: Default::default(),
             right: Default::default(),
@@ -151,6 +175,43 @@ impl App {
     }
 }
 
+impl App {
+    /// Theme, zoom, Last.fm, notifications, Discord and the tray, then saving any change.
+    fn integrations(&mut self, ctx: &egui::Context, frame: &eframe::Frame, now: f64) {
+        let s = &mut self.settings;
+        let want = (s.theme.clone(), s.zoom_factor);
+        if self.applied.as_ref() != Some(&want) {
+            style::set_palette(ctx, s.palette(&self.dir));
+            ctx.set_zoom_factor(s.zoom_factor);
+            self.engine.set_zoom(s.zoom_factor);
+            self.applied = Some(want);
+        }
+        let pb = &self.engine.playback;
+        self.lastfm.tick(ctx, &mut s.lastfm, pb, now);
+        self.notifier.tick(s.notifications, pb);
+        self.discord.tick(s.discord, pb, self.engine.position(now));
+        #[cfg(windows)]
+        {
+            use integrations::tray;
+            self.tray.tick(s.close_to_tray, frame, ctx);
+            let quitting = tray::QUITTING.load(std::sync::atomic::Ordering::Relaxed);
+            if s.close_to_tray && !quitting && ctx.input(|i| i.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                tray::hide();
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = frame;
+        if s.last_page.as_ref() != Some(self.nav.current()) {
+            s.last_page = Some(self.nav.current().clone());
+        }
+        if *s != self.saved_settings {
+            s.save(&self.dir);
+            self.saved_settings = s.clone();
+        }
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
@@ -160,12 +221,14 @@ impl eframe::App for App {
             self.list_route = self.nav.current().clone();
             self.list = Default::default();
         }
+        self.integrations(ctx, frame, now);
         if self.engine.playback.playing {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
         let resizing = chrome::edge_resize(ctx);
         let App {
+            dir,
             engine,
             store,
             nav,
@@ -173,6 +236,8 @@ impl eframe::App for App {
             sidebar,
             right,
             sidebar_hidden,
+            settings,
+            lastfm,
             ..
         } = self;
         let mut cx = Cx {
@@ -180,13 +245,16 @@ impl eframe::App for App {
             store,
             nav,
             list,
+            settings,
+            lastfm,
+            dir,
             now,
         };
 
         CentralPanel::default()
             .frame(
                 Frame::new()
-                    .fill(style::FRAME)
+                    .fill(style::frame())
                     .inner_margin(Margin::same(FRAME_INSET)),
             )
             .show(ctx, |ui| {
@@ -238,7 +306,27 @@ fn content(
     let sign_in = cx.engine.authorized == Some(false);
     let below_nav = Rect::from_min_max(pos2(full.left(), full.top() + NAV_HEIGHT), full.max);
     let show_page = sign_in && cx.engine.show_page;
-    cx.engine.place(show_page.then_some(below_nav.shrink(1.0)));
+    // A playing music video sits between the navigation and player bars, in the webview itself.
+    let video = (!sign_in
+        && cx.engine.video_open
+        && cx
+            .engine
+            .playback
+            .now
+            .as_ref()
+            .is_some_and(|n| n.is_video()))
+    .then(|| {
+        Rect::from_min_max(
+            pos2(full.left() + 16.0, below_nav.top() + 4.0),
+            pos2(full.right() - 16.0, full.bottom() - player::HEIGHT - 28.0),
+        )
+    });
+    cx.engine.set_video(video.is_some());
+    cx.engine.place(if show_page {
+        Some(below_nav.shrink(1.0))
+    } else {
+        video
+    });
     if sign_in && !show_page {
         ui.scope_builder(UiBuilder::new().max_rect(below_nav), |ui| {
             sign_in_screen(ui, cx)
@@ -250,6 +338,10 @@ fn content(
             ui.set_clip_rect(full);
             pages::show(ui, cx);
         });
+        if let Some(r) = video {
+            ui.painter()
+                .rect_filled(r, egui::CornerRadius::same(12), Color32::BLACK);
+        }
         if cx.engine.authorized.is_none() {
             ui.scope_builder(UiBuilder::new().max_rect(below_nav), |ui| {
                 widgets::spinner(ui, "Connecting to Apple Music…")
@@ -262,7 +354,7 @@ fn content(
     style::vertical_fade(
         &ui.painter_at(full),
         wash,
-        style::CONTENT.gamma_multiply(0.9),
+        style::content().gamma_multiply(0.9),
         Color32::TRANSPARENT,
     );
     nav_bar(
@@ -313,14 +405,14 @@ fn sign_in_screen(ui: &mut Ui, cx: &mut Cx) {
         ui.label(
             egui::RichText::new(icon::MUSIC_NOTES)
                 .size(44.0)
-                .color(style::TEXT),
+                .color(style::text()),
         );
         ui.add_space(12.0);
         widgets::heading(ui, "Sign in to Apple Music", 24.0);
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new("Apple's own sign-in box opens. Sidra never sees your password.")
-                .color(style::TEXT_MUTED),
+                .color(style::text_muted()),
         );
         ui.add_space(20.0);
         if widgets::pill_button(ui, icon::SIGN_IN, "Sign In", true, 150.0).clicked() {
@@ -331,7 +423,7 @@ fn sign_in_screen(ui: &mut Ui, cx: &mut Cx) {
             egui::Label::new(
                 egui::RichText::new("Sign in on Apple's page instead")
                     .font(style::small())
-                    .color(style::TEXT_MUTED)
+                    .color(style::text_muted())
                     .underline(),
             )
             .sense(egui::Sense::click()),
@@ -362,6 +454,9 @@ fn nav_bar(
             egui::Popup::menu(&more).show(|ui| {
                 if ui.button("Refresh Page").clicked() {
                     refresh_current(cx);
+                }
+                if ui.button("Settings").clicked() {
+                    cx.nav.push(pages::Route::Settings);
                 }
                 if ui.button("Clear Cache").clicked() {
                     cx.store.clear_all();
@@ -409,7 +504,15 @@ fn nav_bar(
                 );
                 ui.add_space(8.0);
             }
+            // Stations have no queue Sidra can show and no lyrics.
+            let radio = cx.engine.playback.radio;
+            if radio {
+                right.view = None;
+            }
             style::pill_frame().show(ui, |ui| {
+                if radio {
+                    ui.disable();
+                }
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (view, glyph, label) in [
                     (View::Queue, icon::QUEUE, "Playing Next"),
@@ -426,24 +529,9 @@ fn nav_bar(
 }
 
 fn refresh_current(cx: &mut Cx) {
-    use pages::{LibraryPage, Route};
-    use store::Req;
-    let req = match cx.nav.current().clone() {
-        Route::Home => Req::Recommendations,
-        Route::Album(id) => Req::Album(id),
-        Route::Playlist(id) => Req::Playlist(id),
-        Route::Artist(id) => Req::Artist(id),
-        Route::Search(t) => Req::Search(t),
-        Route::Library(p) => match p {
-            LibraryPage::RecentlyAdded => Req::RecentlyAdded,
-            LibraryPage::Albums => Req::LibraryAlbums,
-            LibraryPage::Artists => Req::LibraryArtists,
-            LibraryPage::Songs => Req::LibrarySongs,
-            LibraryPage::Playlists => Req::LibraryPlaylists,
-        },
-        Route::Unavailable(_) => return,
-    };
-    cx.store.refresh(cx.engine, &req);
+    if let Some(req) = cx.nav.current().req() {
+        cx.store.refresh(cx.engine, &req);
+    }
 }
 
 fn toasts(ui: &mut Ui, cx: &mut Cx, area: Rect) {
@@ -452,7 +540,7 @@ fn toasts(ui: &mut Ui, cx: &mut Cx, area: Rect) {
     for (text, _) in cx.store.toasts.iter().rev() {
         let galley = ui
             .painter()
-            .layout_no_wrap(text.clone(), style::body(), style::TEXT);
+            .layout_no_wrap(text.clone(), style::body(), style::text());
         let size = galley.size() + vec2(28.0, 16.0);
         let rect = Rect::from_center_size(pos2(area.center().x, y - size.y / 2.0), size);
         ui.painter().rect_filled(
@@ -461,7 +549,7 @@ fn toasts(ui: &mut Ui, cx: &mut Cx, area: Rect) {
             Color32::from_rgb(44, 44, 44),
         );
         ui.painter()
-            .galley(rect.min + vec2(14.0, 8.0), galley, style::TEXT);
+            .galley(rect.min + vec2(14.0, 8.0), galley, style::text());
         y = rect.top() - 6.0;
     }
     if !cx.store.toasts.is_empty() {

@@ -11,9 +11,6 @@ use egui_phosphor::regular as icon;
 use serde_json::json;
 use sidra_core::apple::{Artwork, Card, CardKind, Track};
 
-/// Apple Music's accent, for loved songs.
-pub const ACCENT: Color32 = Color32::from_rgb(250, 45, 85);
-
 /// Artwork in `rect`, or a neutral tile while it loads or when there is none.
 pub fn paint_art(ui: &Ui, rect: Rect, art: Option<&Artwork>, radius: u8, round: bool) {
     if !ui.is_rect_visible(rect) {
@@ -26,7 +23,7 @@ pub fn paint_art(ui: &Ui, rect: Rect, art: Option<&Artwork>, radius: u8, round: 
     };
     let fill = art
         .and_then(|a| a.bg)
-        .map_or(style::FIELD, |[r, g, b]| Color32::from_rgb(r, g, b));
+        .map_or(style::field(), |[r, g, b]| Color32::from_rgb(r, g, b));
     ui.painter()
         .rect_filled(rect, CornerRadius::same(radius), fill);
     let px = (rect.width() * ui.ctx().pixels_per_point()).ceil() as u32;
@@ -46,7 +43,7 @@ pub fn paint_art(ui: &Ui, rect: Rect, art: Option<&Artwork>, radius: u8, round: 
             Align2::CENTER_CENTER,
             icon::MUSIC_NOTE,
             egui::FontId::proportional((rect.width() * 0.35).clamp(12.0, 64.0)),
-            style::TEXT_MUTED,
+            style::text_muted(),
         );
     }
 }
@@ -59,8 +56,8 @@ pub fn pill_button(ui: &mut Ui, glyph: &str, label: &str, primary: bool, width: 
     let (fill, text) = match (primary, hovered) {
         (true, false) => (Color32::WHITE, Color32::BLACK),
         (true, true) => (Color32::from_gray(225), Color32::BLACK),
-        (false, false) => (Color32::from_white_alpha(18), style::TEXT),
-        (false, true) => (Color32::from_white_alpha(30), style::TEXT),
+        (false, false) => (Color32::from_white_alpha(18), style::text()),
+        (false, true) => (Color32::from_white_alpha(30), style::text()),
     };
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(17), fill);
@@ -106,7 +103,7 @@ pub fn disc_button(ui: &mut Ui, glyph: &str, label: &str, size: f32) -> Response
         Align2::CENTER_CENTER,
         glyph,
         style::icon(),
-        style::TEXT,
+        style::text(),
     );
     response.on_hover_text(label)
 }
@@ -114,7 +111,7 @@ pub fn disc_button(ui: &mut Ui, glyph: &str, label: &str, size: f32) -> Response
 pub fn chip(ui: &mut Ui, glyph: &str, text: &str) {
     let galley = ui
         .painter()
-        .layout_no_wrap(text.into(), style::bold(11.0), style::TEXT);
+        .layout_no_wrap(text.into(), style::bold(11.0), style::text());
     let size = vec2(galley.size().x + 32.0, 22.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
@@ -130,12 +127,12 @@ pub fn chip(ui: &mut Ui, glyph: &str, text: &str) {
         Align2::CENTER_CENTER,
         glyph,
         egui::FontId::proportional(12.0),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
     p.galley(
         pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        style::TEXT,
+        style::text(),
     );
 }
 
@@ -143,7 +140,7 @@ pub fn heading(ui: &mut Ui, text: &str, size: f32) {
     ui.label(
         RichText::new(text)
             .font(style::bold(size))
-            .color(style::TEXT),
+            .color(style::text()),
     );
 }
 
@@ -154,6 +151,7 @@ pub fn queue_opts(kind: CardKind, id: &str) -> Option<serde_json::Value> {
         CardKind::Playlist => json!({"playlist": id}),
         CardKind::Station => json!({"station": id}),
         CardKind::Song => json!({"song": id}),
+        CardKind::MusicVideo => json!({"musicVideo": id}),
         CardKind::Artist => return None,
     })
 }
@@ -163,6 +161,7 @@ fn library_kind(kind: CardKind) -> Option<&'static str> {
         CardKind::Album => Some("albums"),
         CardKind::Playlist => Some("playlists"),
         CardKind::Song => Some("songs"),
+        CardKind::MusicVideo => Some("music-videos"),
         _ => None,
     }
 }
@@ -172,7 +171,7 @@ pub fn open_card(cx: &mut Cx, card: &Card) {
         CardKind::Album => cx.nav.push(Route::Album(card.id.clone())),
         CardKind::Playlist => cx.nav.push(Route::Playlist(card.id.clone())),
         CardKind::Artist => cx.nav.push(Route::Artist(card.id.clone())),
-        CardKind::Station | CardKind::Song => {
+        CardKind::Station | CardKind::Song | CardKind::MusicVideo => {
             if let Some(opts) = queue_opts(card.kind, &card.id) {
                 cx.engine.command("setQueue", json!({"opts": opts}));
             }
@@ -256,9 +255,9 @@ pub fn card(ui: &mut Ui, cx: &mut Cx, card: &Card, width: f32) {
         let tx = |w: f32| rect.left() + (width - w) * align;
         let (tw, sw) = (title.size().x, sub.size().x);
         ui.painter()
-            .galley(pos2(tx(tw), art.bottom() + 6.0), title, style::TEXT);
+            .galley(pos2(tx(tw), art.bottom() + 6.0), title, style::text());
         ui.painter()
-            .galley(pos2(tx(sw), art.bottom() + 24.0), sub, style::TEXT_MUTED);
+            .galley(pos2(tx(sw), art.bottom() + 24.0), sub, style::text_muted());
     }
     // A click on the play disc plays; anywhere else opens.
     let play_hit = response.hover_pos().is_some_and(|p| {
@@ -271,6 +270,152 @@ pub fn card(ui: &mut Ui, cx: &mut Cx, card: &Card, width: f32) {
         }
     }
     response.context_menu(|ui| card_menu(ui, cx, card));
+}
+
+/// The loaded image's size, or `None` while it loads.
+fn image_size(ui: &Ui, url: &str) -> Option<egui::Vec2> {
+    match egui::Image::new(url.to_owned()).load_for_size(ui.ctx(), vec2(1.0, 1.0)) {
+        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture.size),
+        _ => None,
+    }
+}
+
+/// Fills `rect` with the image cropped to its shape, the way CSS `object-fit: cover` does,
+/// so an image of another shape is never stretched.
+pub fn paint_cover(ui: &Ui, url: &str, rect: Rect, corners: CornerRadius) {
+    let Some(size) = image_size(ui, url) else {
+        return;
+    };
+    let (img, want) = (size.x / size.y, rect.width() / rect.height());
+    let uv = if img > want {
+        let w = want / img;
+        Rect::from_min_max(pos2((1.0 - w) / 2.0, 0.0), pos2((1.0 + w) / 2.0, 1.0))
+    } else {
+        // Taller than the box: keep the top, where faces usually are.
+        let h = img / want;
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, h))
+    };
+    Image::new(url.to_owned())
+        .uv(uv)
+        .corner_radius(corners)
+        .show_loading_spinner(false)
+        .paint_at(ui, rect);
+}
+
+/// Draws the image as large as fits in `bounds`, left and bottom aligned. False while it loads.
+pub fn paint_fit(ui: &Ui, url: &str, bounds: Rect) -> bool {
+    let Some(size) = image_size(ui, url) else {
+        return false;
+    };
+    let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
+    let s = size * scale;
+    let rect = Rect::from_min_size(pos2(bounds.left(), bounds.bottom() - s.y), s);
+    Image::new(url.to_owned())
+        .show_loading_spinner(false)
+        .paint_at(ui, rect);
+    true
+}
+
+/// One Top Picks card: Apple's tall editorial image, or the cover on its colour, with the
+/// reason, title and note along the bottom.
+fn hero_card(ui: &mut Ui, cx: &mut Cx, card: &Card, size: egui::Vec2) {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Button,
+            ui.is_enabled(),
+            format!("{}, {}", card.title, card.subtitle),
+        )
+    });
+    if ui.is_rect_visible(rect) {
+        let r = CornerRadius::same(12);
+        let bg = card
+            .tall
+            .as_ref()
+            .and_then(|t| t.bg)
+            .or_else(|| card.artwork.as_ref().and_then(|a| a.bg))
+            .map_or(style::field(), |[r, g, b]| Color32::from_rgb(r, g, b));
+        let p = ui.painter();
+        p.rect_filled(rect, r, bg);
+        let px = (size.x * ui.ctx().pixels_per_point()).ceil() as u32;
+        match card.tall.as_ref().and_then(|t| t.url_wh(px, px * 4 / 3)) {
+            Some(url) => paint_cover(ui, &url, rect, r),
+            None => {
+                // No tall image (an artist station): the cover, centred on its own colour.
+                let side = size.x * 0.62;
+                let art = Rect::from_center_size(
+                    rect.center() - vec2(0.0, size.y * 0.1),
+                    vec2(side, side),
+                );
+                paint_art(
+                    ui,
+                    art,
+                    card.artwork.as_ref(),
+                    8,
+                    card.kind == CardKind::Station,
+                );
+            }
+        }
+        // A dark wash under the text so it reads on any image.
+        let wash = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 110.0), rect.max);
+        style::vertical_fade(
+            ui.painter(),
+            wash,
+            Color32::TRANSPARENT,
+            Color32::from_black_alpha(170),
+        );
+        let w = size.x - 32.0;
+        let mut y = rect.bottom() - 16.0;
+        let lines = [
+            (
+                card.note.as_deref().unwrap_or(&card.subtitle),
+                style::small(),
+                Color32::from_white_alpha(200),
+            ),
+            (card.title.as_str(), style::bold(15.0), Color32::WHITE),
+            (
+                card.reason.as_deref().unwrap_or(""),
+                style::bold(11.5),
+                Color32::from_white_alpha(220),
+            ),
+        ];
+        for (text, font, colour) in lines {
+            if text.is_empty() {
+                continue;
+            }
+            let g = truncated(ui, text, font, w);
+            y -= g.size().y + 2.0;
+            ui.painter().galley(pos2(rect.left() + 16.0, y), g, colour);
+        }
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, r, Color32::from_black_alpha(30));
+        }
+        style::focus_ring(ui, &response, rect, 12);
+    }
+    if response.clicked() {
+        open_card(cx, card);
+    }
+    response.context_menu(|ui| card_menu(ui, cx, card));
+}
+
+/// Home's Top Picks: a row of tall editorial cards.
+pub fn hero_shelf(ui: &mut Ui, cx: &mut Cx, id: &str, title: &str, cards: &[Card]) {
+    heading(ui, title, 17.0);
+    ui.add_space(8.0);
+    let w = 260.0;
+    ScrollArea::horizontal()
+        .id_salt(("hero", id))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                for c in cards {
+                    hero_card(ui, cx, c, vec2(w, w * 4.0 / 3.0));
+                }
+            });
+        });
+    ui.add_space(24.0);
 }
 
 /// A titled horizontal row of cards with arrows to page through it.
@@ -340,7 +485,7 @@ pub fn spinner(ui: &mut Ui, text: &str) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
         ui.spinner();
-        ui.label(RichText::new(text).color(style::TEXT_MUTED));
+        ui.label(RichText::new(text).color(style::text_muted()));
     });
 }
 
@@ -349,7 +494,7 @@ pub fn empty(ui: &mut Ui, title: &str, detail: &str) {
     ui.vertical_centered(|ui| {
         heading(ui, title, 18.0);
         ui.add_space(4.0);
-        ui.label(RichText::new(detail).color(style::TEXT_MUTED));
+        ui.label(RichText::new(detail).color(style::text_muted()));
     });
 }
 
@@ -480,6 +625,7 @@ pub fn track_list(ui: &mut Ui, cx: &mut Cx, tracks: &[Track], source: Source, nu
     let ids: Vec<&str> = tracks.iter().filter_map(|t| t.catalog()).collect();
     let loved = cx.store.loved(cx.engine, &ids);
     let playing = cx.engine.playback.now.clone();
+    let loading = cx.engine.loading.as_ref().and_then(|l| l.track.clone());
 
     // Only rows inside the clip rect are laid out; the rest is empty space.
     let top = ui.cursor().top();
@@ -496,7 +642,8 @@ pub fn track_list(ui: &mut Ui, cx: &mut Cx, tracks: &[Track], source: Source, nu
             .catalog()
             .and_then(|c| loved.get(c).copied())
             .unwrap_or(false);
-        let response = track_row(ui, t, pos, numbered, is_playing, love);
+        let is_loading = loading.as_ref() == Some(&t.id);
+        let response = track_row(ui, t, pos, numbered, is_playing, is_loading, love);
         if response.double_clicked() {
             play_from(cx, tracks, &order, &source, pos, reordered);
         }
@@ -535,6 +682,9 @@ fn play_from(
         }
     };
     cx.engine.command("setQueue", json!({"opts": opts}));
+    if let Some(l) = &mut cx.engine.loading {
+        l.track = Some(tracks[order[pos]].id.clone());
+    }
 }
 
 fn track_row(
@@ -543,6 +693,7 @@ fn track_row(
     pos: usize,
     numbered: bool,
     playing: bool,
+    loading: bool,
     loved: bool,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
@@ -569,13 +720,19 @@ fn track_row(
     let lead = rect.left() + 12.0;
     let mut left = lead + 32.0;
     // Playlists show artwork in the number column; the playing marker sits over it.
-    if playing && numbered {
+    if loading && numbered {
+        let r = Rect::from_center_size(pos2(lead + 10.0, rect.center().y), vec2(16.0, 16.0));
+        egui::Spinner::new()
+            .size(16.0)
+            .color(style::accent())
+            .paint_at(ui, r);
+    } else if playing && numbered {
         p.text(
             pos2(lead + 10.0, rect.center().y),
             Align2::CENTER_CENTER,
             icon::WAVEFORM,
             style::icon(),
-            ACCENT,
+            style::accent(),
         );
     } else if numbered {
         let n = t
@@ -586,20 +743,26 @@ fn track_row(
             Align2::CENTER_CENTER,
             n,
             style::small(),
-            style::TEXT_MUTED,
+            style::text_muted(),
         );
     }
     if !numbered {
         let art = Rect::from_min_size(pos2(lead, rect.center().y - 17.0), vec2(34.0, 34.0));
         paint_art(ui, art, t.artwork.as_ref(), 4, false);
-        if playing {
+        if loading {
+            p.rect_filled(art, CornerRadius::same(4), Color32::from_black_alpha(150));
+            egui::Spinner::new()
+                .size(16.0)
+                .color(style::accent())
+                .paint_at(ui, Rect::from_center_size(art.center(), vec2(16.0, 16.0)));
+        } else if playing {
             p.rect_filled(art, CornerRadius::same(4), Color32::from_black_alpha(150));
             p.text(
                 art.center(),
                 Align2::CENTER_CENTER,
                 icon::WAVEFORM,
                 style::icon(),
-                ACCENT,
+                style::accent(),
             );
         }
         left = art.right() + 12.0;
@@ -619,12 +782,12 @@ fn track_row(
     } else {
         rect.center().y - 8.0
     };
-    let title_colour = if playing { ACCENT } else { text };
+    let title_colour = if playing { style::accent() } else { text };
     p.galley(pos2(left, y), title, title_colour);
     let mut badge_x = left + tw + 8.0;
     if t.explicit {
         let b = Rect::from_min_size(pos2(badge_x, y + 2.0), vec2(13.0, 13.0));
-        p.rect_filled(b, CornerRadius::same(2), style::TEXT_MUTED);
+        p.rect_filled(b, CornerRadius::same(2), style::text_muted());
         p.text(
             b.center(),
             Align2::CENTER_CENTER,
@@ -640,25 +803,25 @@ fn track_row(
             Align2::LEFT_CENTER,
             icon::STAR,
             egui::FontId::proportional(12.0),
-            ACCENT,
+            style::accent(),
         );
     }
     if has_sub {
-        p.galley(pos2(left, y + 17.0), sub, style::TEXT_MUTED);
+        p.galley(pos2(left, y + 17.0), sub, style::text_muted());
     }
     p.text(
         pos2(rect.right() - 48.0, rect.center().y),
         Align2::RIGHT_CENTER,
         duration(t.duration_ms),
         style::small(),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
     p.text(
         pos2(rect.right() - 22.0, rect.center().y),
         Align2::CENTER_CENTER,
         icon::DOTS_THREE,
         style::icon(),
-        style::TEXT_MUTED,
+        style::text_muted(),
     );
     response
 }
