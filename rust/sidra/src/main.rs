@@ -3,6 +3,9 @@
 //! wraps the whole UI. Pages are drawn natively from Apple Music data, which the
 //! engine's hidden Apple Music page fetches and plays.
 
+// Release builds are a windowed app: no console window opens beside Sidra.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod art;
 mod bidi;
 mod chrome;
