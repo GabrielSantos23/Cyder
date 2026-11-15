@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["sidra-core"]
+
+[workspace.package]
+edition = "2021"
+license = "BlueOak-1.0.0"

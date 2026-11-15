@@ -110,6 +110,15 @@ lint:
 test:
     npm test
 
+# Run the Rust port's tests (rust/sidra-core)
+test-rust:
+    cargo test --manifest-path rust/Cargo.toml
+
+# Lint the Rust port: formatting and clippy, warnings as errors
+lint-rust:
+    cargo fmt --manifest-path rust/Cargo.toml --check
+    cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+
 # npm audit omits devDependencies even when a dependency, such as electron, ships.
 # Validate electron-builder configuration and audit runtime dependencies
 validate:
