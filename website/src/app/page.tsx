@@ -8,7 +8,7 @@ import { PhysicsPills, type PhysicsItem } from "@/components/sites/cyder/Physics
 export const metadata: Metadata = {
   title: "Cyder: a fast, native Spotify desktop app for Windows, with macOS and Linux coming soon",
   description:
-    "Cyder is a free, open-source Spotify desktop client written in Rust for Windows, with macOS and Linux coming soon. An 11 MB download with word-by-word synced lyrics, romanization and no Electron.",
+    "Cyder is a free, open-source Spotify desktop client written in Rust for Windows, with macOS and Linux coming soon. Synced lyrics, Apple Music in beta and no Electron, in a 34 MB download.",
   keywords: [
     "Spotify desktop app",
     "Spotify client",
@@ -20,7 +20,6 @@ export const metadata: Metadata = {
     "GPUI",
     "Apple Music beta",
     "synced lyrics",
-    "romanized lyrics",
     "Electron alternative",
     "open source",
   ],
@@ -31,7 +30,6 @@ const REPO_URL = "https://github.com/GabrielSantos23/Cyder";
 const RELEASES_URL = `${REPO_URL}/releases/latest`;
 // Direct link to the newest Windows build; GitHub redirects /latest/download/<asset> to the current release.
 const WINDOWS_URL = `${RELEASES_URL}/download/cyder.exe`;
-const APP = "/sites/am-rs/img/app";
 const TILE = "/sites/am-rs/img/tiles";
 const ICON = "/sites/am-rs/icons/icon-192.png";
 
@@ -172,48 +170,48 @@ const tiles = [...tileSet, ...tileSet];
 
 const features = [
   {
-    k: "jam",
-    title: "Listen together",
-    body: "Start a jam and share the code or the link. Friends who open it land straight in Cyder and hear what you're playing at the same moment, each streaming it on their own. Up to 16 people, kept within a tenth of a second of the host, and you decide whether guests can add songs or control playback.",
-    img: "jam-770",
-    alt: "The Listen together page in Cyder: host a jam with your name, or join one with a code",
+    k: "home",
+    title: "Your home and queue",
+    body: "Your home feed with Spotify's mixes and playlists, and a queue you reorder by dragging, with shuffle, repeat and a smart shuffle that mixes recommendations in.",
+    src: `${CARD}/home-queue-1280.webp`,
+    alt: "Cyder home page with Spotify playlists, and the queue open beside it",
   },
   {
-    k: "transfer",
-    title: "Transfer from Apple Music",
-    body: "Pick a playlist or your Liked Songs, or paste any public playlist link, and keep listening while Cyder finds every song on Spotify. It asks when it isn't sure about a match, keeps your Liked Songs in order, and picks up where it left off if a transfer gets interrupted.",
-    img: "transfer-1105",
-    alt: "The Transfer from Apple Music page in Cyder with a public playlist link pasted in",
+    k: "artists",
+    title: "Artist pages",
+    body: "Top songs, the latest release and the whole discography, filtered by albums or by singles and EPs, with play and shuffle one click away.",
+    src: `${CARD}/artist-drake-1280.webp`,
+    alt: "Drake's artist page in Cyder with the latest release, most played songs and discography",
+  },
+  {
+    k: "playlists",
+    title: "Albums and playlists",
+    body: "Every album and playlist in your library opens as a full page, with its track count, running time, and play or shuffle at the top.",
+    src: `${CARD}/playlist-all-out-2000s-1280.webp`,
+    alt: "The All Out 2000s playlist in Cyder, with 150 tracks",
   },
   {
     k: "lyrics",
-    title: "Synced lyrics, any language",
-    body: "Words fill in as they're sung, the way the Better Lyrics extension draws them. Japanese, Korean, Chinese and other non-Latin lyrics get romanization and a translation under every line. Click a line to jump there, or nudge the timing per song.",
-    img: "jp-1600",
-    alt: "Now playing アイドル (Idol) by YOASOBI, with Japanese lyrics filling word by word, romaji and an English translation under each line",
+    title: "Synced lyrics",
+    body: "Lyrics come from Apple Music, Spotify and LRCLIB, and the highlight follows the singer's voice word by word instead of jumping from line to line.",
+    src: "/sites/am-rs/video/now-playing-poster.webp",
+    alt: "Cyder playing This Love by Maroon 5, with synced lyrics over the album art",
   },
   {
-    k: "browse",
-    title: "Your feed, artists and search",
-    body: "Listen again, Quick picks, your mixes and mood filters, plus liked songs, saved albums, playlists and history once you sign in. Artist pages with top songs, albums, singles and radio, charts and new releases, and search across everything.",
-    img: "home-tall-1440",
-    alt: "Cyder home page with mood filters, song mixes and playlists",
-  },
-  {
-    k: "offline",
-    title: "Downloads and uploads",
-    body: "Save any song as a tagged .m4a with its cover art, at the best quality your account gets, and play it from the file even offline. Drop MP3, M4A, FLAC, OGG or WMA files on the window and they go to your library, tags and cover art included.",
-    img: "now-playing-1600",
-    alt: "Cyder now playing with word-by-word synced lyrics over an animated album-art background",
+    k: "together",
+    title: "Listen together, on any device",
+    body: "Invite someone with a code and they hear what you play, each on their own account. Cyder also lists your Spotify Connect devices and hands playback to any of them.",
+    src: `${CARD}/album-dangerous-1280.webp`,
+    alt: "The Dangerous album page by Michael Jackson in Cyder",
   },
 ];
 // Literal class names so Tailwind can see them: each screenshot shows while its accordion item is open.
 const showWhenOpen: Record<string, string> = {
-  jam: "group-has-[[data-k=jam][open]]/f:opacity-100",
-  transfer: "group-has-[[data-k=transfer][open]]/f:opacity-100",
+  home: "group-has-[[data-k=home][open]]/f:opacity-100",
+  artists: "group-has-[[data-k=artists][open]]/f:opacity-100",
+  playlists: "group-has-[[data-k=playlists][open]]/f:opacity-100",
   lyrics: "group-has-[[data-k=lyrics][open]]/f:opacity-100",
-  browse: "group-has-[[data-k=browse][open]]/f:opacity-100",
-  offline: "group-has-[[data-k=offline][open]]/f:opacity-100",
+  together: "group-has-[[data-k=together][open]]/f:opacity-100",
 };
 
 const floaters: { src?: string; icon?: ReactNode; pos: string; speed: number; rot: number; size: string }[] = [
@@ -231,22 +229,22 @@ const floaters: { src?: string; icon?: ReactNode; pos: string; speed: number; ro
 ];
 
 const notes = [
-  ["streams", "A player, not a remote", "Playback speaks Spotify's own protocol through librespot, the same library behind spotifyd, ncspot and psst. Audio decodes in-process straight from Spotify's CDN, and Cyder shows up as a Connect device, so your phone can hand playback over mid-song."],
-  ["frames", "Frames on a budget", "The UI lays out the whole window on every frame, so frames cost CPU. Browsing runs at 15 fps and now playing at 30, except while a lyric line fills, which gets every frame so the sweep stays smooth. When nothing moves, nothing gets drawn."],
-  ["audio", "Plays before it finishes downloading", "Opening an MP4 for seeking normally means reading every fragment first. Cyder starts on a streaming decoder right away, then swaps in a seekable one built over the same buffer the moment you seek."],
-  ["quickjs", "16 minutes down to 5 seconds", "The Apple Music beta has its own puzzle: signed-in streams need Apple Music's player JavaScript solved. It runs am-dlp's EJS solver in an embedded QuickJS, about 5 seconds per player, once per player version."],
-  ["shader", "Kawarp, ported", "The warped album-art background is a native shader port of Kawarp from Better Lyrics, and it reacts to the music."],
-  ["lyrics", "Real blur, real glow", "The lyrics renderer is a port of Better Lyrics. The glow is a real blur of the lit letters, never a box behind them. CJK lines render bold, shifted onto the same baseline as Latin text."],
+  ["soloist", "Spotify's own player", "Spotify songs play through Soloist, Spotify's official player, with a key you create once using your Premium account. librespot still handles the session: playlists, lyrics and metadata."],
+  ["musickit", "Apple Music, played by Apple", "The Apple Music beta runs Apple's MusicKit player in a hidden WebView2. Each song is matched by its ISRC in your account's store; the first one starts in about 3.5 seconds and the next ones in about 1.3."],
+  ["gpui", "Drawn on the GPU", "The interface is GPUI, the framework behind the Zed editor, in a fork with real background blur. Every pixel in the window is drawn natively, with no browser engine behind it."],
+  ["lyrics", "Lyrics that follow the voice", "Lyrics come from Apple Music, Spotify and LRCLIB and are cached on your computer. The highlight chases the singer's position with critical damping, so it glides instead of jumping."],
+  ["cache", "Light on Spotify's limits", "Spotify caps how many requests each app can make. Cyder caches almost everything so it rarely has to ask, which keeps your library quick and inside the limit."],
+  ["client-id", "Your own Spotify app", "Cyder runs on a Spotify Client ID you create for yourself. Apps in development mode allow up to 5 users, so everyone gets their own and the limits stay yours."],
 ];
 
 const pills: PhysicsItem[] = [
   { key: "lyrics", label: "Synced lyrics", x: 0.08, rot: -4 },
   { key: "mic", icon: <Mic className="size-6 text-[#6d5cf6] sm:size-8" />, x: 0.16, rot: -30 },
-  { key: "romaji", label: "Romaji", x: 0.24, rot: -62 },
-  { key: "jams", label: "Jams", x: 0.32, rot: 6 },
-  { key: "translations", label: "Translations", x: 0.38, rot: 0 },
+  { key: "shuffle", label: "Smart shuffle", x: 0.24, rot: -62 },
+  { key: "queue", label: "Queue", x: 0.32, rot: 6 },
+  { key: "connect", label: "Spotify Connect", x: 0.38, rot: 0 },
   { key: "headphones", icon: <Headphones className="size-7 text-zinc-500 sm:size-9" />, x: 0.48, rot: 18 },
-  { key: "offline", label: "Offline", x: 0.56, rot: 90 },
+  { key: "together", label: "Listen together", x: 0.56, rot: 90 },
   { key: "cassette", icon: <CassetteTape className="size-7 text-[#f97316] sm:size-10" />, x: 0.64, rot: 0 },
   { key: "lastfm", label: "Last.fm", x: 0.7, rot: 0 },
   { key: "discord", label: "Discord", x: 0.78, rot: -24 },
@@ -256,13 +254,13 @@ const pills: PhysicsItem[] = [
 
 const faqs = [
   ["Is Cyder free?", "Yes. Cyder is free and open source under the GPL-3.0 license. The app has no ads, accounts or paid tiers of its own."],
-  ["Is it an official Spotify app?", "No. Cyder is an unofficial client built by an independent developer. It talks to the same services open.spotify.com uses, so changes on Spotify's side can occasionally affect playback, sign-in or lyrics."],
-  ["Is Apple Music supported?", "Yes, in beta. Apple Music is the secondary service: the same native player, the same lyrics, pointed at your Apple Music library. It's still an unofficial client, so changes on Apple's side can occasionally affect playback, sign-in or lyrics."],
-  ["Do I need Spotify Premium?", "No. You can browse, search and play without signing in. Signing in unlocks your library, likes, playlists and history. With Spotify Premium, every song plays in full quality and the queue, radio and autoplay all work."],
+  ["Is it an official Spotify app?", "No. Cyder is an unofficial client built by an independent developer. It uses Spotify's Web API and Spotify's official Soloist player, so changes on Spotify's side can occasionally affect it."],
+  ["Is Apple Music supported?", "Yes, in beta. Songs play through Apple's own MusicKit player inside Cyder, with your Apple Music library, home and search. You need an Apple Music subscription, and changes on Apple's side can occasionally affect playback."],
+  ["Do I need Spotify Premium?", "Yes, to play from Spotify. Spotify only lets apps like Cyder play music for Premium accounts, through its official Soloist player and a key you create once. With the Apple Music beta, songs can play through Apple Music instead."],
   ["Does it run on macOS or Linux?", "Not yet. Cyder runs on Windows today as a single cyder.exe download. Native macOS and Linux versions are coming soon."],
-  ["How does signing in work?", "Open Settings → Sign in with Spotify. Spotify's own sign-in page opens in a temporary system webview window (WebView2 on Windows), and the session stays on your computer, in Credential Manager, the Keychain or your keyring. The player itself never runs in a webview."],
-  ["Where do the lyrics come from?", "Synced lyrics come from every source the Better Lyrics extension uses: Better Lyrics, Unison, Musixmatch, LRCLib and others. If one has nothing for a song, the next takes over. Romanization and translations come from the lyrics when they include them, otherwise from Unison or Google Translate. Machine translations can have rough spots."],
-  ["How does it update?", "The installed app checks GitHub for new releases, downloads them in the background and installs when you close it. Choose Restart to update to install right away, or turn updates off in Settings → Updates."],
+  ["How does signing in work?", "The first time you open Cyder, it walks you through creating a free app in the Spotify developer dashboard and pasting its Client ID, then you sign in with Spotify. To play music, you also create a Soloist key with your Premium account."],
+  ["Where do the lyrics come from?", "From Apple Music, Spotify and LRCLIB, cached on your computer. If none of them has the lyrics for a song, Cyder says so."],
+  ["How does it update?", "Cyder checks GitHub for new versions and downloads them for you. When one is ready, it offers to install it."],
 ];
 
 // Artist photos in the tile wave: Wikimedia Commons, credited in the footer as their licenses require.
@@ -338,7 +336,7 @@ export default function Page() {
         {/* Intro: line, wave of tiles, headline, sticky note */}
         <section aria-labelledby="intro-title" className="relative pt-16 pb-28 text-center">
           <p className="mx-auto max-w-md px-4 text-sm leading-relaxed text-white/80">
-            Cyder is a native Spotify app for Windows, written in Rust, with macOS and Linux coming soon. Word-by-word synced lyrics and romanization in an 11&nbsp;MB download that draws nothing at all when you aren&apos;t looking.
+            Cyder is a native Spotify app for Windows, written in Rust, with macOS and Linux coming soon. Synced lyrics, your whole library and Apple Music in beta, in one 34&nbsp;MB file.
           </p>
           <div data-reveal className="mx-auto mt-8 h-24 w-px origin-top scale-y-0 bg-white/40 transition-transform duration-1000 data-in:scale-y-100" />
 
@@ -359,7 +357,7 @@ export default function Page() {
             <Reveal delay={100}>Spotify For</Reveal>
           </h2>
           <p className="mx-auto mt-6 max-w-sm px-4 text-sm leading-relaxed text-white/70">
-            Your feed, your library and your playlists, with even volume, quick skips, media keys, Discord Rich Presence and Last.fm scrobbling, in a small native app that stays out of the way and updates itself.
+            Your home, library, playlists and search, with a queue you drag to reorder, smart shuffle, media keys, Discord and Last.fm, in a native app that updates itself.
           </p>
           <p
             data-reveal
@@ -405,7 +403,7 @@ export default function Page() {
                   </Sticker>
                 </h2>
                 <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-black/75">
-                  A real player, not a remote. Cyder speaks Spotify&apos;s own protocol, plays 256 kbps audio with loudness normalization, and shows up as a Connect device your phone can hand playback to mid-song.
+                  Cyder plays through Soloist, Spotify&apos;s official player, so every song is the real thing. Browse your library and playlists, and send playback to any of your Spotify Connect devices.
                 </p>
               </div>
               <span aria-hidden="true" className="absolute inset-x-0 bottom-[-3vw] text-center font-heading text-[27vw] leading-none whitespace-nowrap text-lime-soft select-none">
@@ -471,7 +469,7 @@ export default function Page() {
                   {features.map((f) => (
                     <img
                       key={f.k}
-                      src={`${APP}/${f.img}.webp`}
+                      src={f.src}
                       alt={f.alt}
                       loading="lazy"
                       className={`absolute inset-0 size-full object-cover object-top opacity-0 transition-opacity duration-500 ${showWhenOpen[f.k]}`}
@@ -494,7 +492,7 @@ export default function Page() {
           </div>
         </section>
 
-        {/* No Chromium anywhere: floating stickers with parallax */}
+        {/* No Electron anywhere: floating stickers with parallax */}
         <section id="engine" data-progress aria-labelledby="engine-title" className="relative overflow-hidden px-4 py-44 text-center sm:py-56">
           {floaters.map((f, i) => (
             <div key={i} aria-hidden="true" className={`absolute ${f.pos}`} style={{ transform: `translateY(calc((0.5 - var(--p)) * ${f.speed}px)) rotate(${f.rot}deg)` }}>
@@ -505,25 +503,24 @@ export default function Page() {
           ))}
           <div className="relative">
             <h2 id="engine-title" className={`${display} text-[clamp(3.25rem,8vw,7rem)]`}>
-              <Reveal className="text-white/35">No Chromium</Reveal>
+              <Reveal className="text-white/35">No Electron</Reveal>
               <Reveal delay={100}>Anywhere.</Reveal>
             </h2>
             <p className="mx-auto mt-6 max-w-md font-heading text-lg leading-snug text-lime">
-              The interface is <a className="underline underline-offset-4" href="https://www.gpui.rs/" rel="noopener">GPUI</a> on the GPU. Audio is{" "}
-              <a className="underline underline-offset-4" href="https://github.com/librespot-org/librespot" rel="noopener">librespot</a> and{" "}
-              <a className="underline underline-offset-4" href="https://github.com/RustAudio/rodio" rel="noopener">rodio</a>. Browsing goes straight to Spotify&apos;s Web API.
+              The interface is <a className="underline underline-offset-4" href="https://github.com/sonorahq/gpui" rel="noopener">GPUI</a>, the GPU framework behind Zed. Spotify plays through{" "}
+              <a className="underline underline-offset-4" href="https://developer.spotify.com/blog/2026-08-13-introducing-spotify-soloist" rel="noopener">Soloist</a>, its official player, and browsing goes straight to the Web API.
             </p>
             <p className="mx-auto mt-5 max-w-xs text-xs leading-relaxed text-white/60">
-              It all compiles into a small native binary with no webview anywhere, with lyrics from Better Lyrics and romaji from Unison and Google.
+              Apple Music plays through Apple&apos;s own MusicKit player, out of sight. Lyrics come from Apple Music, Spotify and LRCLIB.
             </p>
           </div>
         </section>
 
-        {/* Not just a remote: engine notes */}
+        {/* Under the hood: engine notes */}
         <section aria-labelledby="notes-title" className={`${wrap} max-w-4xl py-24`}>
           <h2 id="notes-title" className={`${display} text-[clamp(3rem,6.5vw,5.5rem)]`}>
             <Reveal>
-              <span className="text-lilac">Not Just</span> A Remote
+              <span className="text-lilac">Under</span> The Hood
             </Reveal>
           </h2>
           <div className="mt-8 space-y-3">
@@ -584,7 +581,7 @@ export default function Page() {
                   <span className="rounded-full bg-black px-2.5 py-1 text-[11px] font-medium tracking-wide text-lime uppercase">Coming soon</span>
                 </div>
               </div>
-              <img src={`${APP}/home-tall-720.webp`} alt="" loading="lazy" className={`absolute -bottom-32 -left-10 w-[66%] -rotate-[16deg] ${bezel}`} />
+              <img src={`${CARD}/home-queue-1280.webp`} alt="" loading="lazy" className={`absolute -bottom-32 -left-10 w-[66%] -rotate-[16deg] ${bezel}`} />
             </article>
 
             <article data-reveal className="relative flex min-h-[600px] flex-col overflow-hidden rounded-[28px] bg-lime p-6 text-black transition delay-150 duration-700 sm:p-8 md:translate-y-10 md:opacity-0 md:data-in:translate-y-0 md:data-in:opacity-100">
@@ -605,7 +602,7 @@ export default function Page() {
                   Watch on GitHub
                 </a>
               </div>
-              <img src={`${APP}/jp-800.webp`} alt="" loading="lazy" className={`absolute -right-12 -bottom-36 w-[62%] rotate-[14deg] ${bezel}`} />
+              <img src={`${CARD}/artist-drake-1280.webp`} alt="" loading="lazy" className={`absolute -right-12 -bottom-36 w-[62%] rotate-[14deg] ${bezel}`} />
             </article>
 
             <a

@@ -42,7 +42,7 @@ export default async function Image() {
             <span>Browser.</span>
           </div>
           <div style={{ display: "flex", marginTop: 26, fontSize: 25, lineHeight: 1.4, color: "rgba(255,255,255,0.75)", width: 500 }}>
-            A native Spotify app in Rust, with word-by-word synced lyrics and romaji.
+            A native Spotify app in Rust, with synced lyrics and Apple Music in beta.
           </div>
           <div style={{ display: "flex", gap: 12, marginTop: 30 }}>
             <div style={pill("#bcf66e", "#000")}>Windows</div>
