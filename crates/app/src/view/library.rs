@@ -831,12 +831,13 @@ impl Cyder {
         };
         // O modo imersivo não fica aqui: é uma ação, não uma seção. Abre pelo botão da barra do player e pela capa.
         let search = self.search_field(window, cx);
-        let filter_label = match self.side_filter {
-            SideFilter::All => t("Sua biblioteca"),
-            SideFilter::Playlists => t("Suas playlists"),
-            SideFilter::Artists => t("Artistas"),
-            SideFilter::Albums => t("Álbuns"),
-            SideFilter::Podcasts => "Podcasts",
+        let filter_label: String = match (self.side_folder(), self.side_filter) {
+            (Some(folder), _) => folder.name.clone(),
+            (None, SideFilter::All) => t("Sua biblioteca").into(),
+            (None, SideFilter::Playlists) => t("Suas playlists").into(),
+            (None, SideFilter::Artists) => t("Artistas").into(),
+            (None, SideFilter::Albums) => t("Álbuns").into(),
+            (None, SideFilter::Podcasts) => "Podcasts".into(),
         };
         let library_bar = div()
             .mt_4()
@@ -855,10 +856,10 @@ impl Cyder {
                     }
                     cx.notify();
                 })))
-            .child(div().flex_1().px_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(filter_label))
+            .child(div().flex_1().px_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(filter_label.clone()))
             .child(small_button("side-create", t("Criar playlist"), "plus", false)
                 .on_click(cx.listener(|t, _, _, cx| { t.ask_playlist_name(None); cx.notify(); })))
-            .child(small_button("side-filter", t("Filtrar a biblioteca"), "list-filter", self.side_filter != SideFilter::All)
+            .child(small_button("side-filter", t("Filtrar a biblioteca"), "list-filter", self.side_filter != SideFilter::All || self.side_folder().is_some())
                 .on_click(cx.listener(|t, e: &ClickEvent, _, cx| { t.open_menu(MenuTarget::SidebarFilter, e.position()); cx.notify(); })));
         let search_field = self.side_search_open.then(|| {
             let focused = self.side_search_focus.is_focused(window);
@@ -958,7 +959,7 @@ impl Cyder {
     fn sidebar_items(&self) -> Vec<Card> {
         let items = self.sidebar_items_flat();
         let Some(lib) = self.library.as_ref().filter(|l| !l.folders.is_empty()) else { return items };
-        if !self.side_query.trim().is_empty() || !matches!(self.side_filter, SideFilter::All | SideFilter::Playlists) {
+        if !self.side_query.trim().is_empty() || !matches!(self.side_filter, SideFilter::All | SideFilter::Playlists) || self.side_folder().is_some() {
             return items;
         }
         let of: HashMap<&str, usize> = lib.folders.iter().enumerate().flat_map(|(i, f)| f.playlists.iter().map(move |u| (u.as_str(), i))).collect();
@@ -996,6 +997,12 @@ impl Cyder {
         out
     }
 
+    /// A pasta escolhida no filtro da biblioteca, se ela ainda existe.
+    pub(super) fn side_folder(&self) -> Option<&cyder_core::Folder> {
+        let id = self.side_folder_id.as_ref()?;
+        self.library.as_ref()?.folders.iter().find(|f| &f.id == id)
+    }
+
     /// A playlist está numa pasta aberta da sidebar (a linha vem recuada).
     fn in_open_folder(&self, uri: &str) -> bool {
         !self.pins.iter().any(|p| p == uri)
@@ -1019,6 +1026,10 @@ impl Cyder {
             SideFilter::Albums => lib.map(|l| l.albums.clone()).unwrap_or_default(),
             SideFilter::Podcasts => lib.map(|l| l.shows.clone()).unwrap_or_default(),
         };
+        // Filtro por pasta: só as playlists dela.
+        if let Some(folder) = self.side_folder() {
+            items.retain(|c| folder.playlists.contains(&c.uri));
+        }
         // Ordem arrastada à mão: fixadas continuam no topo; o que é novo (fora da ordem salva) vem antes.
         if !self.library_order.is_empty() {
             let pos: std::collections::HashMap<&str, usize> = self.library_order.iter().enumerate().map(|(i, u)| (u.as_str(), i + 1)).collect();
@@ -1058,10 +1069,10 @@ impl Cyder {
             self.notify(t("As fixadas ficam no topo. Desafixe para mover."));
             return;
         }
-        let (filter, query) = (self.side_filter, std::mem::take(&mut self.side_query));
+        let (filter, query, folder) = (self.side_filter, std::mem::take(&mut self.side_query), self.side_folder_id.take());
         self.side_filter = SideFilter::All;
         let mut order: Vec<String> = self.sidebar_items_flat().into_iter().filter(|c| !self.pins.contains(&c.uri)).map(|c| c.uri).collect();
-        (self.side_filter, self.side_query) = (filter, query);
+        (self.side_filter, self.side_query, self.side_folder_id) = (filter, query, folder);
         let (Some(from), Some(to)) = (order.iter().position(|u| u == src), order.iter().position(|u| u == dst)) else { return };
         let uri = order.remove(from);
         order.insert(to, uri);

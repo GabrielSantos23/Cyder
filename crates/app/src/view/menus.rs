@@ -79,6 +79,8 @@ enum Action {
     Credits(Track),
     Sleep(Option<SleepChoice>),
     Filter(SideFilter),
+    /// Filtra a sidebar por uma pasta do Spotify (id).
+    Folder(String),
     /// Volta a sidebar para "mais novos primeiro", descartando a ordem arrastada à mão.
     LibraryByAdded,
     LibrarySort(super::library::SideSort),
@@ -159,8 +161,23 @@ impl Cyder {
                     (SideFilter::Podcasts, "Podcasts", "podcast"),
                 ]
                 .into_iter()
-                .map(|(f, label, icon)| Entry::Item(Item { label: label.into(), icon, action: Some(Action::Filter(f)), sub: Vec::new(), checked: self.side_filter == f, mark: "check" }))
+                .map(|(f, label, icon)| Entry::Item(Item { label: label.into(), icon, action: Some(Action::Filter(f)), sub: Vec::new(), checked: self.side_filter == f && self.side_folder().is_none(), mark: "check" }))
                 .collect();
+                // As pastas do Spotify também filtram: só as playlists de uma.
+                let folders = self.library.as_ref().map(|l| l.folders.clone()).unwrap_or_default();
+                if !folders.is_empty() {
+                    out.push(Entry::Sep);
+                    out.push(Entry::Heading(t("Pastas")));
+                    let chosen = self.side_folder().map(|f| f.id.clone());
+                    out.extend(folders.into_iter().map(|f| Entry::Item(Item {
+                        checked: chosen.as_deref() == Some(f.id.as_str()),
+                        label: f.name.into(),
+                        icon: "folder",
+                        action: Some(Action::Folder(f.id)),
+                        sub: Vec::new(),
+                        mark: "check",
+                    })));
+                }
                 // Arrastar um item muda para a ordem personalizada; ela só aparece aqui para mostrar que está valendo.
                 let custom = !self.library_order.is_empty();
                 out.push(Entry::Sep);
@@ -427,6 +444,12 @@ impl Cyder {
             }
             Action::Filter(f) => {
                 self.side_filter = f;
+                self.side_folder_id = None;
+                self.refocus = true;
+            }
+            Action::Folder(id) => {
+                self.side_filter = SideFilter::Playlists;
+                self.side_folder_id = Some(id);
                 self.refocus = true;
             }
             Action::LibraryByAdded => {

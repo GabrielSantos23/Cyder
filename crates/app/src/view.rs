@@ -389,6 +389,8 @@ pub struct Cyder {
     library_order: Vec<String>,
     /// Sidebar: o que a lista mostra e a busca dentro dela.
     side_filter: SideFilter,
+    /// Pasta escolhida no filtro da biblioteca (id do Spotify).
+    side_folder_id: Option<String>,
     side_sort: library::SideSort,
     side_query: String,
     side_search_open: bool,
@@ -978,6 +980,7 @@ impl Cyder {
             loading_more: HashSet::new(),
             library_order: Vec::new(),
             side_filter: SideFilter::All,
+            side_folder_id: None,
             side_sort: library::SideSort::Added,
             side_query: String::new(),
             side_search_open: false,
