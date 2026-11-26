@@ -114,7 +114,7 @@ impl WebApi {
         for _ in 0..5 {
             self.check_blocked()?;
             let token = self.auth.lock().await.access_token().await?;
-            let res = self.http.get(format!("{BASE}{path}")).bearer_auth(token).send().await.map_err(|e| e.to_string())?;
+            let res = self.http.get(format!("{BASE}{path}")).bearer_auth(token).header("accept-language", crate::i18n::spotify_language()).send().await.map_err(|e| e.to_string())?;
             if res.status() == 429 {
                 self.rate_limited(&res, path).await?;
                 continue;
@@ -149,7 +149,7 @@ impl WebApi {
         for _ in 0..5 {
             self.check_blocked()?;
             let token = self.auth.lock().await.access_token().await?;
-            let res = self.http.request(method.clone(), format!("{BASE}{path}")).bearer_auth(token).json(&body).send().await.map_err(|e| e.to_string())?;
+            let res = self.http.request(method.clone(), format!("{BASE}{path}")).bearer_auth(token).header("accept-language", crate::i18n::spotify_language()).json(&body).send().await.map_err(|e| e.to_string())?;
             if res.status() == 429 {
                 self.rate_limited(&res, path).await?;
                 continue;

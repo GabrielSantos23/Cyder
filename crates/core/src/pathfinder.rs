@@ -104,7 +104,7 @@ async fn post(http: &reqwest::Client, token: &str, client_token: Option<&str>, o
         .header("spotify-app-version", APP_VERSION)
         .header("accept", "application/json")
         // Títulos das seções em português ("Feito para…"), como o resto do app.
-        .header("accept-language", "pt-BR")
+        .header("accept-language", crate::i18n::spotify_language())
         .header("user-agent", UA)
         .json(&body);
     if let Some(ct) = client_token {

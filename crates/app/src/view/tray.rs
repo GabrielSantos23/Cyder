@@ -62,6 +62,8 @@ pub fn show(hwnd: isize) {
 
 pub(super) struct Tray {
     _icon: TrayIcon,
+    /// Os itens do menu com o texto em português, para trocar de idioma sem refazer o menu.
+    items: Vec<(MenuItem, &'static str)>,
 }
 
 enum Do {
@@ -80,19 +82,22 @@ impl Cyder {
         // Para a segunda abertura achar esta janela: o título muda com a música, então não dá para procurar por ele.
         let _ = std::fs::write(window_file(), self.hwnd.to_string());
         let items = [
-            ("show", t("Mostrar o Cyder")),
-            ("toggle", t("Tocar ou pausar")),
-            ("next", t("Próxima")),
-            ("prev", t("Anterior")),
+            ("show", "Mostrar o Cyder"),
+            ("toggle", "Tocar ou pausar"),
+            ("next", "Próxima"),
+            ("prev", "Anterior"),
             ("mini", "Mini player"),
-            ("quit", t("Sair")),
+            ("quit", "Sair"),
         ];
         let menu = Menu::new();
+        let mut labeled = Vec::new();
         for (i, (id, label)) in items.iter().enumerate() {
             if matches!(i, 1 | 4 | 5) {
                 let _ = menu.append(&PredefinedMenuItem::separator());
             }
-            let _ = menu.append(&MenuItem::with_id(*id, *label, true, None));
+            let item = MenuItem::with_id(*id, text(label), true, None);
+            let _ = menu.append(&item);
+            labeled.push((item, *label));
         }
         let icon = match Icon::from_rgba(icon_rgba(32), 32, 32) {
             Ok(i) => i,
@@ -102,7 +107,7 @@ impl Cyder {
             Ok(t) => t,
             Err(e) => return log::warn!("bandeja indisponível: {e}"),
         };
-        self.tray = Some(Tray { _icon: tray });
+        self.tray = Some(Tray { _icon: tray, items: labeled });
         // Os eventos chegam fora da thread da UI; o canal os traz para cá.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let menu_tx = tx.clone();
@@ -141,6 +146,20 @@ impl Cyder {
             }
         })
         .detach();
+    }
+}
+
+/// Texto de um item da bandeja. "Sair" aqui é fechar o app, não sair da conta como no resto.
+fn text(pt: &str) -> String {
+    if pt == "Sair" { cyder_core::tr!("Sair", "Quit") } else { t(pt).to_string() }
+}
+
+impl Cyder {
+    /// O menu da bandeja no idioma escolhido.
+    pub(super) fn relabel_tray(&self) {
+        for (item, pt) in self.tray.iter().flat_map(|tr| &tr.items) {
+            item.set_text(text(pt));
+        }
     }
 }
 

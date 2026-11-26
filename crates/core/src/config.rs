@@ -135,6 +135,21 @@ pub enum Language {
     English,
 }
 
+impl Language {
+    /// O da primeira abertura: português num Windows em português, inglês nos outros.
+    pub fn system() -> Language {
+        #[cfg(windows)]
+        {
+            // SAFETY: só lê o idioma da interface do Windows.
+            let id = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+            if id & 0x3ff != 0x16 {
+                return Language::English;
+            }
+        }
+        Language::Portuguese
+    }
+}
+
 /// Cor de destaque: o verde do Spotify ou a do Windows (ajustada para o contraste).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Accent {
@@ -214,7 +229,7 @@ impl Default for Settings {
             cover_colors: true,
             theme: Theme::Dark,
             accent: Accent::Green,
-            language: Language::Portuguese,
+            language: Language::system(),
             cover_frame: false,
             canvas: true,
             eq_on: false,
@@ -262,11 +277,6 @@ pub fn save_settings(s: &Settings) {
     if let Err(e) = std::fs::create_dir_all(config_dir()).and_then(|_| std::fs::write(settings_path(), text)) {
         log::warn!("configurações: {e}");
     }
-}
-
-/// Pastas do cache que a tela de configurações mostra.
-pub fn audio_cache_dir() -> PathBuf {
-    cache_dir().join("audio")
 }
 
 pub fn credentials_dir() -> PathBuf {

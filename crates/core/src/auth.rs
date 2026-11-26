@@ -25,9 +25,9 @@ fn err(e: impl std::fmt::Display) -> String {
 /// A sessão volta **sem conectar**: quem conecta é o `Spirc::new`, e conectar duas vezes trava (doc 07).
 pub async fn audio_session(cache_dir: &Path) -> Result<(Session, Credentials), String> {
     let settings = crate::config::settings();
-    let audio = settings.audio_cache.then(|| cache_dir.join("audio"));
-    let limit = settings.audio_cache.then_some(settings.audio_cache_mb as u64 * 1024 * 1024);
-    let cache = Cache::new(Some(cache_dir.join("credentials")), None, audio, limit).map_err(err)?;
+    // O áudio toca pelo Soloist: o cache de áudio do player antigo (até 1 GB) não é mais usado.
+    let _ = tokio::fs::remove_dir_all(cache_dir.join("audio")).await;
+    let cache = Cache::new(Some(cache_dir.join("credentials")), None, None, None).map_err(err)?;
     // Como no Spotify: quando o álbum ou a playlist acaba, segue com músicas parecidas.
     let defaults = SessionConfig::default();
     let device_id = crate::config::device_id(|| defaults.device_id.clone());

@@ -208,7 +208,7 @@ impl Cyder {
                 .child(row("mic-vocal", t("Letra sincronizada em tela cheia"), Some("L")))
                 .child(row("picture-in-picture-2", t("Mini player: botão no topo da janela, à direita"), None))
                 .child(row("speaker", t("O Cyder aparece no Spotify Connect do celular"), None))
-                .child(row("settings", t("Last.fm, Discord e equalizador: Configurações"), None)))
+                .child(row("settings", t("Last.fm, Discord e mais: Configurações"), None)))
             .child(div().flex().items_center().justify_between()
                 .child(Self::text_button("onb-shortcuts", t("Ver todos os atalhos"))
                     .on_click(cx.listener(|t, _, _, cx| { t.dialog = Some(Dialog::Shortcuts); cx.notify(); })))

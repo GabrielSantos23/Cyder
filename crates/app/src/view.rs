@@ -429,7 +429,7 @@ pub struct Cyder {
     /// Aviso embaixo das configurações de reprodução.
     playback_note: Option<&'static str>,
     /// Tamanho das capas e do áudio em cache, medido ao abrir as configurações.
-    storage: Option<(u64, u64)>,
+    storage: Option<u64>,
     /// Controle de mídia do sistema (teclas de mídia, cartão "tocando agora"); None se o sistema recusou.
     media: Option<souvlaki::MediaControls>,
     media_shown: media::Shown,

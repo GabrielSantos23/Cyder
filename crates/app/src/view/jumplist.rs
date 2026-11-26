@@ -27,7 +27,7 @@ use windows::{
             WindowsAndMessaging::{SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_COPYDATA},
         },
     },
-    core::{HSTRING, Interface, w},
+    core::{HSTRING, Interface},
 };
 
 use super::Cyder;
@@ -42,7 +42,7 @@ thread_local! {
     // A janela e o subclass rodam na thread da UI.
     static TX: RefCell<Option<UnboundedSender<Vec<String>>>> = const { RefCell::new(None) };
     /// Recentes já na Jump List (URI e nome), para só refazer quando mudam.
-    static SHOWN: RefCell<Option<Vec<(String, String)>>> = const { RefCell::new(None) };
+    static SHOWN: RefCell<Option<(bool, Vec<(String, String)>)>> = const { RefCell::new(None) };
 }
 
 /// Manda `args` ao Cyder já aberto na janela `hwnd`. `false` se ele não respondeu.
@@ -130,11 +130,13 @@ impl Cyder {
             .map(|(c, _)| (c.uri, c.title))
             .take(8)
             .collect();
-        if SHOWN.with_borrow(|s| s.as_ref() == Some(&recent)) {
+        // O idioma entra na conta: trocar refaz a lista com os nomes das tarefas no idioma novo.
+        let shown = (cyder_core::i18n::english(), recent);
+        if SHOWN.with_borrow(|s| s.as_ref() == Some(&shown)) {
             return;
         }
-        match commit(&recent) {
-            Ok(()) => SHOWN.with_borrow_mut(|s| *s = Some(recent)),
+        match commit(&shown.1) {
+            Ok(()) => SHOWN.with_borrow_mut(|s| *s = Some(shown)),
             Err(e) => log::warn!("Jump List: {e}"),
         }
     }
@@ -168,7 +170,7 @@ fn commit(recent: &[(String, String)]) -> Result<(), String> {
             any = true;
         }
         if any {
-            list.AppendCategory(w!("Recentes"), &items.cast::<IObjectArray>().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            list.AppendCategory(&HSTRING::from(t("Recentes")), &items.cast::<IObjectArray>().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         }
         list.CommitList().map_err(|e| e.to_string())
     }

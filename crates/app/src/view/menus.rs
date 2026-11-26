@@ -409,7 +409,14 @@ impl Cyder {
                 self.liked_changed();
             }
             Action::LikedCompact(compact) => self.liked_order.compact = compact,
-            Action::Language(language) => self.change(|st| st.language = language, false),
+            Action::Language(language) => {
+                self.change(|st| st.language = language, false);
+                // Já vale para o pedido abaixo: a tela inicial volta no idioma novo (o resto vem com o próximo render).
+                cyder_core::i18n::set_english(language == cyder_core::config::Language::English);
+                self.send(Cmd::RefreshHome);
+                self.relabel_tray();
+                self.sync_jumplist();
+            }
             Action::Filter(f) => {
                 self.side_filter = f;
                 self.refocus = true;

@@ -72,11 +72,10 @@ impl Cyder {
     }
 
     fn measure_storage(&mut self, cx: &mut Context<Self>) {
-        self.storage = Some((0, 0));
+        self.storage = Some(0);
         cx.spawn(async move |this, cx| {
             let sizes = cx.background_executor().spawn(async {
-                let art = images::art_dirs().iter().map(|d| images::dir_size(d)).sum();
-                (art, images::dir_size(&config::audio_cache_dir()))
+                images::art_dirs().iter().map(|d| images::dir_size(d)).sum()
             }).await;
             let _ = this.update(cx, |s, cx| {
                 s.storage = Some(sizes);
@@ -443,7 +442,7 @@ impl Cyder {
     }
 
     fn storage_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let (art, audio) = self.storage.unwrap_or_default();
+        let art = self.storage.unwrap_or_default();
         let cache = config::cache_dir();
         let reveal = |id: &'static str, path: std::path::PathBuf| {
             Self::secondary_button(id, t("Mostrar pasta")).on_click(move |_, _, cx| cx.reveal_path(&path))
@@ -464,7 +463,6 @@ impl Cyder {
         };
         Self::section(t("Armazenamento"), vec![
             art_row,
-            Self::row(t("Áudio"), tr!("{} em {}", "{} in {}", size_label(audio), config::audio_cache_dir().display()), reveal("settings-audio-dir", config::audio_cache_dir())),
             Self::row("Login", tr!("Guardado em {}", "Stored in {}", config::credentials_dir().display()), reveal("settings-login-dir", config::credentials_dir())),
         ])
     }

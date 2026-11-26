@@ -14,6 +14,11 @@ pub fn english() -> bool {
     ENGLISH.load(Ordering::Relaxed)
 }
 
+/// Idioma pedido ao Spotify (tela inicial, nomes de categorias e playlists dele).
+pub fn spotify_language() -> &'static str {
+    if english() { "en" } else { "pt-BR" }
+}
+
 /// O texto no idioma escolhido. Sem tradução, o próprio texto.
 pub fn t(pt: &str) -> &str {
     if !english() {
@@ -150,6 +155,7 @@ const EN: &[(&str, &str)] = &[
     ("Para voltar, você entra de novo pelo navegador. A biblioteca guardada neste computador é apagada.", "To come back, you sign in again through the browser. The library stored on this computer is deleted."),
     ("Cancelar", "Cancel"),
     ("Sair", "Sign out"),
+    ("Recentes", "Recent"),
     ("Saindo da conta…", "Signing out…"),
     ("Créditos", "Credits"),
     ("Gravadora", "Label"),
@@ -340,7 +346,7 @@ const EN: &[(&str, &str)] = &[
     ("Letra sincronizada em tela cheia", "Full-screen synced lyrics"),
     ("Mini player: botão no topo da janela, à direita", "Mini player: button at the top right of the window"),
     ("O Cyder aparece no Spotify Connect do celular", "Cyder shows up in Spotify Connect on your phone"),
-    ("Last.fm, Discord e equalizador: Configurações", "Last.fm, Discord and more: Settings"),
+    ("Last.fm, Discord e mais: Configurações", "Last.fm, Discord and more: Settings"),
     ("Ver todos os atalhos", "See all shortcuts"),
     ("Começar a ouvir", "Start listening"),
     ("Meu player", "My player"),
