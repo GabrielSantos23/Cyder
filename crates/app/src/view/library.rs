@@ -833,7 +833,7 @@ impl Cyder {
         let search_field = self.side_search_open.then(|| {
             let focused = self.side_search_focus.is_focused(window);
             let caret = || div().w(px(1.5)).h(px(16.)).bg(rgba(theme::ink_1()));
-            let field = div()
+            let field = self.wire_field(div(), super::Field::Side, cx)
                 .id("side-search-field")
                 .key_context("TextField")
                 .track_focus(&self.side_search_focus)
@@ -850,12 +850,12 @@ impl Cyder {
                 .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
                 .text_sm()
                 .cursor_text()
-                .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.side_search_focus, cx); cx.notify(); }))
+                .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.click_field(super::Field::Side, e.position(), e.click_count(), e.modifiers().shift); window.focus(&t.side_search_focus, cx); cx.notify(); }))
                 .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.side_search_key(e, window, cx)));
             if self.side_query.is_empty() {
                 field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(tr!("Buscar em {}", "Search in {}", filter_label.to_lowercase())))
             } else {
-                field.child(self.field_text(self.side_query.clone(), focused, caret()))
+                field.child(self.field_text(super::Field::Side, self.side_query.clone(), focused, caret()))
             }
         });
         // Rodapé: a conta, com configurações, atalhos e sair.

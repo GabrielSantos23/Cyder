@@ -1,7 +1,7 @@
 //! Busca no Spotify: o campo no topo da sidebar e a tela de resultados. Em "Tudo", o melhor resultado ao lado
 //! das músicas e uma prateleira por tipo; com um filtro, a lista daquele tipo, que carrega mais ao rolar.
 use cyder_core::{i18n::t, tr};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cyder_core::{Card, Cmd, Kind, SearchKind, SearchResults, Shelf, config};
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, ParentElement, SharedString, Styled, Window, div, img, prelude::*, px, rgba};
@@ -70,9 +70,9 @@ impl Cyder {
         let text = if empty {
             text.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(t("Buscar")))
         } else {
-            text.child(self.field_text(self.search_query.clone(), focused, caret()))
+            text.child(self.field_text(crate::view::Field::Search, self.search_query.clone(), focused, caret()))
         };
-        div()
+        self.wire_field(div(), crate::view::Field::Search, cx)
             .id("global-search")
             .key_context("TextField")
             .track_focus(&self.search_focus)
@@ -93,7 +93,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0x17))))
             // No mouse down: o campo fica na faixa de arrastar a janela, que engole o clique.
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|t, e: &gpui::MouseDownEvent, window, cx| {
-                t.text_selected = e.click_count >= 2; t.text_back = 0;
+                t.click_field(crate::view::Field::Search, e.position, e.click_count, e.modifiers.shift);
                 t.open_search(window, cx);
             }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.search_key(e, window, cx)))
@@ -143,13 +143,7 @@ impl Cyder {
                 self.run_search();
                 self.remember_search();
             }
-            _ if super::super::type_into(&mut self.search_query, k, &mut self.text_selected, &mut self.text_back, cx) => {
-                self.search_due = Some(Instant::now());
-                if !matches!(self.screen, Screen::Search) {
-                    self.go(Screen::Search);
-                    self.refocus = false;
-                }
-            }
+            _ if super::super::type_into(&mut self.search_query, k, &mut self.text_anchor, &mut self.text_back, cx) => self.field_edited(crate::view::Field::Search),
             _ => return,
         }
         cx.stop_propagation();

@@ -45,6 +45,9 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/pause.svg", include_bytes!("../assets/icons/pause.svg")),
     ("icons/loader-circle.svg", include_bytes!("../assets/icons/loader-circle.svg")),
     ("icons/languages.svg", include_bytes!("../assets/icons/languages.svg")),
+    ("icons/scissors.svg", include_bytes!("../assets/icons/scissors.svg")),
+    ("icons/clipboard-paste.svg", include_bytes!("../assets/icons/clipboard-paste.svg")),
+    ("icons/text-select.svg", include_bytes!("../assets/icons/text-select.svg")),
     ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
     ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
     ("icons/x.svg", include_bytes!("../assets/icons/x.svg")),
@@ -246,6 +249,13 @@ pub fn take_crash_notice() -> Option<String> {
 }
 
 fn main() {
+    // Chamado pelo desinstalador: tira o Cyder de "Abrir com o Windows" e devolve os links spotify: ao app de antes.
+    #[cfg(windows)]
+    if std::env::args().any(|a| a == "--uninstall") {
+        let _ = autostart::set(false);
+        let _ = protocol::release();
+        return;
+    }
     #[cfg(windows)]
     if already_running() {
         return;

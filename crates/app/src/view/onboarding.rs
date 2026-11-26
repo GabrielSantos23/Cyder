@@ -8,7 +8,7 @@ use gpui::{
     prelude::*, px, rgba,
 };
 
-use super::{Cyder, Dialog, Phase, REDIRECT_URI, SPRING, icon};
+use super::{Cyder, Dialog, Help, Phase, REDIRECT_URI, SPRING, icon};
 use crate::theme::{self, glass};
 
 const GREEN: u32 = 0x1ed760;
@@ -138,6 +138,17 @@ impl Cyder {
     }
 
     fn client_id_step(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+        // Quem copiou o Client ID no painel e voltou para cá não precisa colar: a cada volta à janela, um Client ID
+        // copiado entra no campo vazio sozinho.
+        let active = window.is_window_active();
+        if active && !self.clip_checked && self.client_id.is_empty() {
+            let copied = cx.read_from_clipboard().and_then(|c| c.text()).map(|t| t.trim().to_string());
+            if let Some(id) = copied.filter(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())) {
+                self.client_id = id;
+                self.client_id_pasted = true;
+            }
+        }
+        self.clip_checked = active;
         step_column()
             .child(title(t("Cole o Client ID")))
             .child(lead(t("No app que você criou, clique em Settings. O Client ID é o primeiro item de Basic Information.")))
@@ -151,7 +162,8 @@ impl Cyder {
                     let id = self.client_id.trim();
                     let valid = id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit());
                     div().mt_2().h(px(20.)).flex().items_center().gap_1p5().text_sm()
-                        .when(valid, |d| d.text_color(rgba(theme::accent())).child(icon("check", 14., theme::accent())).child(t("Formato certo.")))
+                        .when(valid, |d| d.text_color(rgba(theme::accent())).child(icon("check", 14., theme::accent()))
+                            .child(if self.client_id_pasted { t("Formato certo. Veio do que você copiou.") } else { t("Formato certo.") }))
                         .when(!valid && !id.is_empty(), |d| d.text_color(rgba(theme::ink_3())).child(tr!("{} de 32 caracteres.", "{} of 32 characters.", id.chars().count())))
                 }
             })
@@ -202,6 +214,15 @@ impl Cyder {
                 .child(div().flex().flex_col()
                     .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Tudo pronto")))
                     .child(div().text_sm().text_color(rgba(theme::ink_2())).child(t("Sua biblioteca já está aqui.")))))
+            // Sem o Soloist o Spotify não toca: o passo que falta vem primeiro, com o botão para fazer agora.
+            .when(matches!(self.soloist, cyder_core::soloist::Status::Off), |d| d.child(
+                div().flex().items_center().gap_3().p_3().rounded(px(12.)).bg(rgba(0xf5a5241f))
+                    .child(div().pt(px(1.)).child(icon("info", 16., 0xf5a524ff)))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t("Falta um passo para tocar")))
+                        .child(div().text_xs().text_color(rgba(theme::ink_2())).child(t("O Spotify toca pelo Soloist, o player oficial dele. Leva um minuto, com a sua conta Premium."))))
+                    .child(Self::primary_button("onb-soloist", t("Ligar o Soloist"))
+                        .on_click(cx.listener(|t, _, _, cx| { t.dialog = Some(Dialog::Help(Help::Soloist)); cx.notify(); })))))
             .child(div().flex().flex_col().gap_3()
                 .child(row("search", t("Buscar músicas, álbuns e artistas"), Some("Ctrl + K")))
                 .child(row("play", t("Tocar ou pausar de qualquer tela"), Some(t("Espaço"))))

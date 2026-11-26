@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # Só para o `if` do passo de assinatura: segredos não podem ser lidos direto num `if`.
+  CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -33,13 +37,43 @@ jobs:
       - name: Compilar
         run: cargo build --release -p cyder
 
+      # Assinatura opcional: com os segredos CODE_SIGN_PFX (o .pfx em base64) e CODE_SIGN_PASSWORD, o Windows
+      # SmartScreen deixa de avisar "editor desconhecido". Sem eles, sai sem assinar.
+      - name: Assinar o executável
+        if: ${{ env.CODE_SIGN_PFX != '' }}
+        env:
+          CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+          CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\sign.pfx", [Convert]::FromBase64String($env:CODE_SIGN_PFX))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          "SIGNTOOL=$($signtool.FullName)" | Out-File -Append $env:GITHUB_ENV
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP\sign.pfx" /p $env:CODE_SIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target/release/cyder.exe
+
+      # O SHA-256 vem depois da assinatura: é ele que a atualização do app confere.
       - name: SHA-256 do executável
         shell: pwsh
         run: (Get-FileHash target/release/cyder.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline target/release/cyder.exe.sha256
 
+      - name: Instalador
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y; }
+          $version = "$env:GITHUB_REF_NAME".TrimStart("v")
+          & $iscc "/DVersion=$version" installer/cyder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:SIGNTOOL) {
+            & $env:SIGNTOOL sign /f "$env:RUNNER_TEMP\sign.pfx" /p $env:CODE_SIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target/release/CyderSetup.exe
+          }
+        env:
+          CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
+            target/release/CyderSetup.exe
             target/release/cyder.exe
             target/release/cyder.exe.sha256
           generate_release_notes: true

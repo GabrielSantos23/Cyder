@@ -240,7 +240,7 @@ impl Cyder {
                     t("O Spotify toca pelo player oficial dele, o Soloist: sem ele ligado, as músicas do Spotify não tocam no Cyder. Precisa de uma chave sua (Premium).").into(),
                     div().flex().gap_2()
                         .child(Self::secondary_button("settings-soloist-page", t("Gerar chave")).on_click(|_, _, cx| cx.open_url(KEY_PAGE)))
-                        .child(Self::secondary_button("settings-soloist-on", t("Ligar")).on_click(cx.listener(|t, _, _, cx| { t.ask(crate::view::Ask::SoloistKey, String::new()); cx.notify(); }))),
+                        .child(Self::secondary_button("settings-soloist-on", t("Ligar")).on_click(cx.listener(|t, _, _, cx| { t.ask_soloist_key(cx); cx.notify(); }))),
                     cx,
                 );
             }

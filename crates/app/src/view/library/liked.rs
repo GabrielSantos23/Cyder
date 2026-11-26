@@ -257,9 +257,9 @@ impl Cyder {
         let text = if self.liked_query.is_empty() {
             div().flex_1().min_w_0().flex().items_center().when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(t("Buscar nas curtidas")))
         } else {
-            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.field_text(self.liked_query.clone(), focused, caret()))
+            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.field_text(crate::view::Field::Liked, self.liked_query.clone(), focused, caret()))
         };
-        div()
+        self.wire_field(div(), crate::view::Field::Liked, cx)
             .id("liked-search-field")
             .key_context("TextField")
             .track_focus(&self.liked_search_focus)
@@ -277,7 +277,7 @@ impl Cyder {
             .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
             .text_sm()
             .cursor_text()
-            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.liked_search_focus, cx); cx.notify(); }))
+            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.click_field(crate::view::Field::Liked, e.position(), e.click_count(), e.modifiers().shift); window.focus(&t.liked_search_focus, cx); cx.notify(); }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.liked_search_key(e, window, cx)))
             .child(icon("search", 15., theme::ink_3()))
             .child(text)
@@ -310,7 +310,7 @@ impl Cyder {
         match k.key.as_str() {
             "escape" => self.close_liked_search(window, cx),
             "enter" => {}
-            _ if crate::view::type_into(&mut self.liked_query, k, &mut self.text_selected, &mut self.text_back, cx) => self.liked_changed(),
+            _ if crate::view::type_into(&mut self.liked_query, k, &mut self.text_anchor, &mut self.text_back, cx) => self.field_edited(crate::view::Field::Liked),
             _ => return,
         }
         cx.stop_propagation();

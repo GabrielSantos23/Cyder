@@ -29,6 +29,8 @@ pub enum MenuTarget {
     LikedSort,
     /// O idioma, nas configurações.
     Language,
+    /// Recortar, copiar e colar num campo de texto.
+    Field(super::Field),
 }
 
 pub struct Menu {
@@ -84,6 +86,7 @@ enum Action {
     LikedSort(LikedSort),
     LikedCompact(bool),
     Language(cyder_core::config::Language),
+    FieldEdit(super::Field, super::field::Edit),
     Settings,
     Shortcuts,
     Logout,
@@ -190,6 +193,10 @@ impl Cyder {
                 }
                 out
             }
+            MenuTarget::Field(f) => super::field::menu_labels()
+                .into_iter()
+                .map(|(edit, label, icon)| Entry::Item(Item { label: label.into(), icon, action: Some(Action::FieldEdit(*f, edit)), sub: Vec::new(), checked: false, mark: "check" }))
+                .collect(),
             MenuTarget::Language => {
                 use cyder_core::config::Language;
                 [(Language::Portuguese, "Português"), (Language::English, "English")]
@@ -409,6 +416,7 @@ impl Cyder {
                 self.liked_changed();
             }
             Action::LikedCompact(compact) => self.liked_order.compact = compact,
+            Action::FieldEdit(f, edit) => self.field_menu_edit(f, edit, cx),
             Action::Language(language) => {
                 self.change(|st| st.language = language, false);
                 // Já vale para o pedido abaixo: a tela inicial volta no idioma novo (o resto vem com o próximo render).
