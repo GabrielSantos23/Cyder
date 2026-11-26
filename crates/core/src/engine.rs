@@ -341,11 +341,6 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// Um número qualquer para sortear (os nanossegundos do relógio).
-fn now_nanos() -> usize {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize)
-}
-
 /// Estado do player salvo em disco, para o app abrir onde parou.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Resume {
@@ -1299,7 +1294,7 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
     let mut body = body;
     if let (true, Some(c), None) = (shuffle, body["context_uri"].as_str(), body.get("offset")) {
         match internal::context_size(&ctx.session, c).await {
-            Ok(n) if n > 1 => body["offset"] = serde_json::json!({ "position": now_nanos() % n }),
+            Ok(n) if n > 1 => body["offset"] = serde_json::json!({ "position": crate::random() % n }),
             Ok(_) => {}
             Err(e) => log::warn!("tamanho de {c}: {e}"),
         }

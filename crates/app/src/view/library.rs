@@ -170,8 +170,7 @@ pub(super) enum CardSource {
 
 /// Índice "aleatório" sem dependência nova: o relógio basta para escolher por onde começar.
 fn random_index(len: usize) -> usize {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
-    if len == 0 { 0 } else { nanos % len }
+    if len == 0 { 0 } else { cyder_core::random() % len }
 }
 
 fn kind_label(kind: Kind) -> &'static str {

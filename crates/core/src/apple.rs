@@ -59,7 +59,7 @@ const GIVE_UP_AFTER: Duration = Duration::from_secs(30);
 
 /// Sorteio sem dependência (xorshift com semente do relógio): basta para embaralhar uma fila.
 fn shuffled(mut items: Vec<usize>) -> Vec<usize> {
-    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0x9E37_79B9, |d| d.as_nanos() as u64) | 1;
+    let mut x = crate::random() as u64 | 1;
     for i in (1..items.len()).rev() {
         (x ^= x << 13, x ^= x >> 7, x ^= x << 17);
         items.swap(i, (x % (i as u64 + 1)) as usize);
@@ -312,7 +312,7 @@ impl State {
                     return self.send(PlayerOut::Error("Esta lista não toca pelo Apple Music: o Spotify não mostra as faixas dela.".into()));
                 }
                 self.queue = queue;
-                let i = if shuffle_start { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize) % self.queue.len() } else { index };
+                let i = if shuffle_start { crate::random() % self.queue.len() } else { index };
                 self.start(i, start_ms);
                 if self.shuffle {
                     self.reshuffle();

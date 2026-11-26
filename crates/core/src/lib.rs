@@ -2,6 +2,13 @@
 //! Não depende de UI (doc 03): a UI só manda `Cmd` e recebe `AppEvent`.
 pub mod api;
 pub mod apple;
+
+/// Um número aleatório para sortear (faixa inicial do aleatório). Não serve para nada de segurança.
+/// O relógio não serve: no Windows ele anda de 100 em 100 ns, e `nanos % 50` dava sempre 0 (a primeira faixa).
+pub fn random() -> usize {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new().build_hasher().finish() as usize
+}
 pub mod apple_catalog;
 pub mod auth;
 pub mod cache;
@@ -252,6 +259,13 @@ pub fn local_offset_secs() -> i64 {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    #[test]
+    fn random_draws_spread() {
+        // O sorteio antigo pelo relógio dava sempre 0 numa playlist de 50 no Windows.
+        let draws: std::collections::HashSet<usize> = (0..50).map(|_| random() % 50).collect();
+        assert!(draws.len() > 10, "{draws:?}");
+    }
 
     fn track(uri: &str, name: &str, artist: &str) -> Track {
         Track { id: uri.into(), uri: uri.into(), name: name.into(), artist: artist.into(), album: String::new(), album_id: String::new(), duration_ms: 0, cover_small: None, cover_large: None, artists: Vec::new() }
