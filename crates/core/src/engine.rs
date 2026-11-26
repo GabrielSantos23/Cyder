@@ -1,5 +1,6 @@
 //! Liga tudo: login, biblioteca, player, letras e capas. Roda num runtime tokio próprio.
 
+use crate::{i18n::t, tr};
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, time::Duration};
 
 use futures_util::StreamExt;
@@ -261,16 +262,16 @@ async fn bootstrap(http: &reqwest::Client, out: &UnboundedSender<AppEvent>) -> R
         },
     })?;
     let cache_dir = config::cache_dir();
-    let _ = out.send(AppEvent::Status("Entrando no Spotify…".into()));
-    let (session, credentials) = auth::audio_session(&cache_dir).await.map_err(|e| AppEvent::Failed(format!("Não deu para entrar no Spotify: {e}")))?;
-    let _ = out.send(AppEvent::Status("Autorizando o acesso à sua biblioteca…".into()));
-    let web = auth::WebAuth::login(&cfg.client_id).await.map_err(|e| AppEvent::Failed(format!("Não deu para autorizar a biblioteca: {e}")))?;
+    let _ = out.send(AppEvent::Status(t("Entrando no Spotify…").into()));
+    let (session, credentials) = auth::audio_session(&cache_dir).await.map_err(|e| AppEvent::Failed(tr!("Não deu para entrar no Spotify: {e}", "Couldn't sign in to Spotify: {e}")))?;
+    let _ = out.send(AppEvent::Status(t("Autorizando o acesso à sua biblioteca…").into()));
+    let web = auth::WebAuth::login(&cfg.client_id).await.map_err(|e| AppEvent::Failed(tr!("Não deu para autorizar a biblioteca: {e}", "Couldn't authorize the library: {e}")))?;
     let api = Arc::new(WebApi::new(http.clone(), web, out.clone()));
     // Com cache, o app abre na hora e as curtidas se atualizam em segundo plano.
     if let Some(tracks) = cache::load::<Vec<Track>>("liked") {
         return Ok(Ready { session, credentials, api, tracks, liked_from_cache: true });
     }
-    let _ = out.send(AppEvent::Status("Carregando suas músicas curtidas…".into()));
+    let _ = out.send(AppEvent::Status(t("Carregando suas músicas curtidas…").into()));
     let tracks = api.liked_tracks(LIBRARY_LIMIT).await.map_err(AppEvent::Failed)?;
     cache::save("liked", &tracks);
     Ok(Ready { session, credentials, api, tracks, liked_from_cache: false })
@@ -558,7 +559,7 @@ impl Ctx {
                     self.thumbs(shelf_images(&shelves));
                     self.send(AppEvent::Home(shelves));
                 }
-                Ok(_) => self.send(AppEvent::HomeFailed("O Apple Music não respondeu.".into())),
+                Ok(_) => self.send(AppEvent::HomeFailed(t("O Apple Music não respondeu.").into())),
                 Err(e) => self.send(AppEvent::HomeFailed(e)),
             };
         }
@@ -617,7 +618,7 @@ impl Ctx {
         shelves.push(Shelf { title: "Seus artistas mais ouvidos".into(), cards: top_artists });
         shelves.retain(|s| !s.cards.is_empty());
         if shelves.is_empty() {
-            let why = if internal::connected(&self.session) { "O Spotify não respondeu." } else { "Sem conexão com o servidor do Spotify." };
+            let why = if internal::connected(&self.session) { t("O Spotify não respondeu.") } else { t("Sem conexão com o servidor do Spotify.") };
             return self.send(AppEvent::HomeFailed(why.into()));
         }
         cache::save("home", &shelves);
@@ -763,7 +764,7 @@ impl Ctx {
                 self.send(AppEvent::Library(lib));
                 self.send(AppEvent::PlaylistCreated(card));
             }
-            Err(e) => self.send(AppEvent::Notice(format!("Não deu para criar a playlist: {e}"))),
+            Err(e) => self.send(AppEvent::Notice(tr!("Não deu para criar a playlist: {e}", "Couldn't create the playlist: {e}"))),
         }
     }
 
@@ -771,7 +772,7 @@ impl Ctx {
         match self.api.rename_playlist(&card.id, &name).await {
             Ok(()) => self.update_card(&card.id, |c| c.title = name.clone()),
             Err(e) => {
-                self.send(AppEvent::Notice(format!("Não deu para renomear: {e}")));
+                self.send(AppEvent::Notice(tr!("Não deu para renomear: {e}", "Couldn't rename: {e}")));
                 // A tela já mostrava o nome novo: volta o que está guardado.
                 self.update_card(&card.id, |_| {});
             }
@@ -809,9 +810,9 @@ impl Ctx {
             Err(e) => return self.send(AppEvent::Notice(e.to_string())),
         };
         if let Err(e) = self.api.set_playlist_cover(&card.id, encoded).await {
-            return self.send(AppEvent::Notice(format!("Não deu para trocar a capa. {e}")));
+            return self.send(AppEvent::Notice(tr!("Não deu para trocar a capa. {e}", "Couldn't change the cover. {e}")));
         }
-        self.send(AppEvent::Notice("Capa enviada. O Spotify leva alguns segundos para mostrar a nova.".into()));
+        self.send(AppEvent::Notice(t("Capa enviada. O Spotify leva alguns segundos para mostrar a nova.").into()));
         // A capa nova aparece no Spotify com um pequeno atraso.
         tokio::time::sleep(Duration::from_secs(6)).await;
         match internal::playlist_header(&self.session, &card.id).await {
@@ -850,7 +851,7 @@ impl Ctx {
             Err(e) => return self.send(AppEvent::Notice(format!("O Last.fm recusou a chave: {}", e.message))),
         };
         self.send(AppEvent::OpenUrl(lastfm::auth_url(&key, &token)));
-        self.send(AppEvent::Notice("Autorize o Cyder na página do Last.fm que abriu no navegador.".into()));
+        self.send(AppEvent::Notice(t("Autorize o Cyder na página do Last.fm que abriu no navegador.").into()));
         // O token vale por 60 minutos; espera a autorização por até 5.
         for _ in 0..100 {
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -861,10 +862,10 @@ impl Ctx {
                     self.send(AppEvent::Notice(format!("Last.fm ligado como {user}.")));
                     return self.send(AppEvent::Lastfm(Some(user)));
                 }
-                Err(e) => return self.send(AppEvent::Notice(format!("Não deu para ligar o Last.fm: {}", e.message))),
+                Err(e) => return self.send(AppEvent::Notice(tr!("Não deu para ligar o Last.fm: {}", "Couldn't connect Last.fm: {}", e.message))),
             }
         }
-        self.send(AppEvent::Notice("A autorização do Last.fm demorou demais. Tente ligar de novo.".into()));
+        self.send(AppEvent::Notice(t("A autorização do Last.fm demorou demais. Tente ligar de novo.").into()));
     }
 
     /// Manda o scrobble junto com os que falharam antes (sem internet, Last.fm fora do ar), que ficam guardados.
@@ -897,7 +898,7 @@ impl Ctx {
         if lastfm::is_auth_error(e.code) {
             lastfm::forget();
             self.send(AppEvent::Lastfm(None));
-            self.send(AppEvent::Notice(format!("O Last.fm foi desligado: {}. Ligue de novo nas Configurações.", e.message)));
+            self.send(AppEvent::Notice(tr!("O Last.fm foi desligado: {}. Ligue de novo nas Configurações.", "Last.fm was disconnected: {}. Connect it again in Settings.", e.message)));
         }
     }
 
@@ -1044,7 +1045,7 @@ impl Ctx {
                 let what = if save { "salvo na biblioteca" } else { "removido da biblioteca" };
                 self.send(AppEvent::Notice(format!("\"{}\" {what}.", card.title)));
             }
-            Err(e) => self.send(AppEvent::Notice(format!("Não deu para mudar \"{}\" na biblioteca: {e}", card.title))),
+            Err(e) => self.send(AppEvent::Notice(tr!("Não deu para mudar \"{}\" na biblioteca: {e}", "Couldn't change “{}” in the library: {e}", card.title))),
         }
         self.send(AppEvent::Library(lib));
     }
@@ -1060,7 +1061,7 @@ impl Ctx {
                 cache::save("liked", &liked);
                 self.send(AppEvent::Notice(if on { format!("\"{}\" curtida.", track.name) } else { format!("\"{}\" saiu das curtidas.", track.name) }));
             }
-            Err(e) => self.send(AppEvent::Notice(format!("Não deu para mudar a curtida: {e}"))),
+            Err(e) => self.send(AppEvent::Notice(tr!("Não deu para mudar a curtida: {e}", "Couldn't change the like: {e}"))),
         }
         self.send(AppEvent::Liked(liked));
     }
@@ -1266,7 +1267,7 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
     for _ in 0..3 {
         match ctx.api.devices().await {
             Ok(list) => device = list.into_iter().find(|d| d.name == soloist::DEVICE_NAME).map(|d| d.id),
-            Err(e) => return ctx.send(AppEvent::Notice(format!("Não deu para achar o Soloist: {e}"))),
+            Err(e) => return ctx.send(AppEvent::Notice(tr!("Não deu para achar o Soloist: {e}", "Couldn't find Soloist: {e}"))),
         }
         if device.is_some() {
             break;
@@ -1305,7 +1306,7 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
         let _ = ctx.api.control(reqwest::Method::PUT, &format!("/shuffle?state=true&device_id={id}")).await;
     }
     if let Err(e) = ctx.api.play_on(&id, body).await {
-        return ctx.send(AppEvent::Notice(format!("O Soloist não aceitou o play: {e}")));
+        return ctx.send(AppEvent::Notice(tr!("O Soloist não aceitou o play: {e}", "Soloist didn't accept play: {e}")));
     }
     let repeat = match repeat { Repeat::Off => "off", Repeat::All => "context", Repeat::One => "track" };
     let pause = paused.then(|| format!("/pause?device_id={id}"));
@@ -1320,7 +1321,7 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
 /// sessão para ele sem tocar. Sem sessão para retomar, manda a lista do Cyder (que já tem a faixa) pausada.
 async fn queue_on_idle_soloist(ctx: Ctx, uri: String, body: serde_json::Value, shuffle: bool, repeat: Repeat) {
     if ctx.api.add_to_queue(&uri).await.is_ok() {
-        return ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
+        return ctx.send(AppEvent::Notice(t("Adicionada à fila.").into()));
     }
     let device = ctx.api.devices().await.ok().and_then(|list| list.into_iter().find(|d| d.name == soloist::DEVICE_NAME)).map(|d| d.id);
     if let Some(id) = device {
@@ -1329,7 +1330,7 @@ async fn queue_on_idle_soloist(ctx: Ctx, uri: String, body: serde_json::Value, s
             tokio::time::sleep(Duration::from_millis(900)).await;
             if ctx.api.add_to_queue(&uri).await.is_ok() {
                 log::info!("soloist: acordado pausado para enfileirar ({id})");
-                return ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
+                return ctx.send(AppEvent::Notice(t("Adicionada à fila.").into()));
             }
         }
     }
@@ -1619,7 +1620,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
     // A sessão já conectou alguma vez; e o que carregou antes disso, só pela Web API (player sem conexão).
     let mut connected_once = false;
     let mut loaded_without_session = false;
-    ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
+    ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting(t("Abrindo o Soloist…").into()) } else { soloist::Status::Off }));
     // O app pode fechar a qualquer momento (o processo morre junto com a janela): salva com frequência.
     let mut autosave = tokio::time::interval(std::time::Duration::from_secs(5));
     // Ouvir junto: o código de quem convida e, de quem entrou, o que chega do canal.
@@ -1671,7 +1672,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         continue;
                     }
                     tracks = vec![found.remove(0)];
-                    (index, context, label, anchor, dirty) = (0, None, format!("Ouvindo junto com {}", st.host), (target, std::time::Instant::now()), true);
+                    (index, context, label, anchor, dirty) = (0, None, tr!("Ouvindo junto com {}", "Listening together with {}", st.host), (target, std::time::Instant::now()), true);
                     queued.clear();
                     ctx.thumbs(tracks.iter().filter_map(|t| t.cover_small.clone()).collect());
                     ctx.send(AppEvent::Queue(tracks.clone()));
@@ -1948,7 +1949,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             if let Err(e) = ctx2.api.control(method, &path).await {
                                 match resume {
                                     Some((body, _, uri)) => continue_on_soloist(ctx2, body, shuffle, repeat, uri).await,
-                                    None => ctx2.send(AppEvent::Notice(format!("O outro aparelho não aceitou o comando: {e}"))),
+                                    None => ctx2.send(AppEvent::Notice(tr!("O outro aparelho não aceitou o comando: {e}", "The other device didn't accept the command: {e}"))),
                                 }
                             }
                         });
@@ -1963,9 +1964,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let (ctx2, own) = (ctx.clone(), device_id.clone());
                         tokio::spawn(async move {
                             let target = if soloist_ready { ctx2.api.devices().await.ok().and_then(|d| d.into_iter().find(|d| d.name == soloist::DEVICE_NAME)).map(|d| d.id) } else { Some(own) };
-                            let Some(id) = target else { return ctx2.send(AppEvent::Notice("O Soloist não aparece nos aparelhos desta conta.".into())) };
+                            let Some(id) = target else { return ctx2.send(AppEvent::Notice(t("O Soloist não aparece nos aparelhos desta conta.").into())) };
                             if let Err(e) = ctx2.api.transfer(&id).await {
-                                ctx2.send(AppEvent::Notice(format!("Não deu para trazer a música para cá: {e}")));
+                                ctx2.send(AppEvent::Notice(tr!("Não deu para trazer a música para cá: {e}", "Couldn't bring the music here: {e}")));
                             }
                         });
                         poll(&ctx, 1500);
@@ -2045,7 +2046,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(async move {
                             match ctx.api.link_page(&uri).await {
                                 Ok(card) => ctx.send(AppEvent::Link { card, uri }),
-                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para abrir o link: {e}"))),
+                                Err(e) => ctx.send(AppEvent::Notice(tr!("Não deu para abrir o link: {e}", "Couldn't open the link: {e}"))),
                             }
                         });
                         continue;
@@ -2073,7 +2074,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                     // As curtidas são do Spotify: uma faixa do catálogo da Apple não tem como entrar nelas.
                     Cmd::Like { track, .. } if track.uri.starts_with(crate::apple_catalog::URI) => {
-                        ctx.send(AppEvent::Notice("Faixas do Apple Music não entram nas curtidas do Spotify.".into()));
+                        ctx.send(AppEvent::Notice(t("Faixas do Apple Music não entram nas curtidas do Spotify.").into()));
                         continue;
                     }
                     Cmd::Like { track, on } => {
@@ -2084,9 +2085,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
                             let text = match ctx.api.add_to_playlist(&playlist.id, &uris).await {
-                                Ok(()) if uris.len() > 1 => format!("{} faixas adicionadas a \"{}\".", uris.len(), playlist.title),
-                                Ok(()) => format!("Adicionada a \"{}\".", playlist.title),
-                                Err(e) => format!("Não deu para adicionar a \"{}\": {e}", playlist.title),
+                                Ok(()) if uris.len() > 1 => tr!("{} faixas adicionadas a \"{}\".", "{} tracks added to “{}”.", uris.len(), playlist.title),
+                                Ok(()) => tr!("Adicionada a \"{}\".", "Added to “{}”.", playlist.title),
+                                Err(e) => tr!("Não deu para adicionar a \"{}\": {e}", "Couldn't add to “{}”: {e}", playlist.title),
                             };
                             ctx.send(AppEvent::Notice(text));
                         });
@@ -2118,7 +2119,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             let position_ms = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
                             ctx.send(AppEvent::Reordered(tracks.clone()));
                             soloist_end = reload_queue(&ctx, &pcmd_tx, remote.as_deref(), &tracks, index, position_ms, playing, shuffle, repeat);
-                            ctx.send(AppEvent::Notice("Adicionada à fila.".into()));
+                            ctx.send(AppEvent::Notice(t("Adicionada à fila.").into()));
                             continue;
                         }
                         ctx.send(AppEvent::Inserted { at, track: track.clone() });
@@ -2128,8 +2129,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let uri = track.uri;
                         tokio::spawn(async move {
                             let text = match ctx.api.add_to_queue(&uri).await {
-                                Ok(()) => "Adicionada à fila.".to_string(),
-                                Err(e) => format!("Não deu para adicionar à fila: {e}"),
+                                Ok(()) => t("Adicionada à fila.").to_string(),
+                                Err(e) => tr!("Não deu para adicionar à fila: {e}", "Couldn't add to queue: {e}"),
                             };
                             ctx.send(AppEvent::Notice(text));
                         });
@@ -2205,8 +2206,8 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(async move {
                             match internal::recommendations(&ctx.session, &seeds, &exclude).await {
                                 Ok(recs) if !recs.is_empty() => drop(smart_tx.send(recs)),
-                                Ok(_) => ctx.send(AppEvent::Notice("Não achei recomendações para esta fila.".into())),
-                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para ligar o smart shuffle: {e}"))),
+                                Ok(_) => ctx.send(AppEvent::Notice(t("Não achei recomendações para esta fila.").into())),
+                                Err(e) => ctx.send(AppEvent::Notice(tr!("Não deu para ligar o smart shuffle: {e}", "Couldn't turn on smart shuffle: {e}"))),
                             }
                         });
                         continue;
@@ -2243,7 +2244,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                     Cmd::ClearQueue => {
                         if !plays_here(remote.as_deref()) {
-                            ctx.send(AppEvent::Notice("Só dá para limpar a fila tocando neste computador.".into()));
+                            ctx.send(AppEvent::Notice(t("Só dá para limpar a fila tocando neste computador.").into()));
                             continue;
                         }
                         // As que já tocaram ficam, para o "anterior" e o índice continuarem valendo.
@@ -2295,7 +2296,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
                             let r = ctx.api.remove_from_playlist(&card.id, &uri).await;
-                            ctx.after_edit(card, r, "Não deu para tirar a faixa").await;
+                            ctx.after_edit(card, r, t("Não deu para tirar a faixa")).await;
                         });
                         continue;
                     }
@@ -2303,7 +2304,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
                             let r = ctx.api.move_in_playlist(&card.id, from, to).await;
-                            ctx.after_edit(card, r, "Não deu para mudar a ordem").await;
+                            ctx.after_edit(card, r, t("Não deu para mudar a ordem")).await;
                         });
                         continue;
                     }
@@ -2331,7 +2332,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(async move {
                             match internal::credits(&ctx.session, &track.uri).await {
                                 Ok(c) => ctx.send(AppEvent::Credits(c)),
-                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para ver os créditos: {e}"))),
+                                Err(e) => ctx.send(AppEvent::Notice(tr!("Não deu para ver os créditos: {e}", "Couldn't get the credits: {e}"))),
                             }
                         });
                         continue;
@@ -2342,9 +2343,9 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             match internal::radio_for(&ctx.session, &track.uri).await {
                                 Ok(uri) => {
                                     let id = uri.trim_start_matches("spotify:playlist:").to_string();
-                                    ctx.send(AppEvent::Radio(Card { kind: Kind::Playlist, id, uri, title: format!("Rádio de {}", track.name), subtitle: "Spotify".into(), image: None }));
+                                    ctx.send(AppEvent::Radio(Card { kind: Kind::Playlist, id, uri, title: tr!("Rádio de {}", "{} Radio", track.name), subtitle: "Spotify".into(), image: None }));
                                 }
-                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para abrir o rádio: {e}"))),
+                                Err(e) => ctx.send(AppEvent::Notice(tr!("Não deu para abrir o rádio: {e}", "Couldn't open the radio: {e}"))),
                             }
                         });
                         continue;
@@ -2398,12 +2399,12 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         tokio::spawn(async move {
                             if let Cmd::Transfer(id) = &cmd {
                                 if let Err(e) = ctx.api.transfer(id).await {
-                                    ctx.send(AppEvent::Notice(format!("Não deu para trocar de aparelho: {e}")));
+                                    ctx.send(AppEvent::Notice(tr!("Não deu para trocar de aparelho: {e}", "Couldn't switch device: {e}")));
                                 }
                             }
                             match ctx.api.devices().await {
                                 Ok(d) => ctx.send(AppEvent::Devices(d)),
-                                Err(e) => ctx.send(AppEvent::Notice(format!("Não deu para listar os aparelhos: {e}"))),
+                                Err(e) => ctx.send(AppEvent::Notice(tr!("Não deu para listar os aparelhos: {e}", "Couldn't list the devices: {e}"))),
                             }
                         });
                         continue;
@@ -2425,7 +2426,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                 Ok(None) => update::State::UpToDate,
                                 Err(e) => {
                                     log::warn!("atualização: {e}");
-                                    update::State::Failed(format!("Não deu para procurar atualizações: {e}"))
+                                    update::State::Failed(tr!("Não deu para procurar atualizações: {e}", "Couldn't check for updates: {e}"))
                                 }
                             };
                             let _ = out.send(AppEvent::Update(state));
@@ -2456,7 +2457,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                 Ok(()) => update::State::Ready(release),
                                 Err(e) => {
                                     log::warn!("atualização: {e}");
-                                    update::State::Failed(format!("Não deu para atualizar: {e}"))
+                                    update::State::Failed(tr!("Não deu para atualizar: {e}", "Couldn't update: {e}"))
                                 }
                             }));
                         });
@@ -2517,13 +2518,13 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                     }
                     Cmd::SoloistKey(key) => {
                         if let Err(e) = soloist::save_key(key.as_deref()) {
-                            ctx.send(AppEvent::Notice(format!("Não deu para guardar a chave do Soloist: {e}")));
+                            ctx.send(AppEvent::Notice(tr!("Não deu para guardar a chave do Soloist: {e}", "Couldn't save the Soloist key: {e}")));
                             continue;
                         }
                         // Trocar a tarefa fecha o Soloist que estava aberto.
                         (soloist_ready, soloist_up) = (false, false);
                         _soloist = key.map(|key| soloist::start(ctx.http.clone(), key, soloist_tx.clone()));
-                        ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting("Abrindo o Soloist…".into()) } else { soloist::Status::Off }));
+                        ctx.send(AppEvent::Soloist(if _soloist.is_some() { soloist::Status::Starting(t("Abrindo o Soloist…").into()) } else { soloist::Status::Off }));
                         continue;
                     }
                 };
@@ -2585,7 +2586,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             continue;
                         }
                         if _soloist.is_some() {
-                            AppEvent::Notice("O Spotify toca pelo Soloist: a música começa assim que ele ficar pronto.".into())
+                            AppEvent::Notice(t("O Spotify toca pelo Soloist: a música começa assim que ele ficar pronto.").into())
                         } else {
                             AppEvent::AudioRefused
                         }
@@ -2634,7 +2635,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                                             Err(e) => {
                                                 log::warn!("histórico do Spotify: {e}");
                                                 if !FAILING.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                                    ctx.send(AppEvent::Notice("As músicas tocadas aqui pararam de ir para o histórico do Spotify.".into()));
+                                                    ctx.send(AppEvent::Notice(crate::i18n::t("As músicas tocadas aqui pararam de ir para o histórico do Spotify.").into()));
                                                 }
                                             }
                                         }

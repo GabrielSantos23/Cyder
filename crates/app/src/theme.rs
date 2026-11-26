@@ -103,6 +103,11 @@ pub fn frame_fill() -> u32 {
     if cover_frame() { 0 } else { (frame() << 8) | 0xff }
 }
 
+/// Opacidade do painel principal: com a capa no fundo ele fica translúcido e a capa aparece atrás de tudo.
+pub fn panel_alpha() -> u32 {
+    if cover_frame() { 0xa6 } else { 0xff }
+}
+
 /// Escolhe a cor do tema (RGBA).
 fn pick(dark: u32, light_: u32) -> u32 {
     if light() { light_ } else { dark }

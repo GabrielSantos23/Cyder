@@ -1,4 +1,5 @@
 //! Novidades: álbuns e singles recentes dos artistas que você segue, do mais novo para o mais velho.
+use cyder_core::{i18n::t, tr};
 use cyder_core::{Card, Cmd, NewRelease};
 use gpui::{AnyElement, Context, FontWeight, ParentElement, Styled, div, prelude::*, px, rgba};
 
@@ -12,11 +13,11 @@ fn ago(date: i64, now: i64) -> String {
     match days {
         0 => "hoje".into(),
         1 => "ontem".into(),
-        2..=6 => format!("há {days} dias"),
-        7..=13 => "há 1 semana".into(),
-        14..=29 => format!("há {} semanas", days / 7),
-        30..=59 => "há 1 mês".into(),
-        _ => format!("há {} meses", days / 30),
+        2..=6 => tr!("há {days} dias", "{days} days ago"),
+        7..=13 => t("há 1 semana").into(),
+        14..=29 => tr!("há {} semanas", "{} weeks ago", days / 7),
+        30..=59 => t("há 1 mês").into(),
+        _ => tr!("há {} meses", "{} months ago", days / 30),
     }
 }
 
@@ -45,7 +46,7 @@ impl Cyder {
     pub(super) fn news_view(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         self.load_news();
         let counts = self.news.as_ref().map(|n| [n[0].len(), n[1].len(), n[2].len()]);
-        let filters = [(Releases::All, "Tudo"), (Releases::Albums, "Álbuns"), (Releases::Singles, "Singles e EPs")];
+        let filters = [(Releases::All, t("Tudo")), (Releases::Albums, t("Álbuns")), (Releases::Singles, t("Singles e EPs"))];
         let chips: Vec<AnyElement> = filters.into_iter().enumerate().map(|(i, (filter, label))| {
             let on = self.release_filter == filter;
             Self::focusable(("news-filter", i))
@@ -63,7 +64,7 @@ impl Cyder {
                 .child(label)
                 .into_any_element()
         }).collect();
-        let refresh = Self::secondary_button("news-refresh", if self.news_loading { "Atualizando…" } else { "Atualizar" })
+        let refresh = Self::secondary_button("news-refresh", if self.news_loading { t("Atualizando…") } else { t("Atualizar") })
             .on_click(cx.listener(|t, _, _, cx| {
                 if !t.news_loading {
                     t.news_loading = true;
@@ -73,8 +74,8 @@ impl Cyder {
                 cx.notify();
             }));
         let subtitle = match counts {
-            Some([n, ..]) if n > 0 => format!("{n} lançamentos dos últimos 4 meses de quem você segue"),
-            _ => "Lançamentos dos últimos 4 meses de quem você segue".into(),
+            Some([n, ..]) if n > 0 => tr!("{n} lançamentos dos últimos 4 meses de quem você segue", "{n} releases from the last 4 months by artists you follow"),
+            _ => t("Lançamentos dos últimos 4 meses de quem você segue").into(),
         };
         let header = div()
             .pb_4()
@@ -83,14 +84,14 @@ impl Cyder {
             .gap_4()
             .child(
                 div().flex_1().flex().flex_col().gap_0p5()
-                    .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Novidades"))
+                    .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child(t("Novidades")))
                     .child(div().text_sm().text_color(rgba(theme::ink_3())).child(subtitle)),
             )
             .child(refresh);
         let body = match (&self.news, &self.news_error) {
             (_, Some(e)) => {
                 let e = e.clone();
-                self.error_state("news-retry", "Não deu para carregar as novidades", &e, |t, _| {
+                self.error_state("news-retry", t("Não deu para carregar as novidades"), &e, |t, _| {
                     t.news_error = None;
                     t.news_loading = true;
                     t.send(Cmd::NewReleases { force: true });
@@ -103,12 +104,12 @@ impl Cyder {
             (Some(n), _) if n[0].is_empty() => {
                 if self.library.as_ref().is_some_and(|l| l.artists.is_empty()) {
                     Self::empty_state(
-                        "Você ainda não segue nenhum artista.",
-                        "Siga artistas para ver os lançamentos deles aqui.",
-                        Some(Self::primary_button("news-search", "Buscar artistas").on_click(cx.listener(|t, _, window, cx| t.open_search(window, cx)))),
+                        t("Você ainda não segue nenhum artista."),
+                        t("Siga artistas para ver os lançamentos deles aqui."),
+                        Some(Self::primary_button("news-search", t("Buscar artistas")).on_click(cx.listener(|t, _, window, cx| t.open_search(window, cx)))),
                     )
                 } else {
-                    Self::empty_state("Nada novo por enquanto.", "Nenhum lançamento de quem você segue nos últimos 4 meses.", None)
+                    Self::empty_state(t("Nada novo por enquanto."), t("Nenhum lançamento de quem você segue nos últimos 4 meses."), None)
                 }
             }
             (Some(_), _) => self.card_grid(CardSource::News, width, cx),

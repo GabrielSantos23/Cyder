@@ -1,5 +1,6 @@
 //! Ícone na bandeja do sistema (Windows): com "Continuar tocando ao fechar", fechar a janela a esconde ali.
 //! Clicar no ícone traz a janela de volta; o menu tem os controles, o mini player e Sair.
+use cyder_core::i18n::t;
 use std::ffi::c_void;
 
 use gpui::{Context, Window};
@@ -79,12 +80,12 @@ impl Cyder {
         // Para a segunda abertura achar esta janela: o título muda com a música, então não dá para procurar por ele.
         let _ = std::fs::write(window_file(), self.hwnd.to_string());
         let items = [
-            ("show", "Mostrar o Cyder"),
-            ("toggle", "Tocar ou pausar"),
-            ("next", "Próxima"),
-            ("prev", "Anterior"),
+            ("show", t("Mostrar o Cyder")),
+            ("toggle", t("Tocar ou pausar")),
+            ("next", t("Próxima")),
+            ("prev", t("Anterior")),
             ("mini", "Mini player"),
-            ("quit", "Sair"),
+            ("quit", t("Sair")),
         ];
         let menu = Menu::new();
         for (i, (id, label)) in items.iter().enumerate() {

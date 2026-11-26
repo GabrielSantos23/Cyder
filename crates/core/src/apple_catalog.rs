@@ -2,6 +2,7 @@
 //! Vira `Shelf`, `Card`, `Page`, `Track` e `SearchResults` como os do Spotify, com URIs `apple:…`; as faixas carregam
 //! o ID do catálogo da Apple, e o player do Apple Music toca direto, sem procurar pelo ISRC.
 //! IDs da biblioteca da pessoa têm prefixo: `p.` (playlist), `l.` (álbum), `r.` (artista), `i.` (música).
+use crate::i18n::t;
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -25,7 +26,7 @@ pub fn set_user_token(token: &str) -> bool {
 }
 
 fn user_token() -> Result<String, String> {
-    USER_TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "Entre no Apple Music para ver a sua biblioteca de lá.".to_string())
+    USER_TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| t("Entre no Apple Music para ver a sua biblioteca de lá.").to_string())
 }
 
 /// Imagem da Apple no tamanho pedido: a URL vem com `{w}`, `{h}` e `{f}` para preencher.
@@ -160,7 +161,7 @@ pub async fn page(http: &reqwest::Client, storefront: &str, card: &Card) -> Resu
         // Artista da biblioteca: abre a página dele no catálogo.
         Kind::Artist if id.starts_with("r.") => {
             let data = mine(format!("/v1/me/library/artists/{id}?include=catalog")).await?;
-            let catalog = data["data"][0]["relationships"]["catalog"]["data"][0]["id"].as_str().ok_or("Este artista não está no catálogo do Apple Music.")?.to_string();
+            let catalog = data["data"][0]["relationships"]["catalog"]["data"][0]["id"].as_str().ok_or(t("Este artista não está no catálogo do Apple Music."))?.to_string();
             catalog_artist(http, storefront, card, &catalog).await
         }
         Kind::Artist => catalog_artist(http, storefront, card, id).await,

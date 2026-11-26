@@ -1,6 +1,7 @@
 //! Protocolo `spotify:` (links `spotify:track:…`): HKCU\Software\Classes\spotify, só desta conta, sem administrador.
 //! O app oficial do Spotify grava a mesma chave. Com ele instalado, o Cyder só toma os links se a pessoa ligar a opção,
 //! e guarda o comando dele para devolver quando ela desligar.
+use cyder_core::tr;
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW};
 
 const KEY: &str = r"Software\Classes\spotify";
@@ -27,7 +28,7 @@ fn write(key: &str, value: &str, data: &str) -> Result<(), String> {
     let (key, value, data) = (wide(key), wide(value), wide(data));
     // SAFETY: textos terminados em zero; o tamanho é em bytes e inclui o zero final. Cria a chave se falta.
     let status = unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
-    if status == 0 { Ok(()) } else { Err(format!("o Windows recusou (código {status})")) }
+    if status == 0 { Ok(()) } else { Err(tr!("o Windows recusou (código {status})", "Windows refused (code {status})")) }
 }
 
 fn is_ours(command: &str) -> bool {

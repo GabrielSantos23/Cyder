@@ -11,6 +11,7 @@ mod reports;
 mod theme;
 mod view;
 
+use cyder_core::i18n::t;
 use std::borrow::Cow;
 
 use gpui::{
@@ -43,6 +44,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/cyder-mark.svg", include_bytes!("../assets/icons/cyder-mark.svg")),
     ("icons/pause.svg", include_bytes!("../assets/icons/pause.svg")),
     ("icons/loader-circle.svg", include_bytes!("../assets/icons/loader-circle.svg")),
+    ("icons/languages.svg", include_bytes!("../assets/icons/languages.svg")),
     ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
     ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
     ("icons/x.svg", include_bytes!("../assets/icons/x.svg")),
@@ -240,7 +242,7 @@ pub fn take_crash_notice() -> Option<String> {
     let marker = crash_marker();
     std::fs::metadata(&marker).ok()?;
     let _ = std::fs::remove_file(&marker);
-    Some("O Cyder fechou por um erro da última vez. O registro está em Configurações › Sobre › Registro.".into())
+    Some(t("O Cyder fechou por um erro da última vez. O registro está em Configurações › Sobre › Registro.").into())
 }
 
 fn main() {

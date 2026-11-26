@@ -1,3 +1,4 @@
+use crate::{i18n::t, tr};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -88,7 +89,7 @@ impl WebApi {
             if !std::mem::replace(&mut ceiling.warned, true) {
                 log::warn!("Web API: {MAX_PER_MINUTE} pedidos no último minuto; segurando os próximos para o Spotify não bloquear o Client ID");
             }
-            return Err("Muitos pedidos ao Spotify em pouco tempo. Tente de novo em instantes.".into());
+            return Err(t("Muitos pedidos ao Spotify em pouco tempo. Tente de novo em instantes.").into());
         }
         Ok(())
     }
@@ -126,11 +127,11 @@ impl WebApi {
             let body: Value = res.json().await.map_err(|e| e.to_string())?;
             if !status.is_success() {
                 let msg = body.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("erro desconhecido");
-                return Err(format!("Spotify respondeu {status}: {msg}"));
+                return Err(tr!("Spotify respondeu {status}: {msg}", "Spotify answered {status}: {msg}"));
             }
             return Ok(body);
         }
-        Err("O Spotify está limitando as requisições. Tente de novo em instantes.".into())
+        Err(t("O Spotify está limitando as requisições. Tente de novo em instantes.").into())
     }
 
     async fn put(&self, path: &str, body: Value) -> Result<(), String> {
@@ -159,9 +160,9 @@ impl WebApi {
             }
             let body: Value = res.json().await.unwrap_or_default();
             let msg = body.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("erro desconhecido");
-            return Err(format!("Spotify respondeu {status}: {msg}"));
+            return Err(tr!("Spotify respondeu {status}: {msg}", "Spotify answered {status}: {msg}"));
         }
-        Err("O Spotify está limitando as requisições. Tente de novo em instantes.".into())
+        Err(t("O Spotify está limitando as requisições. Tente de novo em instantes.").into())
     }
 
     /// Últimas 50 faixas tocadas em qualquer aparelho, com quando e de onde (álbum/playlist).
@@ -293,7 +294,7 @@ impl WebApi {
         match res.status() {
             s if s.is_success() => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Err(COVER_PERMISSION.into()),
-            s => Err(format!("Spotify respondeu {s}")),
+            s => Err(tr!("Spotify respondeu {s}", "Spotify answered {s}")),
         }
     }
 
@@ -474,7 +475,7 @@ impl WebApi {
                 }
                 let tracks: Vec<Track> = items.iter().filter_map(|e| parse_episode(e, &head.title)).take(EPISODES_MAX).collect();
                 let total = s["total_episodes"].as_u64().map_or(tracks.len(), |n| n as usize);
-                let count = if total == 1 { "1 episódio".to_string() } else { format!("{total} episódios") };
+                let count = if total == 1 { "1 episódio".to_string() } else { tr!("{total} episódios", "{total} episodes") };
                 let meta = if head.subtitle.is_empty() { count } else { format!("{} · {count}", head.subtitle) };
                 Ok(Page { meta, card: head, tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0 })
             }
@@ -495,7 +496,7 @@ impl WebApi {
                             card: head,
                             tracks: Vec::new(),
                             albums: Vec::new(),
-                            note: Some("O Spotify só mostra as faixas de playlists suas. Dá para tocar mesmo assim.".into()),
+                            note: Some(t("O Spotify só mostra as faixas de playlists suas. Dá para tocar mesmo assim.").into()),
                             artist: None,
                             owner_image: None, more_from: None, total: 0,
                         })

@@ -1,5 +1,6 @@
 //! Mini player: janela pequena por cima das outras com a capa, a faixa e os controles.
 //! Lê tudo do `Cyder` (que avisa quando muda) e manda os cliques para ele.
+use cyder_core::i18n::t;
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, FontWeight, MouseButton, ObjectFit, Render, Styled, Window, WindowBounds,
     WindowKind, WindowOptions, div, img, point, prelude::*, px, relative, rgba, size,
@@ -53,7 +54,7 @@ impl Render for MiniPlayer {
             let cyder = cyder.clone();
             move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| cyder.update(cx, |c, cx| { f(c, cx); cx.notify(); })
         };
-        let (title, artist) = track.map_or(("Nada tocando".to_string(), String::new()), |t| (t.name, t.artist));
+        let (title, artist) = track.map_or((t("Nada tocando").to_string(), String::new()), |t| (t.name, t.artist));
         div()
             .size_full()
             .relative()
@@ -80,13 +81,13 @@ impl Render for MiniPlayer {
                     .child(div().text_xs().text_color(rgba(theme::ink_2())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(artist)),
             )
             // Curtir sem voltar à janela; o coração cheio na cor de destaque.
-            .child(Self::button_in("mini-like", if liked { "Remover das curtidas" } else { "Curtir" }, if liked { "heart-filled" } else { "heart" }, 15., if liked { theme::accent() } else { theme::ink_2() })
+            .child(Self::button_in("mini-like", if liked { t("Remover das curtidas") } else { t("Curtir") }, if liked { "heart-filled" } else { "heart" }, 15., if liked { theme::accent() } else { theme::ink_2() })
                 .on_click(act(|c, _| c.toggle_like_current())))
-            .child(Self::button("mini-prev", "Anterior", "rewind", 15.).on_click(act(|c, _| c.prev_track())))
-            .child(Self::button("mini-play", if playing { "Pausar" } else { "Tocar" }, if playing { "pause" } else { "play" }, 18.)
+            .child(Self::button("mini-prev", t("Anterior"), "rewind", 15.).on_click(act(|c, _| c.prev_track())))
+            .child(Self::button("mini-play", if playing { t("Pausar") } else { t("Tocar") }, if playing { "pause" } else { "play" }, 18.)
                 .on_click(act(|c, _| c.toggle_play())))
-            .child(Self::button("mini-next", "Próxima", "fast-forward", 15.).on_click(act(|c, _| c.next_track())))
-            .child(Self::button("mini-expand", "Voltar à janela do Cyder", "maximize-2", 14.).on_click(act(|c, cx| {
+            .child(Self::button("mini-next", t("Próxima"), "fast-forward", 15.).on_click(act(|c, _| c.next_track())))
+            .child(Self::button("mini-expand", t("Voltar à janela do Cyder"), "maximize-2", 14.).on_click(act(|c, cx| {
                 c.show_main();
                 c.toggle_mini(cx);
             })))

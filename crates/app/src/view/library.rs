@@ -1,4 +1,5 @@
 //! Biblioteca (doc 05, tela 2): sidebar, grades, páginas de álbum/artista/playlist e a barra principal do player.
+use cyder_core::{i18n::t, tr};
 use std::ops::Range;
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
@@ -175,8 +176,8 @@ fn random_index(len: usize) -> usize {
 
 fn kind_label(kind: Kind) -> &'static str {
     match kind {
-        Kind::Album => "Álbum",
-        Kind::Artist => "Artista",
+        Kind::Album => t("Álbum"),
+        Kind::Artist => t("Artista"),
         Kind::Playlist => "Playlist",
         Kind::Show => "Podcast",
     }
@@ -207,7 +208,10 @@ impl Cyder {
             self.remember_search();
         }
         self.history.push(std::mem::replace(&mut self.screen, screen));
-        self.sync_search_field();
+        // Fora da busca o campo esvazia; abrir a busca de novo começa vazio (só voltar pelo histórico traz o termo).
+        if !matches!(self.screen, Screen::Search) {
+            self.search_query.clear();
+        }
         self.forward.clear();
         self.picked.clear();
         self.release_filter = Releases::All;
@@ -224,17 +228,17 @@ impl Cyder {
         }
     }
 
-    /// O campo de busca mostra o termo só na busca e nas páginas abertas dela: numa seção ou nas configurações
-    /// ele limpa (o termo antigo ali parecia um filtro valendo). Voltar para a busca traz o termo de volta.
+    /// O campo de busca mostra o termo só na tela de busca: fora dela ele limpa (o termo antigo parecia um filtro
+    /// valendo). Voltar ou avançar até a busca traz o termo de volta.
     fn sync_search_field(&mut self) {
         match &self.screen {
-            Screen::Section(_) | Screen::Settings => self.search_query.clear(),
             Screen::Search if self.search_query.is_empty() => {
                 if let Some(found) = &self.search {
                     self.search_query = found.query.clone();
                 }
             }
-            _ => {}
+            Screen::Search => {}
+            _ => self.search_query.clear(),
         }
     }
 
@@ -302,7 +306,7 @@ impl Cyder {
     /// O que vai junto ao arrastar a faixa: as marcadas, se ela é uma delas, ou só ela; e o texto da prévia.
     fn dragged(&self, t: &Track) -> (Vec<String>, SharedString) {
         if self.picked.len() > 1 && self.picked.contains(&t.uri) {
-            (self.picked.clone(), format!("{} faixas", self.picked.len()).into())
+            (self.picked.clone(), tr!("{} faixas", "{} tracks", self.picked.len()).into())
         } else {
             (vec![t.uri.clone()], t.name.clone().into())
         }
@@ -353,7 +357,7 @@ impl Cyder {
         // Uma música da busca toca sozinha e depois o rádio dela, como no Spotify; as outras da busca não entram.
         if let (TrackSource::Search, false, Some(t)) = (source, shuffle_start, tracks.get(index).cloned()) {
             self.remember_search();
-            let label = format!("Rádio: {}", t.name);
+            let label = tr!("Rádio: {}", "Radio: {}", t.name);
             self.queue_label = label.clone();
             self.queue_context = None;
             self.send(Cmd::Play { tracks: vec![t.clone()], index: 0, context: None, label, shuffle_start: false });
@@ -361,11 +365,11 @@ impl Cyder {
             return;
         }
         let (context, label) = match source {
-            TrackSource::Liked => (None, "Músicas curtidas".to_string()),
+            TrackSource::Liked => (None, t("Músicas curtidas").to_string()),
             TrackSource::Page(id) => self.pages.get(id).map_or((None, String::new()), |p| (Some(p.card.uri.clone()), p.card.title.clone())),
             TrackSource::Search => {
                 self.remember_search();
-                (None, format!("Busca: {}", self.search_query.trim()))
+                (None, tr!("Busca: {}", "Search: {}", self.search_query.trim()))
             }
         };
         self.use_saved_shuffle(self.source_kind(source));
@@ -380,7 +384,7 @@ impl Cyder {
         self.up_next = None;
         self.queue_label.clear();
         self.queue_context = None;
-        self.notify("Fila limpa.");
+        self.notify(t("Fila limpa."));
         self.send(Cmd::ClearQueue);
     }
 
@@ -397,7 +401,7 @@ impl Cyder {
     fn current_kind(&self) -> Option<ListKind> {
         match &self.queue_context {
             Some(uri) => ListKind::of(uri),
-            None => (self.queue_label == "Músicas curtidas").then_some(ListKind::Playlists),
+            None => (self.queue_label == t("Músicas curtidas")).then_some(ListKind::Playlists),
         }
     }
 
@@ -454,16 +458,16 @@ impl Cyder {
     pub(super) fn shuffle_toggle(&self, toggle_id: &'static str, size: f32, icon_size: f32, kind: Option<ListKind>, here: bool, cx: &mut Context<Self>) -> AnyElement {
         if let Some(kind) = kind.filter(|_| !here) {
             let on = self.saved_shuffle(kind);
-            return Self::bar_button(toggle_id, if on { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), size, on)
+            return Self::bar_button(toggle_id, if on { t("Aleatório: ligado") } else { t("Aleatório: desligado") }.into(), size, on)
                 .flex_none()
                 .on_click(cx.listener(move |t, _, _, cx| { t.save_shuffle(kind, !on); cx.notify(); }))
                 .child(icon("shuffle", icon_size, if on { theme::accent() } else { theme::ink_2() }))
                 .into_any_element();
         }
         let label = match (self.shuffle, self.smart) {
-            (_, true) => "Smart shuffle: ligado. Clique para desligar",
-            (true, false) => "Aleatório: ligado. Clique para o smart shuffle",
-            (false, _) => "Aleatório: desligado",
+            (_, true) => t("Smart shuffle: ligado. Clique para desligar"),
+            (true, false) => t("Aleatório: ligado. Clique para o smart shuffle"),
+            (false, _) => t("Aleatório: desligado"),
         };
         Self::bar_button(toggle_id, label.into(), size, self.shuffle || self.smart)
             .flex_none()
@@ -494,7 +498,7 @@ impl Cyder {
     fn is_current(&self, context: Option<&str>) -> bool {
         match context {
             Some(uri) => self.queue_context.as_deref() == Some(uri),
-            None => self.queue_context.is_none() && self.queue_label == "Músicas curtidas",
+            None => self.queue_context.is_none() && self.queue_label == t("Músicas curtidas"),
         }
     }
 
@@ -523,7 +527,7 @@ impl Cyder {
                 .aria_label(SharedString::from(label))
         };
         let title = match self.album_of(track) {
-            Some(card) => link((prefix, 0), format!("Abrir {}", card.title))
+            Some(card) => link((prefix, 0), tr!("Abrir {}", "Open {}", card.title))
                 .on_click(cx.listener(move |t, _, _, cx| { t.set_immersive(false); t.go(Screen::Page(card.clone())); cx.notify(); }))
                 .child(track.name.clone())
                 .into_any_element(),
@@ -535,8 +539,8 @@ impl Cyder {
         } else {
             let last = track.artists.len() - 1;
             track.artists.iter().cloned().enumerate().map(|(i, (id, name))| {
-                let card = Card { kind: Kind::Artist, uri: format!("spotify:artist:{id}"), id, title: name.clone(), subtitle: "Artista".into(), image: None };
-                link((prefix, 100 + i), format!("Abrir {name}"))
+                let card = Card { kind: Kind::Artist, uri: format!("spotify:artist:{id}"), id, title: name.clone(), subtitle: t("Artista").into(), image: None };
+                link((prefix, 100 + i), tr!("Abrir {name}", "Open {name}"))
                     .flex_shrink_0()
                     .on_click(cx.listener(move |t, _, _, cx| { t.set_immersive(false); t.go(Screen::Page(card.clone())); cx.notify(); }))
                     .child(if i < last { format!("{name},") } else { name })
@@ -560,7 +564,7 @@ impl Cyder {
             .justify_center()
             .when(!liked && !group.is_empty(), |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)).focus_visible(|s| s.opacity(1.).border_color(rgba(theme::ink_1()))))
             .hover(|s| s.bg(rgba(theme::wash(0x1f))))
-            .tip(if liked { "Remover das Músicas curtidas" } else { "Adicionar às Músicas curtidas" })
+            .tip(if liked { t("Remover das Músicas curtidas") } else { t("Adicionar às Músicas curtidas") })
             .on_click(cx.listener(move |t, _: &ClickEvent, _, cx| {
                 t.set_liked(&track, !liked);
                 cx.stop_propagation();
@@ -584,7 +588,7 @@ impl Cyder {
             // Pelo Tab também aparece (antes só com o mouse em cima).
             .focus_visible(|s| s.opacity(1.).border_color(rgba(theme::ink_1())))
             .hover(|s| s.bg(rgba(theme::wash(0x1f))))
-            .tip("Mais opções")
+            .tip(t("Mais opções"))
             .on_click(cx.listener(move |t, e: &ClickEvent, _, cx| {
                 t.open_menu(target.clone(), e.position());
                 cx.stop_propagation();
@@ -615,7 +619,7 @@ impl Cyder {
             .right(px(right))
             .rounded(px(PANEL_R))
             .overflow_hidden()
-            .bg(rgba((theme::surface() << 8) | 0xff))
+            .bg(rgba((theme::surface() << 8) | theme::panel_alpha()))
             .children(backdrop)
             .child(
                 div()
@@ -735,7 +739,7 @@ impl Cyder {
             .on_click(cx.listener(|t, _, _, cx| { t.go(Screen::Section(Section::Songs)); cx.notify(); }))
             .child(div().size(px(34.)).flex_none().rounded(px(5.)).bg(rgba((LIKED_COLOR << 8) | 0xff)).flex().items_center().justify_center().child(icon("heart-filled", 15., 0xffffffff)))
             .child(div().flex_1().min_w_0().flex().flex_col()
-                .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child("Músicas curtidas"))
+                .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().when(liked_playing, |d| d.text_color(accent)).child(t("Músicas curtidas")))
                 .child(div().text_xs().text_color(rgba(theme::ink_3())).child("Playlist")))
             .when(liked_playing, |d| d.child(self.playing_mark(15., theme::accent())));
         let handle = self.scroll("sidebar".into());
@@ -791,17 +795,17 @@ impl Cyder {
         .pb_3()
         .track_scroll(&handle);
         let empty = match (self.side_filter, query.is_empty()) {
-            (_, false) => Some("Nada encontrado."),
+            (_, false) => Some(t("Nada encontrado.")),
             _ if self.library.is_none() => None,
-            _ => Some("Nada aqui ainda."),
+            _ => Some(t("Nada aqui ainda.")),
         };
         // O modo imersivo não fica aqui: é uma ação, não uma seção. Abre pelo botão da barra do player e pela capa.
         let search = self.search_field(window, cx);
         let filter_label = match self.side_filter {
-            SideFilter::All => "Sua biblioteca",
-            SideFilter::Playlists => "Suas playlists",
-            SideFilter::Artists => "Artistas",
-            SideFilter::Albums => "Álbuns",
+            SideFilter::All => t("Sua biblioteca"),
+            SideFilter::Playlists => t("Suas playlists"),
+            SideFilter::Artists => t("Artistas"),
+            SideFilter::Albums => t("Álbuns"),
             SideFilter::Podcasts => "Podcasts",
         };
         let library_bar = div()
@@ -810,7 +814,7 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_1()
-            .child(small_button("side-search", if self.side_search_open { "Fechar a busca na biblioteca" } else { "Buscar na biblioteca" }, "search", self.side_search_open)
+            .child(small_button("side-search", if self.side_search_open { t("Fechar a busca na biblioteca") } else { t("Buscar na biblioteca") }, "search", self.side_search_open)
                 .on_click(cx.listener(|t, _, window, cx| {
                     t.side_search_open = !t.side_search_open;
                     if t.side_search_open {
@@ -822,9 +826,9 @@ impl Cyder {
                     cx.notify();
                 })))
             .child(div().flex_1().px_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(filter_label))
-            .child(small_button("side-create", "Criar playlist", "plus", false)
+            .child(small_button("side-create", t("Criar playlist"), "plus", false)
                 .on_click(cx.listener(|t, _, _, cx| { t.ask_playlist_name(None); cx.notify(); })))
-            .child(small_button("side-filter", "Filtrar a biblioteca", "list-filter", self.side_filter != SideFilter::All)
+            .child(small_button("side-filter", t("Filtrar a biblioteca"), "list-filter", self.side_filter != SideFilter::All)
                 .on_click(cx.listener(|t, e: &ClickEvent, _, cx| { t.open_menu(MenuTarget::SidebarFilter, e.position()); cx.notify(); })));
         let search_field = self.side_search_open.then(|| {
             let focused = self.side_search_focus.is_focused(window);
@@ -833,7 +837,7 @@ impl Cyder {
                 .id("side-search-field")
                 .key_context("TextField")
                 .track_focus(&self.side_search_focus)
-                .aria_label("Buscar na biblioteca")
+                .aria_label(t("Buscar na biblioteca"))
                 .mb_1()
                 .h(px(32.))
                 .px_3()
@@ -846,17 +850,17 @@ impl Cyder {
                 .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
                 .text_sm()
                 .cursor_text()
-                .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.side_search_focus, cx); cx.notify(); }))
+                .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.side_search_focus, cx); cx.notify(); }))
                 .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.side_search_key(e, window, cx)));
             if self.side_query.is_empty() {
-                field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(format!("Buscar em {}", filter_label.to_lowercase())))
+                field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(tr!("Buscar em {}", "Search in {}", filter_label.to_lowercase())))
             } else {
-                field.child(self.field_text(self.side_query.clone(), focused)).when(focused, |d| d.child(caret()))
+                field.child(self.field_text(self.side_query.clone(), focused, caret()))
             }
         });
         // Rodapé: a conta, com configurações, atalhos e sair.
         let account_top = f32::from(window.viewport_size().height) - V_GAP - 44.;
-        let (name, image) = self.profile.clone().unwrap_or_else(|| ("Sua conta".into(), None));
+        let (name, image) = self.profile.clone().unwrap_or_else(|| (t("Sua conta").into(), None));
         let avatar = match image.and_then(|u| self.thumbs_small.get(&u).cloned()) {
             Some(p) => img(p).size(px(28.)).flex_none().rounded_full().object_fit(ObjectFit::Cover).into_any_element(),
             None => div().size(px(28.)).flex_none().rounded_full().bg(rgba(theme::wash(0x1f))).flex().items_center().justify_center()
@@ -874,7 +878,7 @@ impl Cyder {
             .border_1()
             .border_color(rgba(theme::wash(0x12)))
             .hover(|s| s.bg(rgba(theme::wash(0x14))))
-            .aria_label("Conta: configurações, atalhos e sair")
+            .aria_label(t("Conta: configurações, atalhos e sair"))
             .on_click(cx.listener(move |t, e: &ClickEvent, _, cx| {
                 let mut menu = Menu::new(MenuTarget::Account, e.position());
                 // Preso em cima do botão da conta e da mesma largura, como na referência.
@@ -899,12 +903,12 @@ impl Cyder {
                 // Busca e área de arrastar a janela, na altura do cabeçalho do painel.
                 div().h(px(TOOLBAR_H + V_GAP)).pt(px(V_GAP)).flex().items_center().window_control_area(WindowControlArea::Drag).child(search),
             )
-            .child(nav(self, Section::Home, "Início", "house", cx))
-            .child(nav(self, Section::New, "Novidades", "sparkles", cx))
-            .child(nav(self, Section::Stats, "Estatísticas", "chart-column", cx))
-            .child(div().mt_3().child(heading("Biblioteca")))
-            .child(nav(self, Section::Albums, "Álbuns", "disc-3", cx))
-            .child(nav(self, Section::Artists, "Artistas", "user-round", cx))
+            .child(nav(self, Section::Home, t("Início"), "house", cx))
+            .child(nav(self, Section::New, t("Novidades"), "sparkles", cx))
+            .child(nav(self, Section::Stats, t("Estatísticas"), "chart-column", cx))
+            .child(div().mt_3().child(heading(t("Biblioteca"))))
+            .child(nav(self, Section::Albums, t("Álbuns"), "disc-3", cx))
+            .child(nav(self, Section::Artists, t("Artistas"), "user-round", cx))
             .child(nav(self, Section::Playlists, "Playlists", "list-music", cx))
             .child(library_bar)
             .children(search_field)
@@ -972,7 +976,7 @@ impl Cyder {
             return;
         }
         if self.pins.iter().any(|p| p == src || p == dst) {
-            self.notify("As fixadas ficam no topo. Desafixe para mover.");
+            self.notify(t("As fixadas ficam no topo. Desafixe para mover."));
             return;
         }
         let (filter, query) = (self.side_filter, std::mem::take(&mut self.side_query));
@@ -1037,18 +1041,18 @@ impl Cyder {
             Screen::Section(Section::Songs) => self.liked_screen(window, cx),
             Screen::Section(section) => {
                 let (title, empty, detail, noun) = match section {
-                    Section::Albums => ("Álbuns", "Você ainda não salvou nenhum álbum.", "Num álbum, abra “⋯” e escolha Salvar na Sua Biblioteca.", ("álbum", "álbuns")),
-                    Section::Artists => ("Artistas", "Você ainda não segue nenhum artista.", "Num artista, abra “⋯” e escolha Seguir.", ("artista", "artistas")),
-                    _ => ("Playlists", "Você ainda não tem playlists.", "Crie uma aqui, ou salve as de outras pessoas pela busca.", ("playlist", "playlists")),
+                    Section::Albums => (t("Álbuns"), t("Você ainda não salvou nenhum álbum."), t("Num álbum, abra “⋯” e escolha Salvar na Sua Biblioteca."), (t("álbum"), t("álbuns"))),
+                    Section::Artists => (t("Artistas"), t("Você ainda não segue nenhum artista."), t("Num artista, abra “⋯” e escolha Seguir."), ("artista", "artistas")),
+                    _ => ("Playlists", t("Você ainda não tem playlists."), t("Crie uma aqui, ou salve as de outras pessoas pela busca."), ("playlist", "playlists")),
                 };
                 let action = if section == Section::Playlists {
-                    Self::primary_button("empty-new-playlist", "Criar playlist").on_click(cx.listener(|t, _, _, cx| { t.ask_playlist_name(None); cx.notify(); }))
+                    Self::primary_button("empty-new-playlist", t("Criar playlist")).on_click(cx.listener(|t, _, _, cx| { t.ask_playlist_name(None); cx.notify(); }))
                 } else {
-                    Self::primary_button("empty-search", "Buscar").on_click(cx.listener(|t, _, window, cx| t.open_search(window, cx)))
+                    Self::primary_button("empty-search", t("Buscar")).on_click(cx.listener(|t, _, window, cx| t.open_search(window, cx)))
                 };
                 let source = CardSource::Section(section);
                 let body = match &self.library {
-                    None if self.library_error.is_some() => self.load_error("library-retry", "Não deu para carregar a sua biblioteca.", self.library_error.clone().unwrap_or_default(), cx),
+                    None if self.library_error.is_some() => self.load_error("library-retry", t("Não deu para carregar a sua biblioteca."), self.library_error.clone().unwrap_or_default(), cx),
                     None => {
                         let cols = (((width + GRID_GAP) / (CARD_MIN + GRID_GAP)).floor() as usize).max(2);
                         let card_w = (width - GRID_GAP * (cols - 1) as f32) / cols as f32;
@@ -1125,7 +1129,7 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_2()
-            .child(Self::primary_button("play-list", if here && self.playing { "Pausar" } else { "Tocar" })
+            .child(Self::primary_button("play-list", if here && self.playing { t("Pausar") } else { t("Tocar") })
                 .on_click(cx.listener(move |t, _, _, cx| {
                     if here { t.send(Cmd::Toggle) } else { t.play_start(&source) }
                     cx.notify();
@@ -1179,7 +1183,7 @@ impl Cyder {
                     .hover(|s| s.bg(rgba(theme::wash(0x14))))
                     .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
                     .aria_selected(picked)
-                    .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
+                    .aria_label(SharedString::from(tr!("Tocar {} – {}", "Play {} – {}", t.name, t.artist)))
                     .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                         if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
@@ -1285,7 +1289,7 @@ impl Cyder {
             .gap_2()
             .rounded(px(14.))
             .when(centered, |d| d.items_center())
-            .aria_label(SharedString::from(format!("Abrir {} {}", kind_label(card.kind).to_lowercase(), title)))
+            .aria_label(SharedString::from(tr!("Abrir {} {}", "Open {} {}", kind_label(card.kind).to_lowercase(), title)))
             .hover(|s| s.opacity(0.85))
             .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(card.clone())); cx.notify(); }))
             .child(art)
@@ -1305,13 +1309,13 @@ impl Cyder {
             .pb_4()
             .flex()
             .items_center()
-            .child(div().flex_1().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Início"))
-            .child(Self::chip("home-refresh", "Atualizar a tela inicial", "rotate-cw", false, true)
+            .child(div().flex_1().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child(t("Início")))
+            .child(Self::chip("home-refresh", t("Atualizar a tela inicial"), "rotate-cw", false, true)
                 .on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::RefreshHome); cx.notify(); })));
         let shelves = self.home_shelves().filter(|s| !s.is_empty() || self.home_error.is_none());
         let Some(shelves) = shelves else {
             let body = match self.home_error.clone() {
-                Some(e) => self.load_error("home-retry", "Não deu para carregar a tela inicial.", e, cx),
+                Some(e) => self.load_error("home-retry", t("Não deu para carregar a tela inicial."), e, cx),
                 None => loading::home(SHELF_CARD),
             };
             return div().size_full().flex().flex_col().child(header).child(body).into_any_element();
@@ -1380,7 +1384,7 @@ impl Cyder {
                 .flex()
                 .items_center()
                 .gap_3()
-                .aria_label(SharedString::from(format!("Abrir {} {}", kind_label(card.kind).to_lowercase(), card.title)))
+                .aria_label(SharedString::from(tr!("Abrir {} {}", "Open {} {}", kind_label(card.kind).to_lowercase(), card.title)))
                 .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(open.clone())); cx.notify(); }))
                 .child(art)
                 .child(
@@ -1404,7 +1408,7 @@ impl Cyder {
         let mut shelves = Vec::new();
         let mut api = from_api.into_iter();
         shelves.extend(api.by_ref().take(2));
-        for (title, cards) in [("Feitas para você", spotify), ("Suas playlists", mine)] {
+        for (title, cards) in [(t("Feitas para você"), spotify), (t("Suas playlists"), mine)] {
             if !cards.is_empty() {
                 shelves.push(Shelf { title: title.into(), cards: cards.into_iter().take(SHELF_MAX).collect() });
             }
@@ -1437,13 +1441,13 @@ impl Cyder {
             .gap_3()
             .child(
                 div().flex().items_center().gap_2()
-                    .child(div().flex_1().text_lg().font_weight(FontWeight::BOLD).child(shelf.title))
-                    .child(arrow(("shelf-back", i), "Voltar nesta prateleira", "chevron-left").on_click(cx.listener(move |_, _, _, cx| {
+                    .child(div().flex_1().text_lg().font_weight(FontWeight::BOLD).child(t(&shelf.title).to_string()))
+                    .child(arrow(("shelf-back", i), t("Voltar nesta prateleira"), "chevron-left").on_click(cx.listener(move |_, _, _, cx| {
                         let o = h_back.offset();
                         h_back.set_offset(point((o.x + px(step)).min(px(0.)), o.y));
                         cx.notify();
                     })))
-                    .child(arrow(("shelf-next", i), "Avançar nesta prateleira", "chevron-right").on_click(cx.listener(move |_, _, _, cx| {
+                    .child(arrow(("shelf-next", i), t("Avançar nesta prateleira"), "chevron-right").on_click(cx.listener(move |_, _, _, cx| {
                         let (o, max) = (h_next.offset(), h_next.max_offset());
                         h_next.set_offset(point((o.x - px(step)).max(-max.x), o.y));
                         cx.notify();
@@ -1485,9 +1489,9 @@ impl Cyder {
             .child(
                 div().h(px(header_h)).px_4().flex().items_center().gap_2()
                     .child(div().flex_1().min_w_0().flex().flex_col()
-                        .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Letra"))
+                        .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child(t("Letra")))
                         .children(track.map(|t| div().text_xs().text_color(rgba(theme::ink_3())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(format!("{} – {}", t.name, t.artist)))))
-                    .child(Self::bar_button("lyrics-close", "Fechar a letra".into(), 32., false)
+                    .child(Self::bar_button("lyrics-close", t("Fechar a letra").into(), 32., false)
                         .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Lyrics); cx.notify(); }))
                         .child(icon("x", 15., theme::ink_2()))),
             )
@@ -1500,7 +1504,7 @@ impl Cyder {
         let Some(page) = self.pages.get(&card.id).cloned() else {
             let body = match self.page_errors.get(&card.id).cloned() {
                 Some(e) => {
-                    let title = format!("Não deu para abrir “{}”", card.title);
+                    let title = tr!("Não deu para abrir “{}”", "Couldn't open “{}”", card.title);
                     self.error_state("retry-page", title, &e, move |t, _| {
                         t.page_errors.remove(&card.id);
                         t.send(Cmd::Open(card.clone()));
@@ -1550,11 +1554,11 @@ impl Cyder {
                 _ if i == count - 2 => this.related_shelf(&id, cx),
                 _ if i == count - 3 => this.featuring_shelf(&id, cx),
                 _ if i == count - 4 => match more {
-                    true => div().px(px(PAD)).pt_2().child(Self::text_button("discography-more", if this.discography_open { "Ver menos" } else { "Ver mais" })
+                    true => div().px(px(PAD)).pt_2().child(Self::text_button("discography-more", if this.discography_open { t("Ver menos") } else { t("Ver mais") })
                         .on_click(cx.listener(|t, _, _, cx| { t.discography_open = !t.discography_open; cx.notify(); }))).into_any_element(),
                     false => div().into_any_element(),
                 },
-                _ if rows == 0 => div().px(px(PAD)).child(Self::quiet("Nada nesta seção.")).into_any_element(),
+                _ if rows == 0 => div().px(px(PAD)).child(Self::quiet(t("Nada nesta seção."))).into_any_element(),
                 _ => div().px(px(PAD)).child(this.card_row(&source, i - 3, cols, card_w, cx)).into_any_element(),
             }
         }))
@@ -1570,7 +1574,7 @@ impl Cyder {
         if cards.is_empty() {
             return div().into_any_element();
         }
-        let title = format!("Com {}", page.card.title);
+        let title = tr!("Com {}", "With {}", page.card.title);
         div().px(px(PAD)).pt_8().child(self.shelf(FEATURING_SHELF, Shelf { title, cards }, cx)).into_any_element()
     }
 
@@ -1580,7 +1584,7 @@ impl Cyder {
         if related.is_empty() {
             return div().into_any_element();
         }
-        div().px(px(PAD)).pt_8().child(self.shelf(RELATED_SHELF, Shelf { title: "Fãs também curtem".into(), cards: related }, cx)).into_any_element()
+        div().px(px(PAD)).pt_8().child(self.shelf(RELATED_SHELF, Shelf { title: t("Fãs também curtem").into(), cards: related }, cx)).into_any_element()
     }
 
     fn artist_hero(&mut self, id: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -1597,7 +1601,7 @@ impl Cyder {
         let round = |button_id: &'static str, size: f32, label: &'static str| {
             Self::focusable(button_id).size(px(size)).flex_none().rounded_full().flex().items_center().justify_center().tip(label)
         };
-        let play = round("artist-play", 56., if pause { "Pausar" } else { "Tocar o artista" })
+        let play = round("artist-play", 56., if pause { t("Pausar") } else { t("Tocar o artista") })
             .bg(rgba(theme::ink_1()))
             .hover(|s| s.bg(rgba(theme::wash(0xd9))))
             .on_click(cx.listener(move |t, _, _, cx| {
@@ -1624,7 +1628,7 @@ impl Cyder {
             })
             // Escurece em cima, para os botões do cabeçalho, e funde com o fundo embaixo, onde fica o nome.
             .child(div().absolute().inset_0().rounded_t(px(PANEL_R)).bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x80), 0.), linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.3))))
-            .child(div().absolute().inset_0().bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.35), linear_color_stop(rgba((theme::surface() << 8) | 0xff), 1.))))
+            .child(div().absolute().inset_0().bg(linear_gradient(180., linear_color_stop(rgba((theme::surface() << 8) | 0x00), 0.35), linear_color_stop(rgba((theme::surface() << 8) | theme::panel_alpha()), 1.))))
             .child(
                 // Folga embaixo: o play não encosta no "Lançamento mais recente" logo abaixo.
                 div().absolute().left(px(PAD)).right(px(PAD)).bottom(px(20.)).flex().flex_col().gap_4()
@@ -1648,14 +1652,14 @@ impl Cyder {
             let thumb = card.image.as_ref().and_then(|u| self.thumbs.get(u)).cloned();
             let (title, subtitle) = (card.title.clone(), card.subtitle.clone());
             div().w(px(300.)).flex_none().flex().flex_col().gap_3()
-                .child(heading("Lançamento mais recente"))
+                .child(heading(t("Lançamento mais recente")))
                 .child(
                     Self::focusable("artist-latest")
                         .flex()
                         .gap_4()
                         .rounded(px(12.))
                         .hover(|s| s.opacity(0.85))
-                        .aria_label(SharedString::from(format!("Abrir {title}")))
+                        .aria_label(SharedString::from(tr!("Abrir {title}", "Open {title}")))
                         .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(card.clone())); cx.notify(); }))
                         .child(match thumb {
                             Some(p) => img(p).size(px(120.)).flex_none().rounded(px(10.)).object_fit(ObjectFit::Cover).into_any_element(),
@@ -1687,7 +1691,7 @@ impl Cyder {
             .children(latest_el)
             .when(!top.is_empty(), |d| d.child(
                 div().flex_1().min_w_0().flex().flex_col().gap_3()
-                    .child(heading("Mais tocadas"))
+                    .child(heading(t("Mais tocadas")))
                     .child(div().w_full().flex().gap_4().children(columns)),
             ))
             .into_any_element()
@@ -1716,7 +1720,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0x14))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
-            .aria_label(SharedString::from(format!("Tocar {}", t.name)))
+            .aria_label(SharedString::from(tr!("Tocar {}", "Play {}", t.name)))
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
                     if now { this.toggle_play() } else { this.play_from(&source, i) }
@@ -1751,7 +1755,7 @@ impl Cyder {
         let Some(page) = self.pages.get(id) else { return div().into_any_element() };
         let total = page.albums.len();
         let albums = page.artist.as_ref().map_or(total, |a| a.album_count.min(total));
-        let filters = [(Releases::All, "Tudo", total), (Releases::Albums, "Álbuns", albums), (Releases::Singles, "Singles e EPs", total - albums)];
+        let filters = [(Releases::All, t("Tudo"), total), (Releases::Albums, t("Álbuns"), albums), (Releases::Singles, t("Singles e EPs"), total - albums)];
         let chips: Vec<AnyElement> = filters.into_iter().enumerate().filter(|(_, (_, _, n))| *n > 0).map(|(i, (filter, label, _))| {
             let on = self.release_filter == filter;
             Self::focusable(("release-filter", i))
@@ -1776,7 +1780,7 @@ impl Cyder {
             .flex()
             .items_center()
             .gap_2()
-            .child(div().flex_1().text_lg().font_weight(FontWeight::BOLD).child("Discografia"))
+            .child(div().flex_1().text_lg().font_weight(FontWeight::BOLD).child(t("Discografia")))
             // Com um tipo só, os filtros não ajudam.
             .when(albums > 0 && albums < total, |d| d.children(chips))
             .into_any_element()
@@ -1842,14 +1846,14 @@ impl Cyder {
         };
         let by_line = match (c.kind, artist) {
             (Kind::Album, Some((artist_id, name))) => {
-                let card = Card { kind: Kind::Artist, uri: format!("spotify:artist:{artist_id}"), id: artist_id, title: name.clone(), subtitle: "Artista".into(), image: None };
+                let card = Card { kind: Kind::Artist, uri: format!("spotify:artist:{artist_id}"), id: artist_id, title: name.clone(), subtitle: t("Artista").into(), image: None };
                 Self::focusable("page-artist")
                     .flex()
                     .items_center()
                     .gap_2()
                     .rounded(px(6.))
                     .hover(|s| s.underline())
-                    .aria_label(SharedString::from(format!("Abrir {name}")))
+                    .aria_label(SharedString::from(tr!("Abrir {name}", "Open {name}")))
                     .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(card.clone())); cx.notify(); }))
                     .child(avatar())
                     .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(c.subtitle.clone()))
@@ -1867,10 +1871,10 @@ impl Cyder {
         let chips = div().flex().flex_wrap().gap_2()
             .children(year.map(|y| chip("calendar", y)))
             .when(n > 0, |d| d.child(chip("list-music", match (c.kind == Kind::Show, n == 1) {
-                (true, true) => "1 episódio".into(),
-                (true, false) => format!("{n} episódios"),
-                (false, true) => "1 faixa".into(),
-                (false, false) => format!("{n} faixas"),
+                (true, true) => t("1 episódio").into(),
+                (true, false) => tr!("{n} episódios", "{n} episodes"),
+                (false, true) => t("1 faixa").into(),
+                (false, false) => tr!("{n} faixas", "{n} tracks"),
             })))
             .when(total_min > 0, |d| d.child(chip("clock", minutes_label(total_min))));
         let pill = |pill_id: &'static str, label: &'static str, icon_name: &'static str| {
@@ -1893,7 +1897,7 @@ impl Cyder {
         let (play_card, menu_card) = (c.clone(), c.clone());
         let here = self.is_current(Some(&c.uri));
         let pause = here && self.playing;
-        let play = pill("page-play", if pause { "Pausar" } else { "Tocar" }, if pause { "pause" } else { "play" }).on_click(cx.listener(move |t, _, _, cx| {
+        let play = pill("page-play", if pause { t("Pausar") } else { t("Tocar") }, if pause { "pause" } else { "play" }).on_click(cx.listener(move |t, _, _, cx| {
             if here {
                 t.send(Cmd::Toggle);
             } else if by_uri {
@@ -1921,10 +1925,10 @@ impl Cyder {
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .hover(|s| s.bg(rgba(theme::wash(0x14))))
-                .aria_label(if following { "Deixar de seguir o podcast" } else { "Seguir o podcast" })
+                .aria_label(if following { t("Deixar de seguir o podcast") } else { t("Seguir o podcast") })
                 .on_click(cx.listener(move |t, _, _, cx| { t.save_card(follow_card.clone(), !following); cx.notify(); }))
                 .when(following, |d| d.child(icon("check", 15., theme::ink_1())))
-                .child(if following { "Seguindo" } else { "Seguir" })
+                .child(if following { t("Seguindo") } else { t("Seguir") })
         });
         let more = Some(()).map(|_| {
             Self::focusable("page-more")
@@ -1936,7 +1940,7 @@ impl Cyder {
                 // Botão fantasma: o "Tocar" é a ação principal da página, o "⋯" branco cheio competia com ele.
                 .bg(rgba(theme::wash(0x0f)))
                 .hover(|s| s.bg(rgba(theme::wash(0x1f))))
-                .tip(if c.kind == Kind::Playlist { "Mais opções da playlist" } else { "Mais opções do álbum" })
+                .tip(if c.kind == Kind::Playlist { t("Mais opções da playlist") } else { t("Mais opções do álbum") })
                 .on_click(cx.listener(move |t, e: &ClickEvent, _, cx| { t.open_menu(MenuTarget::Card(menu_card.clone()), e.position()); cx.notify(); }))
                 .child(icon("ellipsis", 18., theme::ink_1()))
         });
@@ -1960,8 +1964,8 @@ impl Cyder {
         // Playlists têm a coluna do álbum; podcasts, a da data do episódio.
         let middle: &[&'static str] = match c.kind {
             Kind::Album => &[],
-            Kind::Show => &["Data"],
-            _ => &["Álbum"],
+            Kind::Show => &[t("Data")],
+            _ => &[t("Álbum")],
         };
         div().w_full().flex().flex_col().child(hero).child(column_header(middle, c.kind != Kind::Album)).into_any_element()
     }
@@ -1973,9 +1977,9 @@ impl Cyder {
         let Some(page) = self.pages.get(id) else { return div().into_any_element() };
         let Some(t) = page.tracks.get(i).cloned() else {
             if page.more_from.is_some() && !page.tracks.is_empty() {
-                return div().px(px(12.)).py_3().text_sm().text_color(rgba(theme::ink_3())).child("Carregando mais faixas…").into_any_element();
+                return div().px(px(12.)).py_3().text_sm().text_color(rgba(theme::ink_3())).child(t("Carregando mais faixas…")).into_any_element();
             }
-            let text = page.note.clone().unwrap_or_else(|| "Nenhuma faixa.".into());
+            let text = page.note.clone().unwrap_or_else(|| t("Nenhuma faixa.").into());
             return div().px(px(12.)).text_color(rgba(theme::ink_2())).child(text).into_any_element();
         };
         // Playlists e podcasts mostram capa e a coluna do álbum (a data, no episódio).
@@ -1991,7 +1995,7 @@ impl Cyder {
         let reorder = self.owns(&page.card).then(|| page.card.clone());
         // Episódio começado: quanto falta, como no Spotify.
         let album_col = match self.episode_positions.get(&t.uri) {
-            Some(&at) => format!("{} · faltam {}", t.album, minutes_label((t.duration_ms.saturating_sub(at) as u64).div_ceil(60_000))),
+            Some(&at) => tr!("{} · faltam {}", "{} · {} left", t.album, minutes_label((t.duration_ms.saturating_sub(at) as u64).div_ceil(60_000))),
             None => t.album.clone(),
         };
         let hidden = self.hidden.contains(&super::hidden_key(&page.card.uri, &t.uri));
@@ -2021,7 +2025,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0x1c))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
-            .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
+            .aria_label(SharedString::from(tr!("Tocar {} – {}", "Play {} – {}", t.name, t.artist)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 if !this.pick(e, i, |t| uris_of(t.source_tracks(&source))) {
@@ -2058,6 +2062,7 @@ impl Cyder {
     /// Fundo do painel: cor fixa; nas páginas de álbum e playlist, a capa borrada, com troca suave.
     fn backdrop_layers(&mut self) -> Vec<AnyElement> {
         let want = match &self.screen {
+            _ if theme::cover_frame() => None,
             Screen::Page(c) if c.kind != Kind::Artist && self.settings.cover_colors => c.image.as_ref().and_then(|u| self.backdrops.get(u)).cloned(),
             _ => None,
         };
@@ -2109,7 +2114,7 @@ impl Cyder {
         // Só o player recebe o mouse; a faixa larga em volta dele deixa o clique passar para a lista.
         let place = |bar| div().absolute().left(px(16.)).right(px(16.)).bottom(px(16.)).flex().justify_center().child(bar);
         let Some(track) = self.tracks.get(self.current).cloned() else {
-            return place(bar.justify_center().child(div().text_sm().text_color(rgba(theme::ink_3())).child("Escolha uma música para tocar.")));
+            return place(bar.justify_center().child(div().text_sm().text_color(rgba(theme::ink_3())).child(t("Escolha uma música para tocar."))));
         };
         let duration = track.duration_ms;
         let pos = self.seek_drag.map_or(self.position(), |f| (f * duration as f32) as u32);
@@ -2135,7 +2140,7 @@ impl Cyder {
                     .flex_none()
                     .rounded(px(6.))
                     .hover(|s| s.text_color(rgba(theme::ink_1())))
-                    .aria_label(if self.show_total { "Mostrar tempo restante" } else { "Mostrar duração total" })
+                    .aria_label(if self.show_total { t("Mostrar tempo restante") } else { t("Mostrar duração total") })
                     .on_click(cx.listener(|t, _, _, cx| { t.show_total = !t.show_total; cx.notify(); }))
                     .child(right_time),
             );
@@ -2147,7 +2152,7 @@ impl Cyder {
                         .child(icon(self.volume_icon(), 16., theme::ink_2()))
                         .child(self.volume_slider(true, cx))
                         .child(
-                            Self::bar_button("dock-immersive", "Modo imersivo".into(), 32., false)
+                            Self::bar_button("dock-immersive", t("Modo imersivo").into(), 32., false)
                                 .ml_1()
                                 .on_click(cx.listener(|t, _, _, cx| { t.set_immersive(true); cx.notify(); }))
                                 .child(icon("maximize-2", 15., theme::ink_1())),
@@ -2171,7 +2176,7 @@ impl Cyder {
                     .flex_none()
                     .rounded(px(8.))
                     .hover(|s| s.opacity(0.8))
-                    .tip("Abrir o modo imersivo")
+                    .tip(t("Abrir o modo imersivo"))
                     .on_click(cx.listener(|t, _, _, cx| { t.set_immersive(true); cx.notify(); }))
                     .child(cover),
             )
@@ -2194,7 +2199,7 @@ impl Cyder {
     /// buscar, abrir páginas novas ou editar playlists não funciona. Fica acima da faixa de outro aparelho.
     fn limit_banner(&self) -> Option<AnyElement> {
         let left = self.limited_until?.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero())?;
-        let until = finish_clock(left.as_secs()).map_or_else(|| format!("daqui a {} min", left.as_secs().div_ceil(60)), |c| format!("até {c}"));
+        let until = finish_clock(left.as_secs()).map_or_else(|| tr!("daqui a {} min", "in {} min", left.as_secs().div_ceil(60)), |c| tr!("até {c}", "until {c}"));
         let bottom = 16. + DOCK_H + 8. + if self.elsewhere().is_some() { 38. } else { 0. };
         Some(
             div().absolute().left_0().right_0().bottom(px(bottom)).flex().justify_center().child(
@@ -2212,7 +2217,7 @@ impl Cyder {
                     .font_weight(FontWeight::SEMIBOLD)
                     .shadow_2xl()
                     .child(icon("info", 15., 0x000000ff))
-                    .child(format!("O Spotify limitou os pedidos {until}: busca, páginas novas e edições voltam depois")),
+                    .child(tr!("O Spotify limitou os pedidos {until}: busca, páginas novas e edições voltam depois", "Spotify limited requests {until}: search, new pages and edits come back after that")),
             )
             .into_any_element(),
         )
@@ -2227,15 +2232,15 @@ impl Cyder {
                 .child(icon(icon_name, 16., theme::ink_2()))
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(label))
         };
-        let heading = div().px_3().pt_1().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child("Ouvir junto");
+        let heading = div().px_3().pt_1().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(t("Ouvir junto"));
         let body = match self.together.clone() {
             Listen::Off => div().flex().flex_col()
-                .child(row("listen-host", "Convidar alguém".into(), "users").on_click(cx.listener(|t, _, _, cx| {
+                .child(row("listen-host", t("Convidar alguém").into(), "users").on_click(cx.listener(|t, _, _, cx| {
                     t.devices_open = false;
                     t.send(Cmd::ListenHost(true));
                     cx.notify();
                 })))
-                .child(row("listen-join", "Entrar com um código".into(), "log-in").on_click(cx.listener(|t, _, _, cx| {
+                .child(row("listen-join", t("Entrar com um código").into(), "log-in").on_click(cx.listener(|t, _, _, cx| {
                     t.devices_open = false;
                     t.ask(super::Ask::ListenCode, String::new());
                     cx.notify();
@@ -2243,16 +2248,16 @@ impl Cyder {
             Listen::Hosting(code) => {
                 let pretty = pretty_code(&code);
                 div().flex().flex_col()
-                    .child(div().px_3().pb_1().text_sm().child(format!("Código: {pretty}")))
-                    .child(row("listen-copy", "Copiar o código".into(), "copy").on_click(cx.listener(move |t, _, _, cx| {
+                    .child(div().px_3().pb_1().text_sm().child(tr!("Código: {pretty}", "Code: {pretty}")))
+                    .child(row("listen-copy", t("Copiar o código").into(), "copy").on_click(cx.listener(move |t, _, _, cx| {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(pretty.clone()));
-                        t.notify("Código copiado.");
+                        t.notify(cyder_core::i18n::t("Código copiado."));
                         cx.notify();
                     })))
-                    .child(row("listen-stop", "Parar de convidar".into(), "x").on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::ListenHost(false)); cx.notify(); })))
+                    .child(row("listen-stop", t("Parar de convidar").into(), "x").on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::ListenHost(false)); cx.notify(); })))
             }
             Listen::Joined { host, .. } => div().flex().flex_col()
-                .child(row("listen-leave", if host.is_empty() { "Sair (esperando a outra pessoa tocar)".into() } else { format!("Sair de ouvir com {host}") }, "log-out")
+                .child(row("listen-leave", if host.is_empty() { t("Sair (esperando a outra pessoa tocar)").into() } else { tr!("Sair de ouvir com {host}", "Stop listening with {host}") }, "log-out")
                     .on_click(cx.listener(|t, _, _, cx| { t.send(Cmd::ListenJoin(None)); cx.notify(); }))),
         };
         div().flex().flex_col().child(heading).child(body).into_any_element()
@@ -2266,9 +2271,9 @@ impl Cyder {
         }
         let text = match &self.together {
             Listen::Off => return None,
-            Listen::Hosting(code) => format!("Ouvindo junto · código {}", pretty_code(code)),
-            Listen::Joined { host, .. } if host.is_empty() => "Ouvir junto: esperando a outra pessoa tocar".into(),
-            Listen::Joined { host, .. } => format!("Ouvindo junto com {host}"),
+            Listen::Hosting(code) => tr!("Ouvindo junto · código {}", "Listening together · code {}", pretty_code(code)),
+            Listen::Joined { host, .. } if host.is_empty() => t("Ouvir junto: esperando a outra pessoa tocar").into(),
+            Listen::Joined { host, .. } => tr!("Ouvindo junto com {host}", "Listening together with {host}"),
         };
         Some(
             div().absolute().left_0().right_0().bottom(px(16. + DOCK_H + 8.)).flex().justify_center().child(
@@ -2286,7 +2291,7 @@ impl Cyder {
                     .font_weight(FontWeight::SEMIBOLD)
                     .shadow_2xl()
                     .hover(|s| s.opacity(0.9))
-                    .aria_label(SharedString::from(format!("{text}. Abrir os controles")))
+                    .aria_label(SharedString::from(tr!("{text}. Abrir os controles", "{text}. Open the controls")))
                     .on_click(cx.listener(|t, _, _, cx| {
                         t.devices_open = true;
                         t.send(Cmd::Devices);
@@ -2317,14 +2322,14 @@ impl Cyder {
                     .font_weight(FontWeight::SEMIBOLD)
                     .shadow_2xl()
                     .hover(|s| s.opacity(0.9))
-                    .aria_label(SharedString::from(format!("Tocando em {device}. Escolher outro aparelho")))
+                    .aria_label(SharedString::from(tr!("Tocando em {device}. Escolher outro aparelho", "Playing on {device}. Choose another device")))
                     .on_click(cx.listener(|t, _, _, cx| {
                         t.devices_open = true;
                         t.send(Cmd::Devices);
                         cx.notify();
                     }))
                     .child(icon("speaker", 15., 0x000000ff))
-                    .child(format!("Tocando em {device}")),
+                    .child(tr!("Tocando em {device}", "Playing on {device}")),
             )
             .into_any_element(),
         )
@@ -2398,14 +2403,14 @@ impl Cyder {
             .child(
                 // Voltar e avançar num pílula só, como no Cider.
                 div().h(px(36.)).flex().rounded_full().border_1().border_color(rgba(theme::wash(0x1a))).bg(rgba(theme::shade(0x4d))).backdrop_blur(px(20.))
-                    .child(nav_button("nav-back", "Voltar", "chevron-left", can_back, true)
+                    .child(nav_button("nav-back", t("Voltar"), "chevron-left", can_back, true)
                         .on_click(cx.listener(|t, _, _, cx| { t.nav_back(); cx.notify(); })))
                     .child(div().w(px(1.)).my_2().bg(rgba(theme::wash(0x1f))))
-                    .child(nav_button("nav-forward", "Avançar", "chevron-right", can_forward, false)
+                    .child(nav_button("nav-forward", t("Avançar"), "chevron-right", can_forward, false)
                         .on_click(cx.listener(|t, _, _, cx| { t.nav_forward(); cx.notify(); }))),
             )
             .child(
-                Self::chip("toggle-sidebar", if self.sidebar_open { "Esconder a barra lateral" } else { "Mostrar a barra lateral" }, "panel-left", false, true)
+                Self::chip("toggle-sidebar", if self.sidebar_open { t("Esconder a barra lateral") } else { t("Mostrar a barra lateral") }, "panel-left", false, true)
                     .on_click(cx.listener(|t, _, _, cx| { t.sidebar_open = !t.sidebar_open; cx.notify(); })),
             )
             // Espaço livre do cabeçalho: arrasta a janela (com o nome da página quando ela rolou).
@@ -2414,25 +2419,25 @@ impl Cyder {
             // Versão nova: à esquerda do mini player.
             .children(self.update_button(cx))
             .child(
-                Self::chip("toolbar-mini", if self.mini.is_some() { "Fechar o mini player" } else { "Abrir o mini player" }, "picture-in-picture-2", self.mini.is_some(), true)
+                Self::chip("toolbar-mini", if self.mini.is_some() { t("Fechar o mini player") } else { t("Abrir o mini player") }, "picture-in-picture-2", self.mini.is_some(), true)
                     .on_click(cx.listener(|t, _, _, cx| { t.toggle_mini(cx); cx.notify(); })),
             )
             .child(
-                Self::chip("toolbar-lyrics", if lyrics_on { "Fechar a letra" } else { "Mostrar a letra" }, "mic-vocal", lyrics_on, true)
+                Self::chip("toolbar-lyrics", if lyrics_on { t("Fechar a letra") } else { t("Mostrar a letra") }, "mic-vocal", lyrics_on, true)
                     .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Lyrics); cx.notify(); })),
             )
             .child(
-                Self::chip("toolbar-queue", if queue_on { "Fechar a fila" } else { "Abrir a fila" }, "list-end", queue_on, true)
+                Self::chip("toolbar-queue", if queue_on { t("Fechar a fila") } else { t("Abrir a fila") }, "list-end", queue_on, true)
                     .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Queue); cx.notify(); })),
             )
             .child(
                 // Verde enquanto outro aparelho toca, como no Spotify.
                 if self.elsewhere().is_some() {
                     Self::focusable("toolbar-devices").size(px(36.)).rounded_full().flex().items_center().justify_center()
-                        .bg(rgba(theme::accent())).hover(|s| s.opacity(0.9)).tip("Aparelhos")
+                        .bg(rgba(theme::accent())).hover(|s| s.opacity(0.9)).tip(t("Aparelhos"))
                         .child(icon("headphones", 16., theme::on_accent()))
                 } else {
-                    Self::chip("toolbar-devices", "Aparelhos", "headphones", self.devices_open, true)
+                    Self::chip("toolbar-devices", t("Aparelhos"), "headphones", self.devices_open, true)
                 }
                     .on_click(cx.listener(|t, _, _, cx| {
                         t.devices_open = !t.devices_open;
@@ -2514,9 +2519,9 @@ impl Cyder {
                     // 1 px para dentro: a borda do painel é desenhada por dentro do arco, e o canto cheio passava dela.
                     .child(div().absolute().left(px(1.)).bottom(px(1.)).size(px(r - 1.)).rounded_bl(px(r - 1.)).bg(rgba(corner)))
             }))
-            .child(control("win-min", "Minimizar", "minus", WindowControlArea::Min, theme::hover()))
-            .child(control("win-max", "Maximizar", "square", WindowControlArea::Max, theme::hover()))
-            .child(control("win-close", "Fechar", "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
+            .child(control("win-min", t("Minimizar"), "minus", WindowControlArea::Min, theme::hover()))
+            .child(control("win-max", t("Maximizar"), "square", WindowControlArea::Max, theme::hover()))
+            .child(control("win-close", t("Fechar"), "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
     }
 
     /// Fila (2ª imagem do Cider): tocando agora, a seguir e quanto tempo falta.
@@ -2562,34 +2567,34 @@ impl Cyder {
             .child(
                 // Título do painel, os modos e o fechar.
                 div().flex().items_center().gap_1()
-                    .child(div().flex_1().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Fila"))
-                    .child(Self::bar_button("queue-shuffle", if self.shuffle { "Aleatório: ligado" } else { "Aleatório: desligado" }.into(), 32., self.shuffle)
+                    .child(div().flex_1().text_size(px(16.)).font_weight(FontWeight::BOLD).child(t("Fila")))
+                    .child(Self::bar_button("queue-shuffle", if self.shuffle { t("Aleatório: ligado") } else { t("Aleatório: desligado") }.into(), 32., self.shuffle)
                         .on_click(cx.listener(|t, _, _, cx| { t.shuffle = !t.shuffle; t.send(Cmd::SetShuffle(t.shuffle)); t.remember_shuffle(); cx.notify(); }))
                         .child(self.shuffle_icon(15., mode_color(false))))
-                    .child(Self::bar_button("queue-repeat", "Repetir".into(), 32., self.repeat != cyder_core::player::Repeat::Off)
+                    .child(Self::bar_button("queue-repeat", t("Repetir").into(), 32., self.repeat != cyder_core::player::Repeat::Off)
                         .on_click(cx.listener(|t, _, _, cx| { t.cycle_repeat(); cx.notify(); }))
                         .child(icon(if self.repeat == cyder_core::player::Repeat::One { "repeat-1" } else { "repeat" }, 15., mode_color(self.repeat != cyder_core::player::Repeat::Off))))
-                    .child(Self::bar_button("queue-close", "Fechar a fila".into(), 32., false)
+                    .child(Self::bar_button("queue-close", t("Fechar a fila").into(), 32., false)
                         .on_click(cx.listener(|t, _, _, cx| { t.toggle_side(Side::Queue); cx.notify(); }))
                         .child(icon("x", 15., theme::ink_2()))),
             )
-            .child(heading("Tocando agora"))
+            .child(heading(t("Tocando agora")))
             .children(now.map(|t| self.queue_row(&t, None, None, true, cx)))
             .child(
                 div().mt_2().flex().flex_col().gap_0p5()
                     // De onde vem a fila em cima (cortado se for longo); embaixo o título e a ação, como no Spotify.
                     .child(div().flex().items_center().gap_2().text_xs().text_color(rgba(theme::ink_3()))
                         .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis()
-                            .when(!self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label))))
-                        .when(!self.tracks.is_empty() && !from_spotify, |d| d.child(div().flex_none().child(format!("{} de {}", self.current + 1, self.tracks.len())))))
+                            .when(!self.queue_label.is_empty(), |d| d.child(tr!("De {}", "From {}", self.queue_label))))
+                        .when(!self.tracks.is_empty() && !from_spotify, |d| d.child(div().flex_none().child(tr!("{} de {}", "{} of {}", self.current + 1, self.tracks.len())))))
                     .child(div().flex().items_center().gap_2()
-                        .child(div().flex_1().flex().items_baseline().gap_2().child(heading("A seguir"))
-                            .when(upcoming > 0, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(if upcoming == 1 { "1 música".to_string() } else { format!("{upcoming} músicas") }))))
+                        .child(div().flex_1().flex().items_baseline().gap_2().child(heading(t("A seguir")))
+                            .when(upcoming > 0, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(if upcoming == 1 { t("1 música").to_string() } else { tr!("{upcoming} músicas", "{upcoming} songs") }))))
                         // Tocando em outro aparelho, a fila é a dele: a Web API não deixa limpar.
-                        .when(upcoming > 0 && self.elsewhere().is_none(), |d| d.child(Self::text_button("queue-clear", "Limpar fila").flex_none()
+                        .when(upcoming > 0 && self.elsewhere().is_none(), |d| d.child(Self::text_button("queue-clear", t("Limpar fila")).flex_none()
                             .on_click(cx.listener(|t, _, _, cx| { t.clear_queue(); cx.notify(); }))))),
             )
-            .child(if upcoming == 0 { Self::quiet("Nada na fila depois desta.").into_any_element() } else { list.into_any_element() })
+            .child(if upcoming == 0 { Self::quiet(t("Nada na fila depois desta.")).into_any_element() } else { list.into_any_element() })
             .child(
                 div().mb_1().flex().justify_center().child(
                     div().px_3().py_1().rounded_full().bg(rgba(theme::wash(0x12))).text_xs().text_color(rgba(theme::ink_2()))
@@ -2675,7 +2680,7 @@ impl Cyder {
             .when(drag.is_some(), |d| d.child(icon("grip-vertical", 14., theme::ink_3())));
         match index {
             Some(i) => row
-                .aria_label(SharedString::from(format!("Tocar {}", t.name)))
+                .aria_label(SharedString::from(tr!("Tocar {}", "Play {}", t.name)))
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     // A posição na lista que aparece: a do Spotify, com o aleatório, ou a nossa.
                     let shown = |t: &Self| uris_of(t.spotify_queue().map_or(&t.tracks, |l| l));
@@ -2696,8 +2701,8 @@ impl Cyder {
     fn devices_popover(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let right = if self.side.is_some() { QUEUE_W + 16. } else { CONTROLS_W + 4. };
         let body: AnyElement = match &self.devices {
-            None => div().p_3().text_sm().text_color(rgba(theme::ink_3())).child("Procurando aparelhos…").into_any_element(),
-            Some(list) if list.is_empty() => div().p_3().text_sm().text_color(rgba(theme::ink_3())).child("Nenhum aparelho encontrado.").into_any_element(),
+            None => div().p_3().text_sm().text_color(rgba(theme::ink_3())).child(t("Procurando aparelhos…")).into_any_element(),
+            Some(list) if list.is_empty() => div().p_3().text_sm().text_color(rgba(theme::ink_3())).child(t("Nenhum aparelho encontrado.")).into_any_element(),
             Some(list) => {
                 let list: Vec<Device> = list.clone();
                 div()
@@ -2720,7 +2725,7 @@ impl Cyder {
                             .text_sm()
                             .hover(|s| s.bg(rgba(theme::wash(0x14))))
                             .aria_selected(active)
-                            .aria_label(SharedString::from(if active { format!("{} (tocando aqui)", d.name) } else { format!("Tocar em {}", d.name) }))
+                            .aria_label(SharedString::from(if active { tr!("{} (tocando aqui)", "{} (playing here)", d.name) } else { tr!("Tocar em {}", "Play on {}", d.name) }))
                             .on_click(cx.listener(move |t, _, _, cx| {
                                 if !active {
                                     t.send(Cmd::Transfer(id.clone()));
@@ -2734,7 +2739,7 @@ impl Cyder {
                             .child(div().flex_1().min_w_0().flex().flex_col()
                                 .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis()
                                     .when(active, |d| d.font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::accent()))).child(d.name))
-                                .when(active, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child("Tocando agora"))))
+                                .when(active, |d| d.child(div().text_xs().text_color(rgba(theme::ink_3())).child(t("Tocando agora")))))
                             .when(active, |d| d.child(icon("check", 15., theme::accent())))
                     }))
                     .into_any_element()
@@ -2755,7 +2760,7 @@ impl Cyder {
                     .p_2()
                     .rounded(px(14.))
                     .shadow_2xl()
-                    .child(div().px_3().pt_1().pb_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child("Tocar em"))
+                    .child(div().px_3().pt_1().pb_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(t("Tocar em")))
                     .child(body)
                     .child(div().my_1().h(px(1.)).bg(rgba(theme::wash(0x14))))
                     .child(self.listen_controls(cx)),
@@ -2886,7 +2891,7 @@ pub(super) fn column_header(middle: &[&'static str], cover: bool) -> AnyElement 
         .border_color(rgba(theme::wash(0x1a)))
         .child(div().w(px(28.)).flex().justify_end().child(label("#")))
         .when(cover, |d| d.child(div().w(px(36.)).flex_none()))
-        .child(div().flex_1().min_w_0().child(label("Título")))
+        .child(div().flex_1().min_w_0().child(label(t("Título"))))
         .children(middle.iter().map(|&m| div().flex_1().min_w_0().child(label(m))))
         .child(div().w(px(28.)).flex_none())
         .child(div().w(px(44.)).flex().justify_end().child(icon("clock", 13., theme::ink_3())))
@@ -2931,10 +2936,10 @@ pub(super) fn pretty_code(code: &str) -> String {
 fn since(at: u64, now: u64) -> String {
     let secs = now.saturating_sub(at);
     match secs {
-        0..3600 => format!("há {} min", (secs / 60).max(1)),
-        3600..86_400 => format!("há {} h", secs / 3600),
+        0..3600 => tr!("há {} min", "{} min ago", (secs / 60).max(1)),
+        3600..86_400 => tr!("há {} h", "{} h ago", secs / 3600),
         86_400..172_800 => "ontem".into(),
-        _ => format!("há {} dias", secs / 86_400),
+        _ => tr!("há {} dias", "{} days ago", secs / 86_400),
     }
 }
 

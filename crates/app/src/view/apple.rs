@@ -3,6 +3,7 @@
 //! O WebView2 roda numa thread própria, com uma janela dele: criado dentro da janela do GPUI, o `wry` processa as
 //! mensagens do Windows no meio de uma atualização do GPUI, e o GPUI entra nele mesmo (RefCell already borrowed).
 //! A mesma janela vira o "Entrar no Apple Music" quando falta o login.
+use cyder_core::i18n::t;
 use gpui::Context;
 use cyder_core::apple::{AppleCmd, AppleState};
 use tao::{
@@ -134,7 +135,7 @@ impl ApplePlayer {
 /// A thread do WebView2: cria a janela e o site, e fica processando as mensagens até o `Quit`.
 fn run(ready: std::sync::mpsc::Sender<Result<EventLoopProxy<Msg>, String>>, events: tokio::sync::mpsc::UnboundedSender<String>) {
     let mut el = EventLoopBuilder::<Msg>::with_user_event().with_any_thread(true).build();
-    let window = match WindowBuilder::new().with_title("Entrar no Apple Music").with_visible(false).with_inner_size(tao::dpi::LogicalSize::new(1000., 760.)).build(&el) {
+    let window = match WindowBuilder::new().with_title(t("Entrar no Apple Music")).with_visible(false).with_inner_size(tao::dpi::LogicalSize::new(1000., 760.)).build(&el) {
         Ok(w) => w,
         Err(e) => return drop(ready.send(Err(e.to_string()))),
     };

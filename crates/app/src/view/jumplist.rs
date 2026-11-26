@@ -4,6 +4,7 @@
 //!
 //! Formato do repasse: WM_COPYDATA para a janela principal, `dwData` = `ARGS`, e os argumentos (sem o exe)
 //! em UTF-8, um por linha. Quem mais precisar mandar algo ao Cyder aberto usa o mesmo formato.
+use cyder_core::i18n::t;
 use std::{cell::RefCell, ffi::c_void};
 
 use gpui::Context;
@@ -156,7 +157,7 @@ fn commit(recent: &[(String, String)]) -> Result<(), String> {
         }
         let tasks: IObjectCollection = CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(|e| e.to_string())?;
         for (args, title) in TASKS {
-            tasks.AddObject(&link(&exe, args, title).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            tasks.AddObject(&link(&exe, args, t(title)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         }
         list.AddUserTasks(&tasks.cast::<IObjectArray>().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let items: IObjectCollection = CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(|e| e.to_string())?;
@@ -184,7 +185,7 @@ unsafe fn link(exe: &HSTRING, args: &str, title: &str) -> windows::core::Result<
         // VT_LPWSTR, como o InitPropVariantFromString do SDK (que é inline, sem export).
         let mut value = PROPVARIANT::default();
         let inner = &mut *value.Anonymous.Anonymous;
-        inner.Anonymous.pwszVal = SHStrDupW(&HSTRING::from(if title.is_empty() { "Sem nome" } else { title }))?;
+        inner.Anonymous.pwszVal = SHStrDupW(&HSTRING::from(if title.is_empty() { t("Sem nome") } else { title }))?;
         inner.vt = VT_LPWSTR;
         let store: IPropertyStore = link.cast()?;
         store.SetValue(&PKEY_Title, &value)?;

@@ -1,3 +1,4 @@
+use crate::{i18n::t, tr};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -126,6 +127,14 @@ pub enum Theme {
     System,
 }
 
+/// Idioma dos textos do app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    #[default]
+    Portuguese,
+    English,
+}
+
 /// Cor de destaque: o verde do Spotify ou a do Windows (ajustada para o contraste).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Accent {
@@ -156,6 +165,7 @@ pub struct Settings {
     pub cover_colors: bool,
     pub theme: Theme,
     pub accent: Accent,
+    pub language: Language,
     /// A capa da música tocando, borrada, na moldura em volta do painel (barra lateral e botões da janela).
     pub cover_frame: bool,
     /// Canvas (o vídeo curto de algumas músicas) no fundo do modo imersivo.
@@ -204,6 +214,7 @@ impl Default for Settings {
             cover_colors: true,
             theme: Theme::Dark,
             accent: Accent::Green,
+            language: Language::Portuguese,
             cover_frame: false,
             canvas: true,
             eq_on: false,
@@ -272,10 +283,10 @@ pub enum ConfigError {
 /// O Client ID do Spotify tem 32 caracteres hexadecimais.
 pub fn check_client_id(id: &str) -> Result<(), String> {
     match id.len() {
-        0 => Err("Cole o Client ID do seu app.".into()),
+        0 => Err(t("Cole o Client ID do seu app.").into()),
         32 if id.chars().all(|c| c.is_ascii_hexdigit()) => Ok(()),
-        32 => Err("O Client ID só tem letras de a a f e números. Confira se copiou o campo certo.".into()),
-        n => Err(format!("Esse texto tem {n} caracteres; o Client ID tem 32.")),
+        32 => Err(t("O Client ID só tem letras de a a f e números. Confira se copiou o campo certo.").into()),
+        n => Err(tr!("Esse texto tem {n} caracteres; o Client ID tem 32.", "That text has {n} characters; the Client ID has 32.")),
     }
 }
 
@@ -286,7 +297,7 @@ pub fn save(client_id: &str) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&Config { client_id: id.to_string() }).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(config_dir())
         .and_then(|_| std::fs::write(config_path(), text))
-        .map_err(|e| format!("Não deu para salvar a configuração: {e}"))
+        .map_err(|e| tr!("Não deu para salvar a configuração: {e}", "Couldn't save the settings: {e}"))
 }
 
 pub fn load() -> Result<Config, ConfigError> {
@@ -299,7 +310,7 @@ pub fn load() -> Result<Config, ConfigError> {
     };
     // Editores no Windows (Bloco de Notas, PowerShell) costumam salvar com BOM, que o serde_json recusa.
     let cfg: Config = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|_| {
-        ConfigError::Invalid("A configuração salva está corrompida. Cole o Client ID de novo.".into())
+        ConfigError::Invalid(t("A configuração salva está corrompida. Cole o Client ID de novo.").into())
     })?;
     if cfg.client_id.trim().is_empty() {
         return Err(ConfigError::Missing);

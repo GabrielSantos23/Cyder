@@ -1,4 +1,5 @@
 //! Capas em disco, fundo pré-borrado e cor de acento (doc 03, regras 1 e 3).
+use crate::tr;
 use std::path::{Path, PathBuf};
 
 use image::{GenericImageView, RgbImage};
@@ -97,7 +98,7 @@ pub(crate) fn clear_if_requested() {
 /// Capa de playlist para o Spotify: quadrada (cortada no centro), JPEG em base64 abaixo de 256 KB.
 pub fn playlist_cover(path: &Path) -> Result<String, String> {
     use base64::Engine;
-    let img = open(path).map_err(|e| format!("Não deu para abrir a imagem: {e}"))?;
+    let img = open(path).map_err(|e| tr!("Não deu para abrir a imagem: {e}", "Couldn't open the image: {e}"))?;
     let square = img.resize_to_fill(640, 640, image::imageops::FilterType::Lanczos3).to_rgb8();
     for quality in [90, 80, 65, 50, 35] {
         let mut jpeg = Vec::new();

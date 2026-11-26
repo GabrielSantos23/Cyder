@@ -1,5 +1,6 @@
 //! Atalhos globais (Windows): valem com o Cyder em segundo plano ou escondido na bandeja, para quem não tem
 //! teclas de mídia. Uma thread própria registra os atalhos com RegisterHotKey e espera as mensagens deles.
+use cyder_core::{i18n::t, tr};
 use std::{ptr::null_mut, sync::Mutex};
 
 use gpui::{Context, FocusHandle, KeyDownEvent, Keystroke, Window};
@@ -77,7 +78,7 @@ pub(super) fn label(s: &str) -> String {
     let mut parts: Vec<String> = [(m.control, "Ctrl"), (m.alt, "Alt"), (m.shift, "Shift"), (m.platform, "Win")]
         .iter().filter(|(on, _)| *on).map(|(_, name)| name.to_string()).collect();
     parts.push(match k.key.as_str() {
-        "space" => "Espaço".into(),
+        "space" => t("Espaço").into(),
         "left" => "←".into(),
         "right" => "→".into(),
         "up" => "↑".into(),
@@ -191,10 +192,10 @@ impl Cyder {
         if k.key == "escape" && keys == "escape" {
             self.hotkeys.error = None;
         } else if parse(&keys).is_none() {
-            self.hotkeys.error = Some("Use Ctrl, Alt ou Win com uma letra, número, seta, Espaço ou F1 a F24.".into());
+            self.hotkeys.error = Some(t("Use Ctrl, Alt ou Win com uma letra, número, seta, Espaço ou F1 a F24.").into());
             return cx.notify();
         } else if let Some(j) = (0..6).find(|&j| j != i && self.settings.hotkeys[j] == keys) {
-            self.hotkeys.error = Some(format!("{} já é o atalho de “{}”.", label(&keys), NAMES[j]));
+            self.hotkeys.error = Some(tr!("{} já é o atalho de “{}”.", "{} is already the shortcut for “{}”.", label(&keys), t(NAMES[j])));
             return cx.notify();
         } else {
             self.hotkeys.error = None;

@@ -1,5 +1,6 @@
 //! Primeira abertura: boas-vindas, criar o app no painel do Spotify e colar o Client ID.
 //! Depois do primeiro login, um cartão mostra onde ficam as funções principais.
+use cyder_core::{i18n::t, tr};
 use std::time::Duration;
 
 use gpui::{
@@ -92,18 +93,18 @@ impl Cyder {
                     .child(div().text_sm().text_color(rgba(theme::ink_3())).child(detail)))
         };
         step_column()
-            .child(title("Bem-vindo ao Cyder"))
-            .child(lead("Um player para a sua conta do Spotify, com letra sincronizada e mini player."))
-            .child(div().mt_8().mb_3().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child("Você vai precisar de"))
+            .child(title(t("Bem-vindo ao Cyder")))
+            .child(lead(t("Um player para a sua conta do Spotify, com letra sincronizada e mini player.")))
+            .child(div().mt_8().mb_3().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(t("Você vai precisar de")))
             .child(div().flex().flex_col().gap_4()
-                .child(need("user-round", "Spotify Premium", "O Spotify só toca em apps como este para contas Premium."))
-                .child(need("laptop", "Um app grátis no painel do Spotify", "Leva uns cinco minutos."))
-                .child(need("log-in", "Entrar pelo navegador", "O Cyder não vê a sua senha.")))
+                .child(need("user-round", "Spotify Premium", t("O Spotify só toca em apps como este para contas Premium.")))
+                .child(need("laptop", t("Um app grátis no painel do Spotify"), t("Leva uns cinco minutos.")))
+                .child(need("log-in", t("Entrar pelo navegador"), t("O Cyder não vê a sua senha."))))
             .child(div().flex_1())
             .child(div().flex().items_center().justify_between()
-                .child(Self::text_button("onb-have-id", "Já tenho um Client ID")
+                .child(Self::text_button("onb-have-id", t("Já tenho um Client ID"))
                     .on_click(cx.listener(|t, _, _, cx| { t.go_to(STEP_CLIENT_ID); cx.notify(); })))
-                .child(Self::primary_button("onb-start", "Criar meu app")
+                .child(Self::primary_button("onb-start", t("Criar meu app"))
                     .on_click(cx.listener(|t, _, _, cx| { t.go_to(1); cx.notify(); }))))
     }
 
@@ -111,18 +112,18 @@ impl Cyder {
         let copied = self.uri_copied;
         // "Create app", "Redirect URIs", "Web API" e "Save" ficam em inglês: são os rótulos exatos do painel do Spotify.
         step_column()
-            .child(title("Crie seu app no Spotify"))
-            .child(lead("Faça no navegador e volte aqui."))
+            .child(title(t("Crie seu app no Spotify")))
+            .child(lead(t("Faça no navegador e volte aqui.")))
             .child(div().mt_6().flex().flex_col().gap_4()
-                .child(numbered(1, "Abra o painel, entre na sua conta e clique em Create app.")
-                    .child(div().mt_2().child(Self::secondary_button("onb-dashboard", "Abrir o painel do Spotify")
+                .child(numbered(1, t("Abra o painel, entre na sua conta e clique em Create app."))
+                    .child(div().mt_2().child(Self::secondary_button("onb-dashboard", t("Abrir o painel do Spotify"))
                         .flex().items_center().gap_2().child(icon("external-link", 14., theme::ink_1()))
                         .on_click(|_, _, cx| cx.open_url(DASHBOARD)))))
-                .child(numbered(2, "Dê qualquer nome e descrição, como Cyder."))
-                .child(numbered(3, "Em Redirect URIs, cole este endereço e clique em Add:")
+                .child(numbered(2, t("Dê qualquer nome e descrição, como Cyder.")))
+                .child(numbered(3, t("Em Redirect URIs, cole este endereço e clique em Add:"))
                     .child(div().mt_2().flex().items_center().gap_2()
                         .child(div().flex_1().min_w_0().px_3().py_2().rounded(px(8.)).bg(rgba(theme::wash(0x14))).font_family("Consolas").text_sm().child(REDIRECT_URI))
-                        .child(Self::secondary_button("onb-copy-uri", if copied { "Copiado" } else { "Copiar" })
+                        .child(Self::secondary_button("onb-copy-uri", if copied { t("Copiado") } else { t("Copiar") })
                             .flex().items_center().gap_2()
                             .child(icon(if copied { "check" } else { "copy" }, 14., if copied { green(0xff) } else { theme::ink_1() }))
                             .on_click(cx.listener(|t, _, _, cx| {
@@ -130,16 +131,16 @@ impl Cyder {
                                 t.uri_copied = true;
                                 cx.notify();
                             })))))
-                .child(numbered(4, "Marque Web API, aceite os termos e clique em Save.")))
+                .child(numbered(4, t("Marque Web API, aceite os termos e clique em Save."))))
             .child(div().flex_1())
-            .child(self.footer("onb-back-1", 0, Self::primary_button("onb-created", "Já criei o app")
+            .child(self.footer("onb-back-1", 0, Self::primary_button("onb-created", t("Já criei o app"))
                 .on_click(cx.listener(|t, _, _, cx| { t.go_to(STEP_CLIENT_ID); cx.notify(); })), cx))
     }
 
     fn client_id_step(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         step_column()
-            .child(title("Cole o Client ID"))
-            .child(lead("No app que você criou, clique em Settings. O Client ID é o primeiro item de Basic Information."))
+            .child(title(t("Cole o Client ID")))
+            .child(lead(t("No app que você criou, clique em Settings. O Client ID é o primeiro item de Basic Information.")))
             .child(div().mt_8().mb_2().text_sm().font_weight(FontWeight::SEMIBOLD).child("Client ID"))
             .child(self.client_id_field(window, cx))
             // Linha do erro sempre reservada: a tela não pula quando ele aparece.
@@ -150,15 +151,15 @@ impl Cyder {
                     let id = self.client_id.trim();
                     let valid = id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit());
                     div().mt_2().h(px(20.)).flex().items_center().gap_1p5().text_sm()
-                        .when(valid, |d| d.text_color(rgba(theme::accent())).child(icon("check", 14., theme::accent())).child("Formato certo."))
-                        .when(!valid && !id.is_empty(), |d| d.text_color(rgba(theme::ink_3())).child(format!("{} de 32 caracteres.", id.chars().count())))
+                        .when(valid, |d| d.text_color(rgba(theme::accent())).child(icon("check", 14., theme::accent())).child(t("Formato certo.")))
+                        .when(!valid && !id.is_empty(), |d| d.text_color(rgba(theme::ink_3())).child(tr!("{} de 32 caracteres.", "{} of 32 characters.", id.chars().count())))
                 }
             })
             .child(div().mt_2().flex().gap_2().text_sm().text_color(rgba(theme::ink_3()))
                 .child(div().pt(px(2.)).child(icon("info", 14., theme::ink_3())))
-                .child(div().flex_1().min_w_0().child("Ao salvar, o navegador abre para você entrar no Spotify.")))
+                .child(div().flex_1().min_w_0().child(t("Ao salvar, o navegador abre para você entrar no Spotify."))))
             .child(div().flex_1())
-            .child(self.footer("onb-back-2", 1, Self::primary_button("onb-save", "Salvar e entrar")
+            .child(self.footer("onb-back-2", 1, Self::primary_button("onb-save", t("Salvar e entrar"))
                 .on_click(cx.listener(|t, _, window, cx| {
                     if !t.skip_bounced() {
                         t.submit_client_id(window, cx);
@@ -170,9 +171,9 @@ impl Cyder {
     /// Voltar à esquerda; Cancelar (vindo das configurações) e a ação principal à direita.
     fn footer(&self, back_id: &'static str, back_to: usize, primary: gpui::Stateful<Div>, cx: &mut Context<Self>) -> Div {
         div().flex().items_center().justify_between()
-            .child(Self::text_button(back_id, "Voltar").on_click(cx.listener(move |t, _, _, cx| { t.go_to(back_to); cx.notify(); })))
+            .child(Self::text_button(back_id, t("Voltar")).on_click(cx.listener(move |t, _, _, cx| { t.go_to(back_to); cx.notify(); })))
             .child(div().flex().gap_2()
-                .when(self.setup_return, |d| d.child(Self::secondary_button("onb-cancel", "Cancelar")
+                .when(self.setup_return, |d| d.child(Self::secondary_button("onb-cancel", t("Cancelar"))
                     .on_click(cx.listener(|t, _, window, cx| {
                         t.setup_return = false;
                         t.client_id_error = None;
@@ -199,19 +200,19 @@ impl Cyder {
             .child(div().flex().items_center().gap_3()
                 .child(badge)
                 .child(div().flex().flex_col()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Tudo pronto"))
-                    .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Sua biblioteca já está aqui."))))
+                    .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Tudo pronto")))
+                    .child(div().text_sm().text_color(rgba(theme::ink_2())).child(t("Sua biblioteca já está aqui.")))))
             .child(div().flex().flex_col().gap_3()
-                .child(row("search", "Buscar músicas, álbuns e artistas", Some("Ctrl + K")))
-                .child(row("play", "Tocar ou pausar de qualquer tela", Some("Espaço")))
-                .child(row("mic-vocal", "Letra sincronizada em tela cheia", Some("L")))
-                .child(row("picture-in-picture-2", "Mini player: botão no topo da janela, à direita", None))
-                .child(row("speaker", "O Cyder aparece no Spotify Connect do celular", None))
-                .child(row("settings", "Last.fm, Discord e equalizador: Configurações", None)))
+                .child(row("search", t("Buscar músicas, álbuns e artistas"), Some("Ctrl + K")))
+                .child(row("play", t("Tocar ou pausar de qualquer tela"), Some(t("Espaço"))))
+                .child(row("mic-vocal", t("Letra sincronizada em tela cheia"), Some("L")))
+                .child(row("picture-in-picture-2", t("Mini player: botão no topo da janela, à direita"), None))
+                .child(row("speaker", t("O Cyder aparece no Spotify Connect do celular"), None))
+                .child(row("settings", t("Last.fm, Discord e equalizador: Configurações"), None)))
             .child(div().flex().items_center().justify_between()
-                .child(Self::text_button("onb-shortcuts", "Ver todos os atalhos")
+                .child(Self::text_button("onb-shortcuts", t("Ver todos os atalhos"))
                     .on_click(cx.listener(|t, _, _, cx| { t.dialog = Some(Dialog::Shortcuts); cx.notify(); })))
-                .child(Self::primary_button("onb-listen", "Começar a ouvir")
+                .child(Self::primary_button("onb-listen", t("Começar a ouvir"))
                     .on_click(cx.listener(|t, _, window, cx| { t.dialog = None; t.ask_reports(); window.focus(&t.focus, cx); cx.notify(); }))))
     }
 }
@@ -243,7 +244,7 @@ fn progress(step: usize) -> Div {
             div().h(px(6.)).rounded_full().bg(rgba(color))
                 .with_spring(("onb-progress", i), SpringAnimation::new(SPRING).to(px(if i == step { 28. } else { 8. })), |d, w| d.w(w))
         })))
-        .child(div().text_xs().text_color(rgba(theme::ink_3())).child(format!("Passo {} de {STEPS}", step + 1)))
+        .child(div().text_xs().text_color(rgba(theme::ink_3())).child(tr!("Passo {} de {STEPS}", "Step {} of {STEPS}", step + 1)))
 }
 
 /// Boas-vindas: um disco com ondas saindo e um equalizador dançando.
@@ -305,7 +306,7 @@ fn dashboard_visual() -> Div {
     let window = window.child(
         div().px_4().pb_4().flex().flex_col().gap_3()
             .child(mock_field("App name", div().child("Cyder")))
-            .child(mock_field("App description", div().text_color(rgba(theme::ink_3())).child("Meu player")))
+            .child(mock_field("App description", div().text_color(rgba(theme::ink_3())).child(t("Meu player"))))
             .child(div().flex().flex_col().gap_1()
                 .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Redirect URIs"))
                 .child(div().flex().gap_2()
@@ -325,7 +326,7 @@ fn client_id_visual() -> Div {
         .child(div().font_family("Consolas").child(SAMPLE_ID))
         .child(icon("copy", 12., theme::ink_2()));
     let tag = div().absolute().top(px(-30.)).right(px(0.)).px_2().py_1().rounded(px(6.)).bg(rgba(green(0xff))).text_color(rgba(0x000000ff))
-        .text_xs().font_weight(FontWeight::SEMIBOLD).child("Copie este")
+        .text_xs().font_weight(FontWeight::SEMIBOLD).child(t("Copie este"))
         .with_animation("onb-tag", Animation::new(Duration::from_millis(1400)).repeat(), |d, t| d.mt(px(-3. * wave(t))));
     let window = mock_window("Basic Information").child(
         div().px_4().pb_4().flex().flex_col().gap_3()

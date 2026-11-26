@@ -1,5 +1,6 @@
 //! Notificação do Windows (toast) na troca de faixa: capa, nome, artista e "Pular". Só com a opção ligada,
 //! a janela do Cyder fora de foco e a música tocando neste computador.
+use cyder_core::i18n::t;
 use std::time::{Duration, Instant};
 
 use tauri_winrt_notification::{IconCrop, Toast};
@@ -86,7 +87,7 @@ impl Cyder {
             let _ = history.ClearWithId(&windows::core::HSTRING::from(AUMID));
         }
         let mut toast = Toast::new(AUMID).title(&track.name).text1(&track.artist).sound(None)
-            .add_button("Pular", "skip")
+            .add_button(t("Pular"), "skip")
             .on_activated(move |action| {
                 if action.as_deref() == Some("skip") {
                     let _ = tx.send(());

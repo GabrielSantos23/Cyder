@@ -1,6 +1,7 @@
 //! Botões na miniatura da barra de tarefas (a prévia que aparece com o mouse em cima do ícone), como no
 //! Spotify: curtir, anterior, tocar/pausar e próxima. Os cliques chegam pela janela como WM_COMMAND.
 //! O mesmo ITaskbarList3 pinta o progresso da música no ícone.
+use cyder_core::i18n::t;
 use std::{cell::RefCell, ffi::c_void};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -152,12 +153,12 @@ fn buttons(bar: &Bar) -> [THUMBBUTTON; 4] {
     let s = bar.shown;
     BUTTONS.map(|button| {
         let (icon, tip) = match button {
-            Button::Like if s.liked => (bar.icons.heart_filled, "Remover das Músicas curtidas"),
-            Button::Like => (bar.icons.heart, "Adicionar às Músicas curtidas"),
-            Button::Prev => (bar.icons.prev, "Anterior"),
-            Button::Toggle if s.playing => (bar.icons.pause, "Pausar"),
-            Button::Toggle => (bar.icons.play, "Tocar"),
-            Button::Next => (bar.icons.next, "Próxima"),
+            Button::Like if s.liked => (bar.icons.heart_filled, t("Remover das Músicas curtidas")),
+            Button::Like => (bar.icons.heart, t("Adicionar às Músicas curtidas")),
+            Button::Prev => (bar.icons.prev, t("Anterior")),
+            Button::Toggle if s.playing => (bar.icons.pause, t("Pausar")),
+            Button::Toggle => (bar.icons.play, t("Tocar")),
+            Button::Next => (bar.icons.next, t("Próxima")),
         };
         let mut sz_tip = [0u16; 260];
         for (dst, src) in sz_tip.iter_mut().zip(tip.encode_utf16()) {

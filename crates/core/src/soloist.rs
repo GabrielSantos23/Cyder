@@ -3,6 +3,7 @@
 //! para ele pela Web API e o segue como segue qualquer outro aparelho.
 //! Cada pessoa usa a própria chave (painel do Spotify, com Premium). O executável não pode ser redistribuído:
 //! vem sempre do CDN do Spotify, e cada versão vence 90 dias depois de feita.
+use crate::{i18n::t, tr};
 use std::{path::PathBuf, process::Stdio, time::Duration};
 
 use futures_util::StreamExt;
@@ -65,9 +66,9 @@ pub fn save_key(key: Option<&str>) -> Result<(), String> {
 pub fn check_key(key: &str) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {
-        Err("Cole a chave do Soloist.".into())
+        Err(t("Cole a chave do Soloist.").into())
     } else if key.chars().any(char::is_whitespace) {
-        Err("A chave não tem espaços. Confira se copiou só ela.".into())
+        Err(t("A chave não tem espaços. Confira se copiou só ela.").into())
     } else {
         Ok(())
     }
@@ -89,7 +90,7 @@ pub fn start(http: reqwest::Client, key: String, tx: UnboundedSender<Status>) ->
 
 async fn run(http: reqwest::Client, key: String, tx: UnboundedSender<Status>) {
     if !cfg!(windows) {
-        let _ = tx.send(Status::Failed("Por enquanto o Cyder só usa o Soloist no Windows.".into()));
+        let _ = tx.send(Status::Failed(t("Por enquanto o Cyder só usa o Soloist no Windows.").into()));
         return;
     }
     loop {
@@ -97,12 +98,12 @@ async fn run(http: reqwest::Client, key: String, tx: UnboundedSender<Status>) {
             Ok(fresh) => fresh,
             Err(e) => {
                 log::error!("soloist: download: {e}");
-                let _ = tx.send(Status::Failed(format!("Não deu para baixar o Soloist: {e}")));
+                let _ = tx.send(Status::Failed(tr!("Não deu para baixar o Soloist: {e}", "Couldn't download Soloist: {e}")));
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 continue;
             }
         };
-        let _ = tx.send(Status::Starting("Abrindo o Soloist…".into()));
+        let _ = tx.send(Status::Starting(t("Abrindo o Soloist…").into()));
         let wait = match session(&key, &tx).await {
             Ok(EXPIRED) if !fresh => {
                 // Versão vencida: a próxima volta baixa a atual.
@@ -112,17 +113,17 @@ async fn run(http: reqwest::Client, key: String, tx: UnboundedSender<Status>) {
             }
             Ok(EXPIRED) => {
                 let _ = std::fs::remove_file(exe());
-                let _ = tx.send(Status::Failed("A versão do Soloist no site do Spotify está vencida. O Cyder tenta de novo em uma hora.".into()));
+                let _ = tx.send(Status::Failed(t("A versão do Soloist no site do Spotify está vencida. O Cyder tenta de novo em uma hora.").into()));
                 3600
             }
             Ok(code) => {
                 log::error!("soloist: fechou com código {code}");
-                let _ = tx.send(Status::Failed(format!("O Soloist fechou (código {code}). Confira a chave; o Cyder tenta de novo em instantes.")));
+                let _ = tx.send(Status::Failed(tr!("O Soloist fechou (código {code}). Confira a chave; o Cyder tenta de novo em instantes.", "Soloist closed (code {code}). Check the key; Cyder tries again in a moment.")));
                 15
             }
             Err(e) => {
                 log::error!("soloist: {e}");
-                let _ = tx.send(Status::Failed(format!("O Soloist não abriu: {e}")));
+                let _ = tx.send(Status::Failed(tr!("O Soloist não abriu: {e}", "Soloist didn't open: {e}")));
                 15
             }
         };
@@ -136,7 +137,7 @@ async fn download(http: &reqwest::Client, tx: &UnboundedSender<Status>) -> Resul
     if age.is_some_and(|a| a < REFRESH_AFTER) {
         return Ok(false);
     }
-    let _ = tx.send(Status::Starting("Baixando o Soloist do Spotify…".into()));
+    let _ = tx.send(Status::Starting(t("Baixando o Soloist do Spotify…").into()));
     let bytes = http.get(DOWNLOAD).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?.bytes().await.map_err(|e| e.to_string())?;
     let dir = dir();
     let zip = dir.join("soloist.zip");

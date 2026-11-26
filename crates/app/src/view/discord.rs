@@ -135,7 +135,7 @@ impl Cyder {
                 "details": t.name.chars().take(128).collect::<String>(),
                 "state": t.artist.chars().take(128).collect::<String>(),
                 "timestamps": { "start": now.start * 1000, "end": (now.start + t.duration_ms as u64 / 1000) * 1000 },
-                "buttons": [{ "label": "Ouvir no Spotify", "url": link }],
+                "buttons": [{ "label": cyder_core::i18n::t("Ouvir no Spotify"), "url": link }],
             });
             if let Some(cover) = &t.cover_large {
                 a["assets"] = json!({ "large_image": cover, "large_text": t.album.chars().take(128).collect::<String>() });

@@ -1,5 +1,6 @@
 //! Músicas curtidas: cabeçalho como o das playlists, busca dentro da lista, ordem e modo de ver
 //! (como no Spotify) e o resto das curtidas vindo aos poucos enquanto rola.
+use cyder_core::{i18n::t, tr};
 use cyder_core::{Cmd, Track};
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, ListAlignment, ListState, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
@@ -29,10 +30,10 @@ impl LikedSort {
 
     pub(in crate::view) fn label(self) -> &'static str {
         match self {
-            LikedSort::Added => "Adicionadas recentemente",
-            LikedSort::Title => "Título",
-            LikedSort::Artist => "Artista",
-            LikedSort::Album => "Álbum",
+            LikedSort::Added => t("Adicionadas recentemente"),
+            LikedSort::Title => t("Título"),
+            LikedSort::Artist => t("Artista"),
+            LikedSort::Album => t("Álbum"),
         }
     }
 }
@@ -119,7 +120,8 @@ impl Cyder {
         let body = list(state, cx.processor(move |this, i: usize, _window, cx| {
             if i == 0 {
                 let compact = this.liked_order.compact;
-                let columns = super::column_header(if compact { &["Artista", "Álbum"] } else { &["Álbum"] }, !compact);
+                let names = if compact { vec![t("Artista"), t("Álbum")] } else { vec![t("Álbum")] };
+                let columns = super::column_header(&names, !compact);
                 // w_full: sem isto o item da lista encolhe para o tamanho do conteúdo e as colunas ficam espremidas.
                 return div().w_full().flex().flex_col().child(this.liked_header(focused, cx)).child(columns).into_any_element();
             }
@@ -131,9 +133,9 @@ impl Cyder {
             }
             if rows == 0 {
                 let (title, detail) = if searching {
-                    ("Nenhuma música curtida com isso.", "Confira a grafia ou busque por outro nome, artista ou álbum.")
+                    (t("Nenhuma música curtida com isso."), t("Confira a grafia ou busque por outro nome, artista ou álbum."))
                 } else {
-                    ("Você ainda não curtiu nenhuma música.", "Toque no coração de uma música para ela aparecer aqui.")
+                    (t("Você ainda não curtiu nenhuma música."), t("Toque no coração de uma música para ela aparecer aqui."))
                 };
                 return div().px(px(12.)).child(Self::empty_state(title, detail, None)).into_any_element();
             }
@@ -153,9 +155,9 @@ impl Cyder {
     fn liked_header(&mut self, search_focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let n = self.liked.len();
         let count = match (n, self.liked_has_more) {
-            (1, false) => "1 música".to_string(),
-            (n, false) => format!("{n} músicas"),
-            (n, true) => format!("{n}+ músicas"),
+            (1, false) => t("1 música").to_string(),
+            (n, false) => tr!("{n} músicas", "{n} songs"),
+            (n, true) => tr!("{n}+ músicas", "{n}+ songs"),
         };
         let art = div()
             .size(px(240.))
@@ -168,7 +170,7 @@ impl Cyder {
             .justify_center()
             // Branco nos dois temas: no claro o coração virava preto sobre o gradiente.
             .child(icon("heart-filled", 84., 0xffffffff));
-        let (name, image) = self.profile.clone().unwrap_or_else(|| ("Você".into(), None));
+        let (name, image) = self.profile.clone().unwrap_or_else(|| (t("Você").into(), None));
         let avatar = match image.and_then(|u| self.thumbs_small.get(&u).cloned()) {
             Some(p) => img(p).size(px(26.)).flex_none().rounded_full().object_fit(ObjectFit::Cover).into_any_element(),
             None => div().size(px(26.)).flex_none().rounded_full().bg(rgba(theme::wash(0x1f))).flex().items_center().justify_center()
@@ -196,7 +198,7 @@ impl Cyder {
         let here = self.is_current(None);
         let pause = here && self.playing;
         let empty = self.liked_view.is_empty();
-        let play = pill("liked-play", if pause { "Pausar" } else { "Tocar" }, if pause { "pause" } else { "play" })
+        let play = pill("liked-play", if pause { t("Pausar") } else { t("Tocar") }, if pause { "pause" } else { "play" })
             .when(empty && !here, |d| d.opacity(0.4))
             .on_click(cx.listener(move |t, _, _, cx| {
                 if here {
@@ -219,7 +221,7 @@ impl Cyder {
             .child(
                 div().flex_1().min_w_0().flex().flex_col().gap_2()
                     .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("PLAYLIST"))
-                    .child(div().text_size(px(40.)).line_height(px(46.)).font_weight(FontWeight::EXTRA_BOLD).child("Músicas curtidas"))
+                    .child(div().text_size(px(40.)).line_height(px(46.)).font_weight(FontWeight::EXTRA_BOLD).child(t("Músicas curtidas")))
                     .child(div().flex().items_center().gap_2().child(avatar).child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(name)))
                     .child(div().flex().child(chip))
                     .child(div().mt_3().flex().items_center().gap_3()
@@ -242,7 +244,7 @@ impl Cyder {
                 .items_center()
                 .justify_center()
                 .hover(|s| s.bg(rgba(theme::wash(0x1a))))
-                .tip("Buscar nas músicas curtidas")
+                .tip(t("Buscar nas músicas curtidas"))
                 .on_click(cx.listener(|t, _, window, cx| {
                     t.liked_search_open = true;
                     window.focus(&t.liked_search_focus, cx);
@@ -253,15 +255,15 @@ impl Cyder {
         }
         let caret = || div().flex_none().w(px(1.5)).h(px(16.)).bg(rgba(theme::ink_1()));
         let text = if self.liked_query.is_empty() {
-            div().flex_1().min_w_0().flex().items_center().when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("Buscar nas curtidas"))
+            div().flex_1().min_w_0().flex().items_center().when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(t("Buscar nas curtidas")))
         } else {
-            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.field_text(self.liked_query.clone(), focused)).when(focused, |d| d.child(caret()))
+            div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap().child(self.field_text(self.liked_query.clone(), focused, caret()))
         };
         div()
             .id("liked-search-field")
             .key_context("TextField")
             .track_focus(&self.liked_search_focus)
-            .aria_label("Buscar nas músicas curtidas")
+            .aria_label(t("Buscar nas músicas curtidas"))
             .w(px(240.))
             .h(px(36.))
             .pl_3()
@@ -275,7 +277,7 @@ impl Cyder {
             .border_color(rgba(if focused { theme::ink_3() } else { theme::wash(0x1f) }))
             .text_sm()
             .cursor_text()
-            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.liked_search_focus, cx); cx.notify(); }))
+            .on_click(cx.listener(|t, e: &gpui::ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.liked_search_focus, cx); cx.notify(); }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.liked_search_key(e, window, cx)))
             .child(icon("search", 15., theme::ink_3()))
             .child(text)
@@ -288,7 +290,7 @@ impl Cyder {
                     .items_center()
                     .justify_center()
                     .hover(|s| s.bg(rgba(theme::wash(0x1a))))
-                    .tip("Fechar a busca")
+                    .tip(t("Fechar a busca"))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|t, _, window, cx| { t.close_liked_search(window, cx); cx.notify(); }))
                     .child(icon("x", 14., theme::ink_2())),
@@ -308,7 +310,7 @@ impl Cyder {
         match k.key.as_str() {
             "escape" => self.close_liked_search(window, cx),
             "enter" => {}
-            _ if crate::view::type_into(&mut self.liked_query, k, &mut self.text_selected, cx) => self.liked_changed(),
+            _ if crate::view::type_into(&mut self.liked_query, k, &mut self.text_selected, &mut self.text_back, cx) => self.liked_changed(),
             _ => return,
         }
         cx.stop_propagation();
@@ -330,7 +332,7 @@ impl Cyder {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgba(theme::ink_2()))
             .hover(|s| s.bg(rgba(theme::wash(0x1a))).text_color(rgba(theme::ink_1())))
-            .aria_label(SharedString::from(format!("Ordem: {}. Mudar ordem e modo de ver", o.sort.label())))
+            .aria_label(SharedString::from(tr!("Ordem: {}. Mudar ordem e modo de ver", "Order: {}. Change order and view", o.sort.label())))
             .on_click(cx.listener(|t, e: &ClickEvent, _, cx| { t.open_menu(MenuTarget::LikedSort, e.position()); cx.notify(); }))
             .child(o.sort.label())
             .child(icon(if o.compact { "menu" } else { "list" }, 16., theme::ink_2()))
@@ -341,8 +343,8 @@ impl Cyder {
         let base = div().px(px(12.)).py_3().text_sm().text_color(rgba(theme::ink_3()));
         if let Some(e) = self.liked_error.clone() {
             return base.flex().items_center().gap_3()
-                .child(div().flex_1().min_w_0().child(format!("Não deu para carregar mais músicas. {e}")))
-                .child(Self::secondary_button("liked-retry", "Tentar de novo").on_click(cx.listener(|t, _, _, cx| {
+                .child(div().flex_1().min_w_0().child(tr!("Não deu para carregar mais músicas. {e}", "Couldn't load more songs. {e}")))
+                .child(Self::secondary_button("liked-retry", t("Tentar de novo")).on_click(cx.listener(|t, _, _, cx| {
                     t.liked_error = None;
                     t.load_more_liked();
                     cx.notify();
@@ -350,7 +352,7 @@ impl Cyder {
                 .into_any_element();
         }
         if self.liked_loading {
-            return base.child("Carregando mais músicas…").into_any_element();
+            return base.child(t("Carregando mais músicas…")).into_any_element();
         }
         div().into_any_element()
     }
@@ -385,7 +387,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0x1c))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
-            .aria_label(SharedString::from(format!("Tocar {} – {}", t.name, t.artist)))
+            .aria_label(SharedString::from(tr!("Tocar {} – {}", "Play {} – {}", t.name, t.artist)))
             .on_mouse_down(MouseButton::Right, cx.listener(move |t, e: &MouseDownEvent, _, cx| { t.open_menu(MenuTarget::Track(menu_track.clone()), e.position); cx.notify(); }))
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 if !this.pick(e, i, |t| uris_of(&t.liked_view)) {

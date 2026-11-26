@@ -1,5 +1,6 @@
 //! Links do Spotify: `spotify:album:ID` (do protocolo, pela linha de comando ou de outra abertura do Cyder) e
 //! `https://open.spotify.com/album/ID` (colado com Ctrl+V ou solto na janela) abrem a tela, e a faixa toca.
+use cyder_core::i18n::t;
 use cyder_core::{Card, Cmd, Kind};
 use gpui::Context;
 
@@ -60,7 +61,7 @@ impl Cyder {
         self.link_play = None;
         match found {
             Some(i) => self.play_from(&TrackSource::Page(id), i),
-            None => self.notify("A faixa do link não está nesta página."),
+            None => self.notify(t("A faixa do link não está nesta página.")),
         }
     }
 
@@ -68,7 +69,7 @@ impl Cyder {
     pub(super) fn paste_link(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else { return };
         if !text.trim().is_empty() && !self.open_link(&text) {
-            self.notify("Para abrir aqui, cole um link do Spotify (open.spotify.com).");
+            self.notify(t("Para abrir aqui, cole um link do Spotify (open.spotify.com)."));
         }
     }
 }

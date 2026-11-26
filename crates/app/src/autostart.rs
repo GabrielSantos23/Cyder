@@ -1,5 +1,6 @@
 //! "Abrir com o Windows": um valor em HKCU\…\Run, que o Windows lê ao entrar na conta. Só desta conta,
 //! sem pedir permissão de administrador. Abre com `--minimized`: direto na bandeja, sem janela na frente.
+use cyder_core::tr;
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW};
 
 /// Argumento que a entrada do Windows passa; o main esconde a janela na bandeja ao ver ele.
@@ -26,5 +27,5 @@ pub fn set(on: bool) -> Result<(), String> {
         // Já não existia: é o que queríamos.
         if status == windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND { 0 } else { status }
     };
-    if status == 0 { Ok(()) } else { Err(format!("o Windows recusou (código {status})")) }
+    if status == 0 { Ok(()) } else { Err(tr!("o Windows recusou (código {status})", "Windows refused (code {status})")) }
 }

@@ -15,6 +15,7 @@ pub mod cache;
 pub mod config;
 pub mod engine;
 pub mod history;
+pub mod i18n;
 pub mod images;
 pub mod internal;
 pub mod lastfm;

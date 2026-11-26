@@ -1,4 +1,5 @@
 //! Estatísticas: um "Wrapped" do que tocou pelo Cyder neste computador, por mês, ano ou desde sempre.
+use cyder_core::{i18n::t, tr};
 use cyder_core::{Card, Cmd, Kind, stats::{Range, Ranked}};
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, ParentElement, Styled, div, img, prelude::*, px, relative, rgba};
 
@@ -32,7 +33,7 @@ impl Cyder {
             self.stats_loading = true;
             self.send(Cmd::Stats { range: self.stats_range, offset_secs: local_offset_secs() });
         }
-        let ranges = [(Range::Month, "Este mês"), (Range::Year, "Este ano"), (Range::All, "Desde sempre")];
+        let ranges = [(Range::Month, t("Este mês")), (Range::Year, t("Este ano")), (Range::All, t("Desde sempre"))];
         let chips: Vec<AnyElement> = ranges.into_iter().enumerate().map(|(i, (range, label))| {
             let on = self.stats_range == range;
             Self::focusable(("stats-range", i))
@@ -59,15 +60,15 @@ impl Cyder {
         }).collect();
         let header = div().pb_6().flex().flex_col().gap_4()
             .child(div().flex().flex_col().gap_0p5()
-                .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child("Estatísticas"))
-                .child(div().text_sm().text_color(rgba(theme::ink_3())).child("O que você ouviu pelo Cyder neste computador.")))
+                .child(div().text_size(px(28.)).font_weight(FontWeight::EXTRA_BOLD).child(t("Estatísticas")))
+                .child(div().text_sm().text_color(rgba(theme::ink_3())).child(t("O que você ouviu pelo Cyder neste computador."))))
             .child(div().flex().gap_2().children(chips));
         let body = match self.stats.clone() {
-            None => div().pt_4().text_color(rgba(theme::ink_3())).child("Calculando…").into_any_element(),
+            None => div().pt_4().text_color(rgba(theme::ink_3())).child(t("Calculando…")).into_any_element(),
             Some(s) if s.plays == 0 => Self::empty_state(
-                if self.stats_range == Range::All { "Ainda não há nada aqui." } else { "Nada ouvido neste período ainda." },
-                "Cada música ouvida por mais de 30 segundos no Cyder entra aqui.",
-                Some(Self::primary_button("stats-home", "Escolher o que ouvir").on_click(cx.listener(|t, _, _, cx| {
+                if self.stats_range == Range::All { t("Ainda não há nada aqui.") } else { t("Nada ouvido neste período ainda.") },
+                t("Cada música ouvida por mais de 30 segundos no Cyder entra aqui."),
+                Some(Self::primary_button("stats-home", t("Escolher o que ouvir")).on_click(cx.listener(|t, _, _, cx| {
                     t.go(super::Screen::Section(super::Section::Home));
                     cx.notify();
                 }))),
@@ -80,19 +81,19 @@ impl Cyder {
                         .child(div().text_sm().text_color(rgba(theme::ink_2())).child(label))
                 };
                 let tiles = div().flex().gap_4()
-                    .child(tile(thousands(s.minutes), "minutos ouvidos"))
-                    .child(tile(thousands(s.plays as u64), "audições"))
-                    .child(tile(thousands(s.tracks as u64), "músicas diferentes"))
+                    .child(tile(thousands(s.minutes), t("minutos ouvidos")))
+                    .child(tile(thousands(s.plays as u64), t("audições")))
+                    .child(tile(thousands(s.tracks as u64), t("músicas diferentes")))
                     .child(tile(thousands(s.artists as u64), "artistas"));
                 let wide = width >= 820.;
                 let lists = div().flex().when(!wide, |d| d.flex_col()).gap_8()
-                    .child(self.ranked_list("Artistas mais ouvidos", &s.top_artists, true, cx))
-                    .child(self.ranked_list("Músicas mais ouvidas", &s.top_tracks, false, cx));
+                    .child(self.ranked_list(t("Artistas mais ouvidos"), &s.top_artists, true, cx))
+                    .child(self.ranked_list(t("Músicas mais ouvidas"), &s.top_tracks, false, cx));
                 let fact = s.top_hour.map(|h| {
-                    let when = match h { 5..=11 => "de manhã", 12..=17 => "à tarde", 18..=23 => "à noite", _ => "de madrugada" };
+                    let when = match h { 5..=11 => t("de manhã"), 12..=17 => t("à tarde"), 18..=23 => t("à noite"), _ => t("de madrugada") };
                     div().flex().items_center().gap_3().px_5().py_4().rounded(px(16.)).bg(rgba(theme::wash(0x0a))).border_1().border_color(rgba(theme::wash(0x12)))
                         .child(icon("clock", 18., theme::ink_2()))
-                        .child(div().text_sm().child(format!("Você ouve mais {when}, por volta das {h}h.")))
+                        .child(div().text_sm().child(tr!("Você ouve mais {when}, por volta das {h}h.", "You listen most {when}, around {h}:00.")))
                 });
                 div().flex().flex_col().gap_8()
                     .child(tiles)
@@ -129,7 +130,7 @@ impl Cyder {
         });
         Some(
             div().flex().flex_col().gap_3()
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child(if by_month { "Minutos por mês" } else { "Minutos por dia" }))
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(if by_month { t("Minutos por mês") } else { t("Minutos por dia") }))
                 .child(div().h(px(H)).flex().items_end().gap(px(if by_month { 10. } else { 4. })).children(bars))
                 .into_any_element(),
         )
@@ -143,12 +144,12 @@ impl Cyder {
                 None => div().size(px(40.)).flex_none().bg(rgba(theme::wash(0x0f))).when(artists, |d| d.rounded_full()).when(!artists, |d| d.rounded(px(6.))).into_any_element(),
             };
             let detail = if artists {
-                format!("{} · {} min", plural(r.plays, "audição", "audições"), thousands(r.minutes))
+                format!("{} · {} min", plural(r.plays, t("audição"), t("audições")), thousands(r.minutes))
             } else {
                 format!("{} · {}", r.detail, plural(r.plays, "vez", "vezes"))
             };
             // Artista com id abre a página dele.
-            let card = (artists && !r.id.is_empty()).then(|| Card { kind: Kind::Artist, id: r.id.clone(), uri: format!("spotify:artist:{}", r.id), title: r.name.clone(), subtitle: "Artista".into(), image: None });
+            let card = (artists && !r.id.is_empty()).then(|| Card { kind: Kind::Artist, id: r.id.clone(), uri: format!("spotify:artist:{}", r.id), title: r.name.clone(), subtitle: t("Artista").into(), image: None });
             Self::focusable((if artists { "stats-artist" } else { "stats-track" }, i))
                 .h(px(56.))
                 .px_2()

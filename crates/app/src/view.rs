@@ -1,4 +1,5 @@
 //! Tela principal: modo imersivo com letra sincronizada (doc 05, tela 1).
+use cyder_core::{i18n::t, tr};
 use std::{cell::Cell, collections::{HashMap, HashSet}, path::PathBuf, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant}};
 
 use cyder_core::{AppEvent, Cmd, Device, Library, Page, SearchKind, SearchResults, Shelf, Track, config, images::Art, lyrics::{Line, Lyrics, Word}, player::Repeat};
@@ -75,7 +76,7 @@ impl Help {
     /// Título, passos, aviso, botão do site e o endereço dele.
     fn content(self) -> (&'static str, &'static [&'static str], &'static str, &'static str, &'static str) {
         match self {
-            Help::Lastfm => ("Como ligar o Last.fm", &[
+            Help::Lastfm => (t("Como ligar o Last.fm"), &[
                 "Entre na sua conta do Last.fm no navegador. Se não tiver uma, crie; é de graça.",
                 "Clique em Abrir o Last.fm, abaixo, para chegar à página de criar uma chave de API.",
                 "Em Application name, escreva Cyder. A descrição pode ser qualquer uma.",
@@ -83,23 +84,23 @@ impl Help {
                 "Envie. A página mostra a API key e o Shared secret; deixe-a aberta.",
                 "Aqui no Cyder, clique em Ligar, cole a API key e depois o Shared secret.",
                 "O navegador abre o Last.fm pedindo acesso: clique em Yes, allow access. Pronto, o que tocar aqui entra no seu histórico.",
-            ], "Se você já ligou o Spotify ao Last.fm, cada música pode entrar duas vezes no histórico. Desligue o Spotify em Configurações do Last.fm › Aplicativos e use só o Cyder.",
-            "Abrir o Last.fm", "https://www.last.fm/api/account/create"),
-            Help::Discord => ("Como ligar o Discord", &[
+            ], t("Se você já ligou o Spotify ao Last.fm, cada música pode entrar duas vezes no histórico. Desligue o Spotify em Configurações do Last.fm › Aplicativos e use só o Cyder."),
+            t("Abrir o Last.fm"), "https://www.last.fm/api/account/create"),
+            Help::Discord => (t("Como ligar o Discord"), &[
                 "Clique em Abrir o portal, abaixo, e entre com a sua conta do Discord.",
                 "Clique em New Application e dê o nome que deve aparecer no seu perfil. Com Cyder, aparece Ouvindo Cyder.",
                 "Aceite os termos e clique em Create.",
                 "Na página General Information, copie o Application ID.",
                 "Aqui no Cyder, clique em Configurar e cole o ID.",
                 "Deixe o Discord aberto neste computador. Se nada aparecer, ligue Compartilhar a sua atividade em Configurações do Discord › Privacidade de atividade.",
-            ], "Se o Spotify já está conectado ao seu Discord, a música aparece duas vezes no perfil. Desconecte o Spotify em Configurações do Discord › Conexões e use só o Cyder.",
-            "Abrir o portal", "https://discord.com/developers/applications"),
-            Help::Soloist => ("O Spotify recusou o áudio desta conta", &[
+            ], t("Se o Spotify já está conectado ao seu Discord, a música aparece duas vezes no perfil. Desconecte o Spotify em Configurações do Discord › Conexões e use só o Cyder."),
+            t("Abrir o portal"), "https://discord.com/developers/applications"),
+            Help::Soloist => (t("O Spotify recusou o áudio desta conta"), &[
                 "Em Gerar chave, crie a chave do Soloist com a sua conta Premium.",
                 "Clique em Colar chave e cole.",
                 "No app do Spotify, escolha “Cyder (Soloist)” nos aparelhos. Só na primeira vez.",
-            ], "O Soloist é o player oficial do Spotify; o Cyder passa a tocar por ele.",
-            "Gerar chave", cyder_core::soloist::KEY_PAGE),
+            ], t("O Soloist é o player oficial do Spotify; o Cyder passa a tocar por ele."),
+            t("Gerar chave"), cyder_core::soloist::KEY_PAGE),
         }
     }
 }
@@ -122,13 +123,13 @@ impl Ask {
     /// Título, texto de ajuda, dica do campo, botão e tamanho máximo.
     fn labels(&self) -> (&'static str, Option<&'static str>, &'static str, &'static str, usize) {
         match self {
-            Ask::Playlist(None) => ("Criar playlist", Some("Dê um nome. Ela aparece na sua biblioteca e no Spotify, e dá para renomear depois."), "Nome da playlist", "Criar", 100),
-            Ask::Playlist(Some(_)) => ("Renomear playlist", None, "Nome da playlist", "Salvar", 100),
-            Ask::LastfmKey => ("Ligar o Last.fm", Some("Crie um app de API no Last.fm (é de graça) e cole aqui a chave dele. Depois vem o segredo."), "API key", "Continuar", 64),
-            Ask::LastfmSecret(_) => ("Ligar o Last.fm", Some("Agora o segredo compartilhado do mesmo app. Ao ligar, o navegador abre para você autorizar o Cyder."), "Shared secret", "Ligar", 64),
-            Ask::ListenCode => ("Ouvir junto", Some("Digite o código que a pessoa recebeu ao convidar. O Cyder toca o mesmo que ela, na mesma hora, cada um pela própria conta."), "Código", "Entrar", 16),
-            Ask::SoloistKey => ("Ligar o Soloist", Some("Gere a chave no painel do Spotify (precisa de Premium) e cole aqui. Ela fica só neste computador."), "Chave do Soloist", "Ligar", 200),
-            Ask::DiscordApp => ("Discord", Some("Crie um aplicativo no portal de desenvolvedores do Discord com o nome que deve aparecer no seu perfil (por exemplo, Cyder) e cole aqui o Application ID dele."), "Application ID", "Salvar", 32),
+            Ask::Playlist(None) => (t("Criar playlist"), Some(t("Dê um nome. Ela aparece na sua biblioteca e no Spotify, e dá para renomear depois.")), t("Nome da playlist"), t("Criar"), 100),
+            Ask::Playlist(Some(_)) => (t("Renomear playlist"), None, t("Nome da playlist"), t("Salvar"), 100),
+            Ask::LastfmKey => (t("Ligar o Last.fm"), Some(t("Crie um app de API no Last.fm (é de graça) e cole aqui a chave dele. Depois vem o segredo.")), "API key", t("Continuar"), 64),
+            Ask::LastfmSecret(_) => (t("Ligar o Last.fm"), Some(t("Agora o segredo compartilhado do mesmo app. Ao ligar, o navegador abre para você autorizar o Cyder.")), "Shared secret", t("Ligar"), 64),
+            Ask::ListenCode => (t("Ouvir junto"), Some(t("Digite o código que a pessoa recebeu ao convidar. O Cyder toca o mesmo que ela, na mesma hora, cada um pela própria conta.")), t("Código"), t("Entrar"), 16),
+            Ask::SoloistKey => (t("Ligar o Soloist"), Some(t("Gere a chave no painel do Spotify (precisa de Premium) e cole aqui. Ela fica só neste computador.")), t("Chave do Soloist"), t("Ligar"), 200),
+            Ask::DiscordApp => ("Discord", Some(t("Crie um aplicativo no portal de desenvolvedores do Discord com o nome que deve aparecer no seu perfil (por exemplo, Cyder) e cole aqui o Application ID dele.")), "Application ID", t("Salvar"), 32),
         }
     }
 }
@@ -551,6 +552,8 @@ pub struct Cyder {
     client_id_error: Option<String>,
     /// O texto do campo com foco está todo selecionado (Ctrl+A ou duplo clique): digitar substitui, apagar limpa.
     text_selected: bool,
+    /// Onde está o cursor do campo focado, em letras a partir do fim (0: no fim, o padrão ao entrar num campo).
+    text_back: usize,
     client_id_focus: FocusHandle,
     /// Pede foco no campo no próximo render (o foco precisa da janela).
     focus_client_id: bool,
@@ -699,15 +702,15 @@ pub(crate) fn friendly_error(raw: &str) -> (&'static str, &'static str) {
     let e = raw.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
     if has(&["429", "rate limit", "too many"]) {
-        ("timer", "O Spotify limitou os pedidos por um tempo. Espere um pouco e tente de novo.")
+        ("timer", t("O Spotify limitou os pedidos por um tempo. Espere um pouco e tente de novo."))
     } else if has(&["401", "403", "unauthorized", "forbidden", "invalid_grant", "token"]) {
-        ("log-in", "O Spotify recusou o acesso. Se continuar, saia da conta e entre de novo.")
+        ("log-in", t("O Spotify recusou o acesso. Se continuar, saia da conta e entre de novo."))
     } else if has(&["404", "not found", "non existing"]) {
-        ("ban", "Isso não está mais disponível no Spotify.")
+        ("ban", t("Isso não está mais disponível no Spotify."))
     } else if has(&["servidor do spotify", "connect", "connection", "sending request", "dns", "timed out", "timeout", "unavailable", "network", "os error", "reset", "refused"]) {
-        ("circle-x", "Não foi possível falar com o Spotify. Confira a sua internet e tente de novo.")
+        ("circle-x", t("Não foi possível falar com o Spotify. Confira a sua internet e tente de novo."))
     } else {
-        ("circle-x", "O Spotify não respondeu como esperado. Tente de novo em instantes.")
+        ("circle-x", t("O Spotify não respondeu como esperado. Tente de novo em instantes."))
     }
 }
 
@@ -899,7 +902,7 @@ impl Cyder {
                     }
                     if s.restart_due.is_some_and(|t| t.elapsed() >= library::settings::RESTART_AFTER) {
                         s.restart_due = None;
-                        s.playback_note = Some("Aplicando…");
+                        s.playback_note = Some(t("Aplicando…"));
                         s.send(Cmd::RestartPlayer);
                         cx.notify();
                     }
@@ -917,7 +920,7 @@ impl Cyder {
         Self::watch_canvas(cx);
         Self {
             cmds,
-            phase: Phase::Starting("Iniciando…".into()),
+            phase: Phase::Starting(t("Iniciando…").into()),
             tracks: Vec::new(),
             current: 0,
             liked: Vec::new(),
@@ -1040,7 +1043,7 @@ impl Cyder {
             media: None,
             media_shown: media::Shown::default(),
             devices: None,
-            queue_label: "Músicas curtidas".into(),
+            queue_label: t("Músicas curtidas").into(),
             queue_context: None,
             scrolls: HashMap::new(),
             immersive: false,
@@ -1074,6 +1077,7 @@ impl Cyder {
             client_id: String::new(),
             client_id_error: None,
             text_selected: false,
+            text_back: 0,
             client_id_focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focus_client_id: false,
             uri_copied: false,
@@ -1164,9 +1168,9 @@ impl Cyder {
                 self.home = Some(shelves);
             }
             // Com uma versão já na tela, só avisa; sem nenhuma, a tela troca o esqueleto pelo erro.
-            AppEvent::LibraryFailed(e) if self.library.is_some() => self.notify(format!("Não deu para atualizar a biblioteca: {e}")),
+            AppEvent::LibraryFailed(e) if self.library.is_some() => self.notify(tr!("Não deu para atualizar a biblioteca: {e}", "Couldn't update the library: {e}")),
             AppEvent::LibraryFailed(e) => self.library_error = Some(e),
-            AppEvent::HomeFailed(e) if self.home.is_some() => self.notify(format!("Não deu para atualizar a tela inicial: {e}")),
+            AppEvent::HomeFailed(e) if self.home.is_some() => self.notify(tr!("Não deu para atualizar a tela inicial: {e}", "Couldn't update the home screen: {e}")),
             AppEvent::HomeFailed(e) => self.home_error = Some(e),
             AppEvent::Recent(recent) => self.recent = recent,
             AppEvent::Pins(pins) => self.pins = pins,
@@ -1287,7 +1291,7 @@ impl Cyder {
                 // Não tenta de novo sozinho a cada rolagem; uma busca nova recomeça.
                 self.search_done.extend(self.search_more.drain());
                 if self.search.as_ref().is_some_and(|s| s.query == query) {
-                    self.notify(format!("Não deu para carregar mais resultados: {error}"));
+                    self.notify(tr!("Não deu para carregar mais resultados: {error}", "Couldn't load more results: {error}"));
                 } else {
                     self.search_error = Some(error);
                 }
@@ -1301,8 +1305,8 @@ impl Cyder {
             }
             AppEvent::Search { .. } | AppEvent::SearchFailed { .. } => {}
             AppEvent::PlayerStatus(status) => {
-                if status.is_none() && self.playback_note == Some("Aplicando…") {
-                    self.playback_note = Some("Configurações de reprodução aplicadas.");
+                if status.is_none() && self.playback_note == Some(t("Aplicando…")) {
+                    self.playback_note = Some(t("Configurações de reprodução aplicadas."));
                 }
                 self.player_status = status;
             }
@@ -1332,7 +1336,7 @@ impl Cyder {
             }
             AppEvent::Listen(mode) => {
                 if let cyder_core::engine::Listen::Hosting(code) = &mode {
-                    self.notify(format!("Ouvir junto: passe o código {} para quem vai ouvir com você.", library::pretty_code(code)));
+                    self.notify(tr!("Ouvir junto: passe o código {} para quem vai ouvir com você.", "Listen together: give the code {} to whoever will listen with you.", library::pretty_code(code)));
                 }
                 self.together = mode;
             }
@@ -1350,7 +1354,7 @@ impl Cyder {
                 self.smart = on;
                 self.smart_added = added.into_iter().collect();
                 if on {
-                    self.notify(format!("Smart shuffle: {} recomendadas entraram na fila.", self.smart_added.len()));
+                    self.notify(tr!("Smart shuffle: {} recomendadas entraram na fila.", "Smart shuffle: {} recommendations were added to the queue.", self.smart_added.len()));
                 }
             }
             AppEvent::EpisodePositions(map) => self.episode_positions = map,
@@ -1382,10 +1386,10 @@ impl Cyder {
             self.send(Cmd::SetShuffle(false));
         } else if self.shuffle {
             if self.elsewhere().is_some() {
-                return self.notify("O smart shuffle só funciona tocando neste computador.");
+                return self.notify(t("O smart shuffle só funciona tocando neste computador."));
             }
             self.smart = true;
-            self.notify("Procurando músicas parecidas…");
+            self.notify(t("Procurando músicas parecidas…"));
             self.send(Cmd::SmartShuffle(true));
         } else {
             self.shuffle = true;
@@ -1561,7 +1565,7 @@ impl Cyder {
             if self.playing {
                 self.send(Cmd::Toggle);
             }
-            self.notify("Timer: música pausada.");
+            self.notify(t("Timer: música pausada."));
         }
     }
 
@@ -1754,10 +1758,10 @@ impl Cyder {
                     .text_sm()
                     .text_color(rgba(theme::ink_2()))
                     .hover(|s| s.bg(rgba(theme::hover())).text_color(rgba(theme::ink_1())))
-                    .aria_label("Voltar à biblioteca (Esc)")
+                    .aria_label(t("Voltar à biblioteca (Esc)"))
                     .on_click(cx.listener(|t, _, _, cx| { t.set_immersive(false); cx.notify(); }))
                     .child(icon("chevron-left", 16., theme::ink_2()))
-                    .child("Biblioteca"),
+                    .child(t("Biblioteca")),
             ))
             .child(
                 div()
@@ -1770,9 +1774,9 @@ impl Cyder {
                     .window_control_area(WindowControlArea::Drag)
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Cyder")),
             )
-            .child(control("win-min", "Minimizar", "minus", WindowControlArea::Min, theme::hover()))
-            .child(control("win-max", "Maximizar", "square", WindowControlArea::Max, theme::hover()))
-            .child(control("win-close", "Fechar", "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
+            .child(control("win-min", t("Minimizar"), "minus", WindowControlArea::Min, theme::hover()))
+            .child(control("win-max", t("Maximizar"), "square", WindowControlArea::Max, theme::hover()))
+            .child(control("win-close", t("Fechar"), "x", WindowControlArea::Close, (theme::DANGER << 8) | 0xff))
     }
 
     /// Quanto a tela do imersivo está acesa (0 preto, 1 normal): sai do preto quando a faixa começa e volta a ele no
@@ -1835,13 +1839,23 @@ impl Cyder {
         self.blurred_background().into_any_element()
     }
 
+    /// A capa da "Capa no fundo": a do álbum ou playlist aberto, que tem a sua; nas outras telas, a da música.
+    fn frame_image(&self) -> Option<PathBuf> {
+        let page = match &self.screen {
+            Screen::Page(c) if c.kind != cyder_core::Kind::Artist => c.image.as_ref().and_then(|u| self.backdrops.get(u)).cloned(),
+            _ => None,
+        };
+        page.or_else(|| self.shown_art.as_ref().map(|a| a.background.clone()))
+    }
+
     /// A capa borrada e escurecida que fica no fundo de tudo.
     fn blurred_background(&self) -> Div {
-        match &self.shown_art {
-            Some(art) => div()
+        let path = if theme::cover_frame() { self.frame_image() } else { self.shown_art.as_ref().map(|a| a.background.clone()) };
+        match path {
+            Some(path) => div()
                 .absolute()
                 .inset_0()
-                .child(img(art.background.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
+                .child(img(path).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
                 .child(div().absolute().inset_0().bg(rgba(theme::shade(if theme::cover_frame() { COVER_SHADE } else { 0x73 })))),
             None => div().absolute().inset_0().bg(rgba(theme::base_fill())),
         }
@@ -1853,10 +1867,10 @@ impl Cyder {
     /// os cantinhos arredondados da moldura em volta dos botões são pintados com uma cor só, e a capa borrada
     /// quase não muda num espaço tão pequeno. Sem a "Capa no fundo", None.
     pub(super) fn frame_color(&self, vw: f32, vh: f32, x: f32, y: f32) -> Option<u32> {
-        let art = self.shown_art.as_ref().filter(|_| theme::cover_frame())?;
+        let path = self.frame_image().filter(|_| theme::cover_frame())?;
         let mut px = self.frame_px.borrow_mut();
-        if px.as_ref().is_none_or(|(p, _)| *p != art.background) {
-            *px = Some((art.background.clone(), image::open(&art.background).ok()?.to_rgb8()));
+        if px.as_ref().is_none_or(|(p, _)| *p != path) {
+            *px = Some((path.clone(), image::open(&path).ok()?.to_rgb8()));
         }
         let img = &px.as_ref()?.1;
         let (iw, ih) = (img.width() as f32, img.height() as f32);
@@ -1871,10 +1885,10 @@ impl Cyder {
     }
 
     pub(super) fn frame_art(&self, vw: f32, vh: f32, right: f32, top: f32) -> Option<gpui::Div> {
-        let art = self.shown_art.as_ref().filter(|_| theme::cover_frame())?;
+        let path = self.frame_image().filter(|_| theme::cover_frame())?;
         Some(
             div().absolute().right(px(-right)).top(px(-top)).w(px(vw)).h(px(vh))
-                .child(img(art.background.clone()).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
+                .child(img(path).absolute().inset_0().size_full().object_fit(ObjectFit::Cover))
                 .child(div().absolute().inset_0().bg(rgba(theme::shade(COVER_SHADE)))),
         )
     }
@@ -1944,9 +1958,9 @@ impl Cyder {
             .child(div().max_w(px(420.)).text_center().text_color(rgba(theme::ink_2())).child(hint))
             .child(
                 div().pt_2().flex().gap_2()
-                    .child(Self::primary_button(id, "Tentar de novo").on_click(cx.listener(move |t, _, _, cx| { retry(t, cx); cx.notify(); })))
+                    .child(Self::primary_button(id, t("Tentar de novo")).on_click(cx.listener(move |t, _, _, cx| { retry(t, cx); cx.notify(); })))
                     .when(!raw.is_empty(), |d| d.child(
-                        Self::secondary_button(SharedString::from(format!("{id}-details")), if open { "Ocultar detalhes" } else { "Detalhes" })
+                        Self::secondary_button(SharedString::from(format!("{id}-details")), if open { t("Ocultar detalhes") } else { t("Detalhes") })
                             .on_click(cx.listener(move |t, _, _, cx| {
                                 if !t.error_details.remove(id) {
                                     t.error_details.insert(id);
@@ -1965,10 +1979,10 @@ impl Cyder {
                             .child(icon("copy", 14., theme::ink_2()))
                             .on_click(cx.listener(move |t, _, _, cx| {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(raw.clone()));
-                                t.notify("Detalhes copiados.");
+                                t.notify(cyder_core::i18n::t("Detalhes copiados."));
                                 cx.notify();
                             }))
-                            .tip("Copiar os detalhes"),
+                            .tip(t("Copiar os detalhes")),
                     ),
             ))
             .into_any_element()
@@ -1980,7 +1994,7 @@ impl Cyder {
                 // O campo some; sem devolver o foco, os atalhos do player não teriam onde chegar.
                 window.focus(&self.focus, cx);
                 self.client_id_error = None;
-                self.phase = Phase::Starting("Salvando…".into());
+                self.phase = Phase::Starting(t("Salvando…").into());
                 // Vindo das configurações, o engine está rodando: refaz só o login da Web API com o app novo.
                 let from_settings = std::mem::take(&mut self.setup_return);
                 self.welcome_pending = !from_settings;
@@ -2002,7 +2016,7 @@ impl Cyder {
                 cx.notify();
                 return;
             }
-            _ if type_into(&mut self.client_id, k, &mut self.text_selected, cx) => {}
+            _ if type_into(&mut self.client_id, k, &mut self.text_selected, &mut self.text_back, cx) => {}
             _ => return,
         }
         // O Client ID não tem espaços: os que vêm ao colar saem.
@@ -2033,13 +2047,13 @@ impl Cyder {
             .border_color(rgba(border))
             .font_family("Consolas")
             .cursor_text()
-            .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.client_id_focus, cx); cx.notify(); }));
+            .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.client_id_focus, cx); cx.notify(); }));
         let field = field.on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.client_id_key(e, window, cx)));
         if self.client_id.is_empty() {
             // O cursor fica antes do exemplo, como num campo vazio de verdade.
-            field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("Cole aqui o Client ID (32 letras e números)")).into_any_element()
+            field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(t("Cole aqui o Client ID (32 letras e números)"))).into_any_element()
         } else {
-            field.child(self.field_text(self.client_id.clone(), focused)).when(focused, |d| d.child(caret())).into_any_element()
+            field.child(self.field_text(self.client_id.clone(), focused, caret())).into_any_element()
         }
     }
 
@@ -2050,13 +2064,13 @@ impl Cyder {
             Phase::Starting(status) => column
                 .child(div().text_size(px(28.)).font_weight(FontWeight::BOLD).child("Cyder"))
                 .child(div().text_color(rgba(theme::ink_2())).child(status.clone()))
-                .child(div().text_sm().text_color(rgba(theme::ink_3())).child("Na primeira vez, o navegador abre para você entrar na sua conta do Spotify."))
+                .child(div().text_sm().text_color(rgba(theme::ink_3())).child(t("Na primeira vez, o navegador abre para você entrar na sua conta do Spotify.")))
                 .into_any_element(),
             Phase::Setup => self.onboarding(window, cx),
             Phase::Failed(e) => {
                 let e = e.clone();
-                column.child(self.error_state("retry", "Não deu para conectar ao Spotify", &e, |this, _| {
-                    this.phase = Phase::Starting("Tentando de novo…".into());
+                column.child(self.error_state("retry", t("Não deu para conectar ao Spotify"), &e, |this, _| {
+                    this.phase = Phase::Starting(t("Tentando de novo…").into());
                     this.send(Cmd::Retry);
                 }, cx))
                 .into_any_element()
@@ -2101,8 +2115,8 @@ impl Cyder {
         let content = match self.lyrics.get(&self.current).cloned() {
             None => loading::lyrics(style.line_h, style.pad_x),
             Some(Lyrics::NotFound) => center(
-                "Sem letra para esta música".into(),
-                Some(format!("Nem o Apple Music, nem o Spotify, nem o LRCLIB têm a letra de “{track_name}”.").into()),
+                t("Sem letra para esta música").into(),
+                Some(tr!("Nem o Apple Music, nem o Spotify, nem o LRCLIB têm a letra de “{track_name}”.", "Neither Apple Music, Spotify nor LRCLIB have the lyrics for “{track_name}”.").into()),
             ),
             Some(Lyrics::Instrumental) => center("Instrumental".into(), None),
             // Falha de rede ou dos serviços de letra: diz isso (não "sem letra") e deixa pedir de novo.
@@ -2116,9 +2130,9 @@ impl Cyder {
                     .justify_center()
                     .gap_3()
                     .px_8()
-                    .child(div().text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child("Não deu para carregar a letra"))
-                    .child(div().text_sm().text_color(rgba(theme::ink_3())).child("Os serviços de letra não responderam agora."))
-                    .child(Self::text_button("lyrics-retry", "Tentar de novo").on_click(cx.listener(move |t, _, _, cx| {
+                    .child(div().text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(t("Não deu para carregar a letra")))
+                    .child(div().text_sm().text_color(rgba(theme::ink_3())).child(t("Os serviços de letra não responderam agora.")))
+                    .child(Self::text_button("lyrics-retry", t("Tentar de novo")).on_click(cx.listener(move |t, _, _, cx| {
                         // Volta ao esqueleto de carregamento enquanto pede.
                         t.lyrics.remove(&index);
                         t.send(Cmd::RetryLyrics(index));
@@ -2135,7 +2149,7 @@ impl Cyder {
                     .track_scroll(&handle)
                     .px(px(style.pad_x))
                     .py_10()
-                    .child(div().mb_4().text_xs().text_color(rgba(theme::ink_3())).child("Letra sem sincronia"))
+                    .child(div().mb_4().text_xs().text_color(rgba(theme::ink_3())).child(t("Letra sem sincronia")))
                     .children(lines.into_iter().map(|l| div().min_h(px(style.line_h)).text_size(px(style.title)).font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2())).child(l)));
                 scrollbar::scrolled(body, scrollbar::scrollbar("plain-lyrics-bar", handle).top(px(12.)).bottom(px(12.)).right(px(4.))).size_full().into_any_element()
             }
@@ -2379,7 +2393,7 @@ impl Cyder {
                                 .hover(|s| s.bg(rgba(theme::wash(0xd9))))
                                 .on_click(cx.listener(|t, _, _, cx| { t.lyrics_manual = None; cx.notify(); }))
                                 .child(icon("rotate-cw", 14., theme::on_ink()))
-                                .child("Sincronizar letra"),
+                                .child(t("Sincronizar letra")),
                         ),
                     ))
                     .into_any_element()
@@ -2411,7 +2425,7 @@ impl Cyder {
                         .cursor_pointer().hover(|s| s.bg(rgba(theme::hover())))
                         .child(icon("x", 14., theme::ink_2()))
                         .on_click(cx.listener(|t, _, _, cx| { t.notice = None; cx.notify(); }))
-                        .tip("Fechar o aviso"),
+                        .tip(t("Fechar o aviso")),
                 ),
         )
     }
@@ -2464,7 +2478,7 @@ impl Cyder {
                     .text_size(px(11.))
                     .text_color(rgba(theme::ink_2()))
                     .hover(|s| s.text_color(rgba(theme::ink_1())))
-                    .aria_label(if self.show_total { "Mostrar tempo restante" } else { "Mostrar duração total" })
+                    .aria_label(if self.show_total { t("Mostrar tempo restante") } else { t("Mostrar duração total") })
                     .on_click(cx.listener(|t, _, _, cx| { t.show_total = !t.show_total; cx.notify(); }))
                     .child(time),
             )
@@ -2488,7 +2502,7 @@ impl Cyder {
                         .when(with_lyrics, |d| d.child(title_link))
                         .when(!with_lyrics, |d| d.child(album.clone())))
                     .child(div().h(px(14.)).flex().items_center().min_w_0().gap(px(3.)).overflow_hidden().whitespace_nowrap().text_size(px(11.)).line_height(px(14.)).text_color(rgba(theme::ink_2()))
-                        .when(!with_lyrics && !self.queue_label.is_empty(), |d| d.child(format!("De {}", self.queue_label)))
+                        .when(!with_lyrics && !self.queue_label.is_empty(), |d| d.child(tr!("De {}", "From {}", self.queue_label)))
                         .when(with_lyrics || self.queue_label.is_empty(), |d| d.children(artist_links)))
                     .child(div().mt(px(-3.)).child(progress)),
             )
@@ -2509,7 +2523,7 @@ impl Cyder {
                     .child(icon(self.volume_icon(), 17., theme::ink_1())),
             )
             .child(
-                button("lyrics", if self.lyrics_on { "Esconder letra" } else { "Mostrar letra" }.into(), 36., self.lyrics_on)
+                button("lyrics", if self.lyrics_on { t("Esconder letra") } else { t("Mostrar letra") }.into(), 36., self.lyrics_on)
                     .on_click(cx.listener(|t, _, _, cx| { t.lyrics_on = !t.lyrics_on; cx.notify(); }))
                     .child(icon("mic-vocal", 17., theme::ink_1())),
             );
@@ -2569,23 +2583,23 @@ impl Cyder {
         let shuffle_on = self.shuffle || self.smart;
         let play_icon = if self.playing { "pause" } else { "play" };
         let repeat_label = match self.repeat {
-            Repeat::Off => "Repetir: desligado",
-            Repeat::All => "Repetir: todas",
-            Repeat::One => "Repetir: esta música",
+            Repeat::Off => t("Repetir: desligado"),
+            Repeat::All => t("Repetir: todas"),
+            Repeat::One => t("Repetir: esta música"),
         };
         vec![
             // Desligado → aleatório → smart shuffle → desligado, como no Spotify.
             button("shuffle", match (self.shuffle, self.smart) {
-                (_, true) => "Smart shuffle: ligado",
-                (true, false) => "Aleatório: ligado. Clique para o smart shuffle",
-                (false, _) => "Aleatório: desligado",
+                (_, true) => t("Smart shuffle: ligado"),
+                (true, false) => t("Aleatório: ligado. Clique para o smart shuffle"),
+                (false, _) => t("Aleatório: desligado"),
             }.into(), 36., false)
                 .on_click(cx.listener(|t, _, _, cx| { t.cycle_shuffle(); cx.notify(); }))
                 .relative()
                 .child(self.shuffle_icon(15., mode_color(false)))
                 .children(dot(shuffle_on))
                 .into_any_element(),
-            button("prev", "Anterior".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(false, cx); cx.notify(); })).child(icon("rewind", 18., theme::ink_1())).into_any_element(),
+            button("prev", t("Anterior").into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(false, cx); cx.notify(); })).child(icon("rewind", 18., theme::ink_1())).into_any_element(),
             // O botão principal num círculo cheio: se destaca dos vizinhos.
             Self::focusable("play")
                 .size(px(40.))
@@ -2595,7 +2609,7 @@ impl Cyder {
                 .rounded_full()
                 .bg(rgba(theme::ink_1()))
                 .hover(|s| s.opacity(0.88))
-                .tip(if self.playing { "Pausar" } else { "Tocar" })
+                .tip(if self.playing { t("Pausar") } else { t("Tocar") })
                 // Como os outros botões da barra: clicar não leva o foco (o Espaço seguinte não vira clique aqui).
                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.prevent_default())
                 .on_click(cx.listener(|t, _, _, cx| { t.toggle_play(); cx.notify(); }))
@@ -2612,7 +2626,7 @@ impl Cyder {
                     |el, t| el.opacity(t).layer_scale(0.25 + 0.75 * t).blur(px(4. * (1. - t))),
                 )))
                 .into_any_element(),
-            button("next", "Próxima".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(true, cx); cx.notify(); })).child(icon("fast-forward", 18., theme::ink_1())).into_any_element(),
+            button("next", t("Próxima").into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(true, cx); cx.notify(); })).child(icon("fast-forward", 18., theme::ink_1())).into_any_element(),
             button("repeat", repeat_label.into(), 36., false)
                 .on_click(cx.listener(|t, _, _, cx| { t.cycle_repeat(); cx.notify(); }))
                 .relative()
@@ -2687,45 +2701,91 @@ impl Cyder {
     }
 }
 
-/// Edição de um campo de uma linha: digitar, colar, apagar (Ctrl+Backspace apaga tudo). Ctrl+A seleciona tudo;
-/// com tudo selecionado (`selected`), digitar ou colar substitui, apagar limpa e Ctrl+C/Ctrl+X copiam.
+/// Edição de um campo de uma linha, como um campo normal: digitar e colar no cursor, setas, Home/End, Ctrl+setas
+/// pulam palavras, Backspace/Delete apagam (com Ctrl, a palavra). Ctrl+A seleciona tudo; com tudo selecionado
+/// (`selected`), digitar ou colar substitui, apagar limpa e Ctrl+C/Ctrl+X copiam. `back`: letras depois do cursor.
 /// False: a tecla não é do campo.
-fn type_into(text: &mut String, k: &gpui::Keystroke, selected: &mut bool, cx: &mut Context<Cyder>) -> bool {
+fn type_into(text: &mut String, k: &gpui::Keystroke, selected: &mut bool, back: &mut usize, cx: &mut Context<Cyder>) -> bool {
     let all = std::mem::take(selected);
+    let mut chars: Vec<char> = text.chars().collect();
+    let mut at = chars.len() - (*back).min(chars.len());
+    let word = k.modifiers.control;
     match k.key.as_str() {
-        "a" if k.modifiers.secondary() => *selected = !text.is_empty(),
+        "a" if k.modifiers.secondary() => *selected = !chars.is_empty(),
         "c" | "x" if k.modifiers.secondary() && all => {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
             if k.key == "x" {
-                text.clear();
+                chars.clear();
             } else {
                 *selected = true;
             }
         }
-        "backspace" | "delete" if all || k.modifiers.control => text.clear(),
-        "backspace" => drop(text.pop()),
+        "backspace" | "delete" if all => chars.clear(),
+        "backspace" => {
+            let from = if word { word_left(&chars, at) } else { at.saturating_sub(1) };
+            chars.drain(from..at);
+            at = from;
+        }
+        "delete" => {
+            let to = if word { word_right(&chars, at) } else { (at + 1).min(chars.len()) };
+            chars.drain(at..to);
+        }
+        "left" => at = if all { 0 } else if word { word_left(&chars, at) } else { at.saturating_sub(1) },
+        "right" => at = if all { chars.len() } else if word { word_right(&chars, at) } else { (at + 1).min(chars.len()) },
+        "home" => at = 0,
+        "end" => at = chars.len(),
         "v" if k.modifiers.secondary() => match cx.read_from_clipboard().and_then(|c| c.text()) {
             Some(t) => {
                 if all {
-                    text.clear();
+                    chars.clear();
+                    at = 0;
                 }
-                text.push_str(t.lines().next().unwrap_or_default());
+                let t: Vec<char> = t.lines().next().unwrap_or_default().chars().collect();
+                chars.splice(at..at, t.iter().copied());
+                at += t.len();
             }
             None => return false,
         },
         _ => match &k.key_char {
             Some(c) if !k.modifiers.control && !k.modifiers.platform && !c.chars().any(char::is_control) => {
                 if all {
-                    text.clear();
+                    chars.clear();
+                    at = 0;
                 }
-                text.push_str(c);
+                chars.splice(at..at, c.chars());
+                at += c.chars().count();
             }
-            // Setas, Home, End: só tiram a seleção.
-            _ => return all && matches!(k.key.as_str(), "left" | "right" | "home" | "end"),
+            _ => return false,
         },
     }
-    *text = text.chars().take(80).collect();
+    chars.truncate(80);
+    *back = chars.len() - at.min(chars.len());
+    *text = chars.into_iter().collect();
     true
+}
+
+/// Início da palavra à esquerda do cursor (pula os espaços antes dela), como o Ctrl+← dos campos do Windows.
+fn word_left(chars: &[char], at: usize) -> usize {
+    let mut i = at;
+    while i > 0 && !chars[i - 1].is_alphanumeric() {
+        i -= 1;
+    }
+    while i > 0 && chars[i - 1].is_alphanumeric() {
+        i -= 1;
+    }
+    i
+}
+
+/// Fim da palavra à direita do cursor (pula os espaços antes dela).
+fn word_right(chars: &[char], at: usize) -> usize {
+    let mut i = at;
+    while i < chars.len() && !chars[i].is_alphanumeric() {
+        i += 1;
+    }
+    while i < chars.len() && chars[i].is_alphanumeric() {
+        i += 1;
+    }
+    i
 }
 
 /// Fundo do texto selecionado nos campos.
@@ -2733,8 +2793,22 @@ const SELECTION: u32 = 0x3d7eff66;
 
 impl Cyder {
     /// O texto de um campo, com o fundo de seleção quando está todo selecionado.
-    pub(crate) fn field_text(&self, text: impl Into<SharedString>, focused: bool) -> Div {
-        div().overflow_hidden().whitespace_nowrap().rounded(px(3.)).when(focused && self.text_selected, |d| d.bg(rgba(SELECTION))).child(text.into())
+    /// Focado, o cursor (`caret`) fica no meio do texto, onde o `text_back` diz.
+    pub(crate) fn field_text(&self, text: impl Into<SharedString>, focused: bool, caret: Div) -> Div {
+        let text: SharedString = text.into();
+        let row = div().flex().items_center().overflow_hidden().whitespace_nowrap();
+        if !focused {
+            return row.child(text);
+        }
+        if self.text_selected {
+            return row.child(div().rounded(px(3.)).bg(rgba(SELECTION)).child(text)).child(caret);
+        }
+        let n = text.chars().count();
+        let split = text.char_indices().nth(n - self.text_back.min(n)).map_or(text.len(), |(i, _)| i);
+        let (before, after) = text.split_at(split);
+        row.when(!before.is_empty(), |d| d.child(before.to_string()))
+            .child(caret)
+            .when(!after.is_empty(), |d| d.child(after.to_string()))
     }
 
     /// Campo de texto de uma linha (busca da sidebar): digitar, colar, apagar; Esc fecha.
@@ -2747,7 +2821,7 @@ impl Cyder {
                 window.focus(&self.focus, cx);
             }
             "enter" => {}
-            _ if type_into(&mut self.side_query, k, &mut self.text_selected, cx) => {}
+            _ if type_into(&mut self.side_query, k, &mut self.text_selected, &mut self.text_back, cx) => {}
             _ => return,
         }
         cx.stop_propagation();
@@ -2789,13 +2863,13 @@ impl Cyder {
             Ask::Playlist(editing) => editing,
             Ask::LastfmKey => return self.ask(Ask::LastfmSecret(name), String::new()),
             Ask::LastfmSecret(key) => {
-                self.notify("Falando com o Last.fm…");
+                self.notify(t("Falando com o Last.fm…"));
                 return self.send(Cmd::LastfmConnect { key, secret: name });
             }
             Ask::ListenCode => {
                 match cyder_core::listen::normalize(&name) {
                     Some(code) => self.send(Cmd::ListenJoin(Some(code))),
-                    None => self.notify("Esse código não parece certo: são 8 letras e números."),
+                    None => self.notify(t("Esse código não parece certo: são 8 letras e números.")),
                 }
                 return;
             }
@@ -2840,7 +2914,7 @@ impl Cyder {
             }
             _ => {
                 let Some(Dialog::Input { ask, text }) = self.dialog.as_mut() else { return };
-                if !type_into(text, k, &mut self.text_selected, cx) {
+                if !type_into(text, k, &mut self.text_selected, &mut self.text_back, cx) {
                     return;
                 }
                 let max = ask.labels().4;
@@ -2864,53 +2938,53 @@ impl Cyder {
                         .child(div().text_color(rgba(theme::ink_2())).child(what))
                         .child(div().px_2().py_0p5().rounded(px(6.)).bg(rgba(theme::wash(0x1a))).text_sm().font_weight(FontWeight::SEMIBOLD).child(keys))
                 };
-                card.child(div().text_lg().font_weight(FontWeight::BOLD).child("Atalhos"))
+                card.child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Atalhos")))
                     .child(div().flex().flex_col().gap_2()
-                        .child(row("Espaço", "Tocar ou pausar"))
-                        .child(row("Ctrl + K", "Buscar"))
-                        .child(row("Ctrl + → / ←", "Próxima ou anterior"))
-                        .child(row("→ / ←", "Avançar ou voltar 5 segundos"))
+                        .child(row(t("Espaço"), t("Tocar ou pausar")))
+                        .child(row("Ctrl + K", t("Buscar")))
+                        .child(row("Ctrl + → / ←", t("Próxima ou anterior")))
+                        .child(row("→ / ←", t("Avançar ou voltar 5 segundos")))
                         .child(row("↑ / ↓", "Volume"))
-                        .child(row("L", "Letra no modo imersivo"))
-                        .child(row("Esc", "Fechar o que está aberto"))
-                        .child(row("Tab", "Passar pelos botões"))
-                        .child(row("Alt + ← / →", "Voltar ou avançar entre telas"))
-                        .child(row("Botões laterais do mouse", "Voltar ou avançar entre telas"))
-                        .child(row("Ctrl + ,", "Configurações")))
-                    .child(div().flex().justify_end().child(Self::secondary_button("dialog-close", "Fechar")
+                        .child(row("L", t("Letra no modo imersivo")))
+                        .child(row("Esc", t("Fechar o que está aberto")))
+                        .child(row("Tab", t("Passar pelos botões")))
+                        .child(row("Alt + ← / →", t("Voltar ou avançar entre telas")))
+                        .child(row(t("Botões laterais do mouse"), t("Voltar ou avançar entre telas")))
+                        .child(row("Ctrl + ,", t("Configurações"))))
+                    .child(div().flex().justify_end().child(Self::secondary_button("dialog-close", t("Fechar"))
                         .on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); }))))
             }
             Dialog::Update(version) => card
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child("Atualização pronta"))
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Atualização pronta")))
                 .child(div().text_sm().text_color(rgba(theme::ink_2()))
-                    .child(format!("A versão {version} foi instalada. Reinicie o Cyder para usar; a música para por alguns segundos e volta de onde estava.")))
+                    .child(tr!("A versão {version} foi instalada. Reinicie o Cyder para usar; a música para por alguns segundos e volta de onde estava.", "Version {version} was installed. Restart Cyder to use it; the music stops for a few seconds and resumes where it was.")))
                 .child(div().flex().justify_end().gap_2()
-                    .child(Self::secondary_button("update-later", "Depois").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
-                    .child(Self::primary_button("update-restart", "Reiniciar agora").on_click(cx.listener(|t, _, _, cx| t.restart_for_update(cx))))),
+                    .child(Self::secondary_button("update-later", t("Depois")).on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
+                    .child(Self::primary_button("update-restart", t("Reiniciar agora")).on_click(cx.listener(|t, _, _, cx| t.restart_for_update(cx))))),
             Dialog::Welcome => self.welcome_dialog(card, cx),
             Dialog::Reports => card
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child("Enviar relatórios de erro?"))
-                .child(div().text_sm().text_color(rgba(theme::ink_2())).child(REPORTS_TEXT))
-                .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Dá para mudar em Configurações › Sobre."))
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Enviar relatórios de erro?")))
+                .child(div().text_sm().text_color(rgba(theme::ink_2())).child(t(REPORTS_TEXT)))
+                .child(div().text_sm().text_color(rgba(theme::ink_2())).child(t("Dá para mudar em Configurações › Sobre.")))
                 .child(div().flex().justify_end().gap_2()
-                    .child(Self::secondary_button("reports-no", "Não enviar").on_click(cx.listener(|t, _, _, cx| {
+                    .child(Self::secondary_button("reports-no", t("Não enviar")).on_click(cx.listener(|t, _, _, cx| {
                         t.dialog = None;
                         t.change(|st| st.send_errors = Some(false), false);
                         cx.notify();
                     })))
-                    .child(Self::primary_button("reports-yes", "Enviar").on_click(cx.listener(|t, _, _, cx| {
+                    .child(Self::primary_button("reports-yes", t("Enviar")).on_click(cx.listener(|t, _, _, cx| {
                         t.dialog = None;
                         t.change(|st| st.send_errors = Some(true), false);
                         cx.notify();
                     })))),
             Dialog::Logout => card
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child("Sair da conta?"))
-                .child(div().text_sm().text_color(rgba(theme::ink_2())).child("Para voltar, você entra de novo pelo navegador. A biblioteca guardada neste computador é apagada."))
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Sair da conta?")))
+                .child(div().text_sm().text_color(rgba(theme::ink_2())).child(t("Para voltar, você entra de novo pelo navegador. A biblioteca guardada neste computador é apagada.")))
                 .child(div().flex().justify_end().gap_2()
-                    .child(Self::secondary_button("logout-cancel", "Cancelar").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
-                    .child(Self::primary_button("logout-confirm", "Sair").on_click(cx.listener(|t, _, _, cx| {
+                    .child(Self::secondary_button("logout-cancel", t("Cancelar")).on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
+                    .child(Self::primary_button("logout-confirm", t("Sair")).on_click(cx.listener(|t, _, _, cx| {
                         t.dialog = None;
-                        t.phase = Phase::Starting("Saindo da conta…".into());
+                        t.phase = Phase::Starting(cyder_core::i18n::t("Saindo da conta…").into());
                         t.library = None;
                         t.home = None;
                         t.pages.clear();
@@ -2925,15 +2999,15 @@ impl Cyder {
                         .child(div().flex_1().min_w_0().child(value))
                 };
                 card.child(div().flex().flex_col().gap_0p5()
-                        .child(div().text_lg().font_weight(FontWeight::BOLD).child("Créditos"))
+                        .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Créditos")))
                         .child(div().text_sm().text_color(rgba(theme::ink_2())).child(c.title.clone())))
                     .child(div().flex().flex_col().gap_2()
                         .children(c.roles.iter().map(|(role, names)| row(role.clone(), names.join(", "))))
-                        .when(!c.label.is_empty(), |d| d.child(row("Gravadora".into(), c.label.clone())))
-                        .child(row("Lançamento".into(), c.released.clone())))
+                        .when(!c.label.is_empty(), |d| d.child(row(t("Gravadora").into(), c.label.clone())))
+                        .child(row(t("Lançamento").into(), c.released.clone())))
                     .when(!c.copyrights.is_empty(), |d| d.child(div().flex().flex_col().gap_0p5().text_xs().text_color(rgba(theme::ink_3()))
                         .children(c.copyrights.iter().map(|t| div().child(t.clone())))))
-                    .child(div().flex().justify_end().child(Self::secondary_button("credits-close", "Fechar")
+                    .child(div().flex().justify_end().child(Self::secondary_button("credits-close", t("Fechar"))
                         .on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); }))))
             }
             Dialog::Help(help) => {
@@ -2946,16 +3020,16 @@ impl Cyder {
                 };
                 card.w(px(480.))
                     .child(div().text_lg().font_weight(FontWeight::BOLD).child(title))
-                    .child(div().flex().flex_col().gap_3().children(steps.iter().enumerate().map(|(i, t)| step(i, t))))
+                    .child(div().flex().flex_col().gap_3().children(steps.iter().enumerate().map(|(i, s)| step(i, t(s)))))
                     .child(div().flex().gap_3().p_3().rounded(px(10.)).bg(rgba(0xf5a5241f)).text_sm()
                         .child(div().pt(px(1.)).child(icon("info", 16., 0xf5a524ff)))
                         .child(div().flex_1().min_w_0().text_color(rgba(theme::ink_1())).child(warning)))
                     .child(div().flex().justify_end().gap_2()
-                        .child(Self::secondary_button("help-close", "Fechar").on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
+                        .child(Self::secondary_button("help-close", t("Fechar")).on_click(cx.listener(|t, _, _, cx| { t.dialog = None; cx.notify(); })))
                         .when(!matches!(help, Help::Soloist), |d| d.child(Self::primary_button("help-site", site).on_click(move |_, _, cx| cx.open_url(url))))
                         .when(matches!(help, Help::Soloist), |d| d
                             .child(Self::secondary_button("help-site", site).on_click(move |_, _, cx| cx.open_url(url)))
-                            .child(Self::primary_button("help-soloist-key", "Colar chave").on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::SoloistKey, String::new()); cx.notify(); })))))
+                            .child(Self::primary_button("help-soloist-key", t("Colar chave")).on_click(cx.listener(|t, _, _, cx| { t.ask(Ask::SoloistKey, String::new()); cx.notify(); })))))
             }
             Dialog::Input { ask, text } => {
                 let (title, help, placeholder, action, _) = ask.labels();
@@ -2979,18 +3053,18 @@ impl Cyder {
                     .border_1()
                     .border_color(rgba(if focused { theme::ink_2() } else { theme::wash(0x29) }))
                     .cursor_text()
-                    .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; window.focus(&t.dialog_focus, cx); cx.notify(); }))
+                    .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.text_selected = e.click_count() >= 2; t.text_back = 0; window.focus(&t.dialog_focus, cx); cx.notify(); }))
                     .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.input_key(e, window, cx)));
                 let field = if text.is_empty() {
                     field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(placeholder))
                 } else {
-                    field.child(self.field_text(shown, focused)).when(focused, |d| d.child(caret()))
+                    field.child(self.field_text(shown, focused, caret()))
                 };
                 card.child(div().text_lg().font_weight(FontWeight::BOLD).child(title))
                     .children(help.map(|h| div().text_sm().text_color(rgba(theme::ink_2())).child(h)))
                     .child(field)
                     .child(div().flex().justify_end().gap_2()
-                        .child(Self::secondary_button("name-cancel", "Cancelar").on_click(cx.listener(|t, _, window, cx| {
+                        .child(Self::secondary_button("name-cancel", t("Cancelar")).on_click(cx.listener(|t, _, window, cx| {
                             t.dialog = None;
                             window.focus(&t.focus, cx);
                             cx.notify();
@@ -3031,7 +3105,8 @@ impl Render for Cyder {
             config::Theme::System => matches!(window.appearance(), gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight),
         };
         theme::set_light(light && !self.immersive && matches!(self.phase, Phase::Ready));
-        theme::set_cover_frame(self.settings.cover_frame && self.shown_art.is_some() && !self.immersive);
+        cyder_core::i18n::set_english(self.settings.language == config::Language::English);
+        theme::set_cover_frame(self.settings.cover_frame && self.frame_image().is_some() && !self.immersive);
         theme::set_accent(self.win_accent.filter(|_| self.settings.accent == config::Accent::System));
         OVERLAY_OPEN.with(|o| o.set(self.menu.is_some() || self.dialog.is_some() || self.devices_open || self.volume_open));
         if std::mem::take(&mut self.refocus) {
@@ -3180,6 +3255,17 @@ impl Render for Cyder {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn word_jumps() {
+        let c: Vec<char> = "ana  maria-bê".chars().collect();
+        assert_eq!(super::word_left(&c, c.len()), 11);
+        assert_eq!(super::word_left(&c, 11), 5);
+        assert_eq!(super::word_left(&c, 5), 0);
+        assert_eq!(super::word_right(&c, 0), 3);
+        assert_eq!(super::word_right(&c, 3), 10);
+        assert_eq!(super::word_right(&c, c.len()), c.len());
+    }
+
     use super::*;
 
     #[test]

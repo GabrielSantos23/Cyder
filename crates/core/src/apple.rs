@@ -1,6 +1,7 @@
 //! Saída Apple Music (doc 13): o lugar do player do librespot, com os mesmos `PlayerCmd` e `PlayerOut`.
 //! O engine continua igual (fila, letra, estatísticas); quem toca é o MusicKit do WebView2 do app, que recebe
 //! `AppEvent::Apple` e devolve o estado por `Cmd::Apple`. Cada faixa do Spotify é achada na Apple pelo ISRC.
+use crate::{i18n::t, tr};
 use std::{collections::HashMap, time::{Duration, Instant}};
 
 use librespot::core::{authentication::Credentials, session::Session};
@@ -211,7 +212,7 @@ impl State {
                 if let Err(e) = &r {
                     log::warn!("apple music: procurando {name}: {e}");
                 }
-                self.send(PlayerOut::Error(format!("“{name}” não está no Apple Music.")));
+                self.send(PlayerOut::Error(tr!("“{name}” não está no Apple Music.", "“{name}” isn't on Apple Music.")));
                 self.misses += 1;
                 if self.misses < MAX_MISSES {
                     self.advance(false);
@@ -246,7 +247,7 @@ impl State {
         if since.elapsed() >= GIVE_UP_AFTER {
             self.starting = None;
             let name = self.queue.get(self.index).map_or(String::new(), |t| t.name.clone());
-            self.send(PlayerOut::Error(format!("O Apple Music não começou a tocar “{name}”.")));
+            self.send(PlayerOut::Error(tr!("O Apple Music não começou a tocar “{name}”.", "Apple Music didn't start playing “{name}”.")));
             self.set_playback(false, self.start_ms);
         } else if since.elapsed() >= RETRY_AFTER && !retried {
             log::info!("apple music: a música não andou; mandando o play de novo");
@@ -309,7 +310,7 @@ impl State {
             }
             PlayerCmd::Play { queue, index, start_ms, shuffle_start, .. } => {
                 if queue.is_empty() {
-                    return self.send(PlayerOut::Error("Esta lista não toca pelo Apple Music: o Spotify não mostra as faixas dela.".into()));
+                    return self.send(PlayerOut::Error(t("Esta lista não toca pelo Apple Music: o Spotify não mostra as faixas dela.").into()));
                 }
                 self.queue = queue;
                 let i = if shuffle_start { crate::random() % self.queue.len() } else { index };
@@ -392,8 +393,8 @@ impl State {
             self.starting = None;
             if self.song.is_some() {
                 let name = self.queue.get(self.index).map_or(String::new(), |t| t.name.clone());
-                let why = if e.contains("MEDIA_LICENSE") { "a Apple negou a licença".into() } else { e };
-                self.send(PlayerOut::Error(format!("O Apple Music não tocou “{name}”: {why}.")));
+                let why = if e.contains("MEDIA_LICENSE") { t("a Apple negou a licença").into() } else { e };
+                self.send(PlayerOut::Error(tr!("O Apple Music não tocou “{name}”: {why}.", "Apple Music didn't play “{name}”: {why}.")));
                 let at = self.position();
                 self.set_playback(false, at);
             }
@@ -416,7 +417,7 @@ impl State {
         }
         if !self.warned_preview && st.duration_ms > 0 && st.duration_ms <= 90_000 && self.queue.get(self.index).is_some_and(|t| t.duration_ms > 120_000) {
             self.warned_preview = true;
-            self.send(PlayerOut::Error("O Apple Music está tocando só a prévia. Confira a assinatura na janela do Apple Music.".into()));
+            self.send(PlayerOut::Error(t("O Apple Music está tocando só a prévia. Confira a assinatura na janela do Apple Music.").into()));
         }
         if st.playing != self.playing || st.position_ms.abs_diff(self.position()) > DRIFT_MS {
             self.set_playback(st.playing, st.position_ms);
@@ -445,7 +446,7 @@ pub async fn run(session: Session, credentials: Credentials, volume: u16, mut cm
                     let wants_sound = matches!(cmd, PlayerCmd::Play { .. } | PlayerCmd::Toggle);
                     state.cmd(cmd);
                     if wants_sound && !state.authorized && !std::mem::replace(&mut state.warned_login, true) {
-                        state.send(PlayerOut::Error("Entre com o seu Apple ID na janela do Apple Music.".into()));
+                        state.send(PlayerOut::Error(t("Entre com o seu Apple ID na janela do Apple Music.").into()));
                     }
                 }
                 // O engine trocou de saída ou saiu: a música do Apple Music para junto.

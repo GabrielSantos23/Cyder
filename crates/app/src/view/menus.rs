@@ -1,5 +1,6 @@
 //! Menus suspensos: botão direito e "⋯" em playlists, álbuns, artistas e faixas, o filtro da sidebar
 //! e o menu da conta. Os itens são montados a cada render a partir do alvo; um item com setinha abre um submenu.
+use cyder_core::{i18n::t, tr};
 use std::time::{Duration, Instant};
 
 use cyder_core::{Card, Cmd, Kind, Track};
@@ -26,6 +27,8 @@ pub enum MenuTarget {
     Account,
     /// Ordem e modo de ver das músicas curtidas.
     LikedSort,
+    /// O idioma, nas configurações.
+    Language,
 }
 
 pub struct Menu {
@@ -80,6 +83,7 @@ enum Action {
     /// Escolher a ordem já escolhida inverte a direção.
     LikedSort(LikedSort),
     LikedCompact(bool),
+    Language(cyder_core::config::Language),
     Settings,
     Shortcuts,
     Logout,
@@ -145,10 +149,10 @@ impl Cyder {
             MenuTarget::Track(track) => self.track_entries(track),
             MenuTarget::SidebarFilter => {
                 let mut out: Vec<Entry> = [
-                    (SideFilter::All, "Tudo", "layout-grid"),
+                    (SideFilter::All, t("Tudo"), "layout-grid"),
                     (SideFilter::Playlists, "Playlists", "list-music"),
-                    (SideFilter::Artists, "Artistas", "user-round"),
-                    (SideFilter::Albums, "Álbuns", "disc-3"),
+                    (SideFilter::Artists, t("Artistas"), "user-round"),
+                    (SideFilter::Albums, t("Álbuns"), "disc-3"),
                     (SideFilter::Podcasts, "Podcasts", "podcast"),
                 ]
                 .into_iter()
@@ -157,20 +161,20 @@ impl Cyder {
                 // Arrastar um item muda para a ordem personalizada; ela só aparece aqui para mostrar que está valendo.
                 let custom = !self.library_order.is_empty();
                 out.push(Entry::Sep);
-                out.push(Entry::Heading("Ordenar por"));
+                out.push(Entry::Heading(t("Ordenar por")));
                 use super::library::SideSort;
-                for (sort, label, icon) in [(SideSort::Added, "Adicionados recentemente", "clock"), (SideSort::Name, "Nome", "music"), (SideSort::Creator, "Criador", "user-round")] {
+                for (sort, label, icon) in [(SideSort::Added, t("Adicionados recentemente"), "clock"), (SideSort::Name, t("Nome"), "music"), (SideSort::Creator, t("Criador"), "user-round")] {
                     let action = if sort == SideSort::Added { Action::LibraryByAdded } else { Action::LibrarySort(sort) };
                     out.push(Entry::Item(Item { label: label.into(), icon, action: Some(action), sub: Vec::new(), checked: !custom && self.side_sort == sort, mark: "check" }));
                 }
                 if custom {
-                    out.push(Entry::Item(Item { label: "Ordem personalizada".into(), icon: "grip-vertical", action: None, sub: Vec::new(), checked: true, mark: "check" }));
+                    out.push(Entry::Item(Item { label: t("Ordem personalizada").into(), icon: "grip-vertical", action: None, sub: Vec::new(), checked: true, mark: "check" }));
                 }
                 out
             }
             MenuTarget::LikedSort => {
                 let o = self.liked_order;
-                let mut out = vec![Entry::Heading("Ordenar por")];
+                let mut out = vec![Entry::Heading(t("Ordenar por"))];
                 out.extend(LikedSort::ALL.into_iter().map(|sort| Entry::Item(Item {
                     label: sort.label().into(),
                     icon: match sort { LikedSort::Added => "clock", LikedSort::Title => "music", LikedSort::Artist => "user-round", LikedSort::Album => "disc-3" },
@@ -180,17 +184,24 @@ impl Cyder {
                     mark: if o.reversed { "arrow-up" } else { "arrow-down" },
                 })));
                 out.push(Entry::Sep);
-                out.push(Entry::Heading("Ver como"));
-                for (compact, label, icon) in [(true, "Compacta", "menu"), (false, "Lista", "list")] {
+                out.push(Entry::Heading(t("Ver como")));
+                for (compact, label, icon) in [(true, t("Compacta"), "menu"), (false, t("Lista"), "list")] {
                     out.push(Entry::Item(Item { label: label.into(), icon, action: Some(Action::LikedCompact(compact)), sub: Vec::new(), checked: o.compact == compact, mark: "check" }));
                 }
                 out
             }
+            MenuTarget::Language => {
+                use cyder_core::config::Language;
+                [(Language::Portuguese, "Português"), (Language::English, "English")]
+                    .into_iter()
+                    .map(|(l, label)| Entry::Item(Item { label: label.into(), icon: "languages", action: Some(Action::Language(l)), sub: Vec::new(), checked: self.settings.language == l, mark: "check" }))
+                    .collect()
+            }
             MenuTarget::Account => vec![
-                item("Configurações", "settings", Action::Settings),
-                item("Atalhos", "keyboard", Action::Shortcuts),
+                item(t("Configurações"), "settings", Action::Settings),
+                item(t("Atalhos"), "keyboard", Action::Shortcuts),
                 Entry::Sep,
-                item("Sair da conta", "log-out", Action::Logout),
+                item(t("Sair da conta"), "log-out", Action::Logout),
             ],
         }
     }
@@ -205,8 +216,8 @@ impl Cyder {
         };
         let link = web_link(kind, &card.id);
         let mut out = vec![
-            item(if card.kind == Kind::Artist { "Tocar o artista" } else { "Reproduzir" }, "play", Action::PlayCard { card: card.clone(), shuffle: false }),
-            item("Reproduzir em ordem aleatória", "shuffle", Action::PlayCard { card: card.clone(), shuffle: true }),
+            item(if card.kind == Kind::Artist { t("Tocar o artista") } else { t("Reproduzir") }, "play", Action::PlayCard { card: card.clone(), shuffle: false }),
+            item(t("Reproduzir em ordem aleatória"), "shuffle", Action::PlayCard { card: card.clone(), shuffle: true }),
         ];
         let saved = lib.is_some_and(|l| match card.kind {
             Kind::Album => l.albums.iter().any(|c| c.id == card.id),
@@ -215,22 +226,22 @@ impl Cyder {
             Kind::Show => l.shows.iter().any(|c| c.id == card.id),
         });
         out.push(match (card.kind, saved) {
-            (Kind::Artist, true) => item("Deixar de seguir", "circle-x", Action::Save { card: card.clone(), save: false }),
-            (Kind::Artist, false) => item("Seguir", "plus", Action::Save { card: card.clone(), save: true }),
-            (_, true) => item("Remover da Sua Biblioteca", "circle-x", Action::Save { card: card.clone(), save: false }),
-            (_, false) => item("Salvar na Sua Biblioteca", "plus", Action::Save { card: card.clone(), save: true }),
+            (Kind::Artist, true) => item(t("Deixar de seguir"), "circle-x", Action::Save { card: card.clone(), save: false }),
+            (Kind::Artist, false) => item(t("Seguir"), "plus", Action::Save { card: card.clone(), save: true }),
+            (_, true) => item(t("Remover da Sua Biblioteca"), "circle-x", Action::Save { card: card.clone(), save: false }),
+            (_, false) => item(t("Salvar na Sua Biblioteca"), "plus", Action::Save { card: card.clone(), save: true }),
         });
         out.push(Entry::Sep);
-        out.push(item("Copiar link", "copy", Action::Copy(link.clone())));
-        out.push(item("Abrir no Spotify", "external-link", Action::Open(link)));
+        out.push(item(t("Copiar link"), "copy", Action::Copy(link.clone())));
+        out.push(item(t("Abrir no Spotify"), "external-link", Action::Open(link)));
         if self.owns(card) {
             out.push(Entry::Sep);
-            out.push(item("Renomear", "pencil", Action::Rename(card.clone())));
-            out.push(item("Trocar capa", "image", Action::Cover(card.clone())));
+            out.push(item(t("Renomear"), "pencil", Action::Rename(card.clone())));
+            out.push(item(t("Trocar capa"), "image", Action::Cover(card.clone())));
         }
         if card.kind == Kind::Playlist {
             let pinned = self.pins.contains(&card.uri);
-            out.push(item(if pinned { "Desafixar do topo" } else { "Fixar no topo" }, if pinned { "pin-off" } else { "pin" }, Action::Pin { uri: card.uri.clone(), on: !pinned }));
+            out.push(item(if pinned { t("Desafixar do topo") } else { t("Fixar no topo") }, if pinned { "pin-off" } else { "pin" }, Action::Pin { uri: card.uri.clone(), on: !pinned }));
         }
         out
     }
@@ -253,7 +264,7 @@ impl Cyder {
         };
         let mut add_to: Vec<Entry> = mine.into_iter().map(|p| item(p.title.clone(), "list-music", Action::AddTo { playlist: p, uri: track.uri.clone() })).collect();
         if add_to.is_empty() {
-            add_to.push(item("Criar playlist", "plus", Action::NewPlaylist));
+            add_to.push(item(t("Criar playlist"), "plus", Action::NewPlaylist));
         }
         // Aberta num álbum ou numa playlist que tem a faixa: dá para ocultá-la ali.
         let hide = match &self.screen {
@@ -261,63 +272,63 @@ impl Cyder {
                 let key = super::hidden_key(&c.uri, &track.uri);
                 let on = !self.hidden.contains(&key);
                 let label = match (on, c.kind) {
-                    (true, Kind::Album) => "Ocultar neste álbum",
-                    (true, _) => "Ocultar nesta playlist",
-                    (false, Kind::Album) => "Mostrar neste álbum",
-                    (false, _) => "Mostrar nesta playlist",
+                    (true, Kind::Album) => t("Ocultar neste álbum"),
+                    (true, _) => t("Ocultar nesta playlist"),
+                    (false, Kind::Album) => t("Mostrar neste álbum"),
+                    (false, _) => t("Mostrar nesta playlist"),
                 };
                 Some(item(label, "eye-off", Action::Hide { key, on }))
             }
             _ => None,
         };
         let mut sleep = vec![
-            item("15 minutos", "timer", Action::Sleep(Some(SleepChoice::Minutes(15)))),
-            item("30 minutos", "timer", Action::Sleep(Some(SleepChoice::Minutes(30)))),
-            item("45 minutos", "timer", Action::Sleep(Some(SleepChoice::Minutes(45)))),
-            item("1 hora", "timer", Action::Sleep(Some(SleepChoice::Minutes(60)))),
-            item("Fim da música", "timer", Action::Sleep(Some(SleepChoice::EndOfTrack))),
+            item(t("15 minutos"), "timer", Action::Sleep(Some(SleepChoice::Minutes(15)))),
+            item(t("30 minutos"), "timer", Action::Sleep(Some(SleepChoice::Minutes(30)))),
+            item(t("45 minutos"), "timer", Action::Sleep(Some(SleepChoice::Minutes(45)))),
+            item(t("1 hora"), "timer", Action::Sleep(Some(SleepChoice::Minutes(60)))),
+            item(t("Fim da música"), "timer", Action::Sleep(Some(SleepChoice::EndOfTrack))),
         ];
         if self.sleep.is_some() {
             sleep.push(Entry::Sep);
-            sleep.push(item("Desligar o timer", "x", Action::Sleep(None)));
+            sleep.push(item(t("Desligar o timer"), "x", Action::Sleep(None)));
         }
-        let artist_card = |(id, name): &(String, String)| Card { kind: Kind::Artist, uri: format!("spotify:artist:{id}"), id: id.clone(), title: name.clone(), subtitle: "Artista".into(), image: None };
+        let artist_card = |(id, name): &(String, String)| Card { kind: Kind::Artist, uri: format!("spotify:artist:{id}"), id: id.clone(), title: name.clone(), subtitle: t("Artista").into(), image: None };
         let go_artist = match track.artists.as_slice() {
             [] => None,
-            [one] => Some(item("Ir para o artista", "user-round", Action::Go(artist_card(one)))),
-            many => Some(parent("Ir para o artista", "user-round", many.iter().map(|a| item(a.1.clone(), "user-round", Action::Go(artist_card(a)))).collect())),
+            [one] => Some(item(t("Ir para o artista"), "user-round", Action::Go(artist_card(one)))),
+            many => Some(parent(t("Ir para o artista"), "user-round", many.iter().map(|a| item(a.1.clone(), "user-round", Action::Go(artist_card(a)))).collect())),
         };
         let episode = track.uri.starts_with("spotify:episode:");
         let link = web_link(if track.uri.starts_with("spotify:episode:") { "episode" } else { "track" }, &track.id);
         let mut out = vec![
-            parent("Adicionar à playlist", "list-plus", add_to),
+            parent(t("Adicionar à playlist"), "list-plus", add_to),
             if liked {
-                item("Remover das Músicas curtidas", "heart-off", Action::Like { track: track.clone(), on: false })
+                item(t("Remover das Músicas curtidas"), "heart-off", Action::Like { track: track.clone(), on: false })
             } else {
-                item("Adicionar às Músicas curtidas", "heart", Action::Like { track: track.clone(), on: true })
+                item(t("Adicionar às Músicas curtidas"), "heart", Action::Like { track: track.clone(), on: true })
             },
-            item("Adicionar à fila", "list-end", Action::Queue(track.clone())),
+            item(t("Adicionar à fila"), "list-end", Action::Queue(track.clone())),
         ];
         if let Some(playlist) = here {
-            out.push(item("Remover desta playlist", "list-minus", Action::RemoveFrom { playlist, uri: track.uri.clone() }));
+            out.push(item(t("Remover desta playlist"), "list-minus", Action::RemoveFrom { playlist, uri: track.uri.clone() }));
         }
         out.extend(hide);
         out.push(Entry::Sep);
-        out.push(parent(if self.sleep.is_some() { "Timer (ligado)" } else { "Timer" }, "timer", sleep));
+        out.push(parent(if self.sleep.is_some() { t("Timer (ligado)") } else { "Timer" }, "timer", sleep));
         out.push(Entry::Sep);
         if !episode {
-            out.push(item("Ir para o rádio da música", "radio", Action::Radio(track.clone())));
+            out.push(item(t("Ir para o rádio da música"), "radio", Action::Radio(track.clone())));
         }
         out.extend(go_artist);
         if let Some(album) = self.album_of(track) {
-            out.push(item("Ir para o álbum", "disc-3", Action::Go(album)));
+            out.push(item(t("Ir para o álbum"), "disc-3", Action::Go(album)));
         }
         if !episode {
-            out.push(item("Ver créditos", "info", Action::Credits(track.clone())));
+            out.push(item(t("Ver créditos"), "info", Action::Credits(track.clone())));
         }
-        out.push(parent("Compartilhar", "share-2", vec![
-            item("Copiar link da música", "copy", Action::Copy(link.clone())),
-            item("Abrir no Spotify", "external-link", Action::Open(link)),
+        out.push(parent(t("Compartilhar"), "share-2", vec![
+            item(t("Copiar link da música"), "copy", Action::Copy(link.clone())),
+            item(t("Abrir no Spotify"), "external-link", Action::Open(link)),
         ]));
         out
     }
@@ -368,7 +379,7 @@ impl Cyder {
             }
             Action::Copy(link) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
-                self.notify("Link copiado.");
+                self.notify(t("Link copiado."));
             }
             Action::Open(link) => cx.open_url(&link),
             Action::Go(card) => {
@@ -385,10 +396,10 @@ impl Cyder {
                     None => None,
                 };
                 self.notify(match choice {
-                    Some(SleepChoice::Minutes(m)) if m >= 60 => "A música para em 1 hora.".to_string(),
-                    Some(SleepChoice::Minutes(m)) => format!("A música para em {m} minutos."),
-                    Some(SleepChoice::EndOfTrack) => "A música para quando esta acabar.".into(),
-                    None => "Timer desligado.".into(),
+                    Some(SleepChoice::Minutes(m)) if m >= 60 => t("A música para em 1 hora.").to_string(),
+                    Some(SleepChoice::Minutes(m)) => tr!("A música para em {m} minutos.", "Music stops in {m} minutes."),
+                    Some(SleepChoice::EndOfTrack) => t("A música para quando esta acabar.").into(),
+                    None => t("Timer desligado.").into(),
                 });
             }
             Action::LikedSort(sort) => {
@@ -398,6 +409,7 @@ impl Cyder {
                 self.liked_changed();
             }
             Action::LikedCompact(compact) => self.liked_order.compact = compact,
+            Action::Language(language) => self.change(|st| st.language = language, false),
             Action::Filter(f) => {
                 self.side_filter = f;
                 self.refocus = true;
@@ -424,7 +436,7 @@ impl Cyder {
                 self.send(Cmd::RemoveFromPlaylist { card: playlist, uri });
             }
             Action::Cover(card) => {
-                let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Escolher capa".into()) });
+                let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(t("Escolher capa").into()) });
                 cx.spawn(async move |this, cx| {
                     let Ok(Ok(Some(paths))) = picked.await else { return };
                     let Some(path) = paths.into_iter().next() else { return };
@@ -441,10 +453,10 @@ impl Cyder {
                     self.hidden.push(key);
                 }
                 cyder_core::config::save_hidden(&self.hidden);
-                self.notify(if on { "Oculta aqui: ela pula quando tocar neste lugar." } else { "Ela volta a tocar aqui." });
+                self.notify(if on { t("Oculta aqui: ela pula quando tocar neste lugar.") } else { t("Ela volta a tocar aqui.") });
             }
             Action::Radio(track) => {
-                self.notify("Abrindo o rádio…");
+                self.notify(t("Abrindo o rádio…"));
                 self.send(Cmd::Radio(track));
             }
             Action::Credits(track) => self.send(Cmd::Credits(track)),

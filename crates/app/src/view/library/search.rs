@@ -1,5 +1,6 @@
 //! Busca no Spotify: o campo no topo da sidebar e a tela de resultados. Em "Tudo", o melhor resultado ao lado
 //! das músicas e uma prateleira por tipo; com um filtro, a lista daquele tipo, que carrega mais ao rolar.
+use cyder_core::{i18n::t, tr};
 use std::time::{Duration, Instant};
 
 use cyder_core::{Card, Cmd, Kind, SearchKind, SearchResults, Shelf, config};
@@ -22,9 +23,9 @@ const START_SHELVES: usize = 10;
 
 fn label(kind: SearchKind) -> &'static str {
     match kind {
-        SearchKind::Tracks => "Músicas",
-        SearchKind::Artists => "Artistas",
-        SearchKind::Albums => "Álbuns",
+        SearchKind::Tracks => t("Músicas"),
+        SearchKind::Artists => t("Artistas"),
+        SearchKind::Albums => t("Álbuns"),
         SearchKind::Playlists => "Playlists",
         SearchKind::Shows => "Podcasts",
     }
@@ -67,15 +68,15 @@ impl Cyder {
         let caret = || div().flex_none().w(px(1.5)).h(px(14.)).bg(rgba(theme::ink_1()));
         let text = div().flex_1().min_w_0().flex().items_center().overflow_hidden().whitespace_nowrap();
         let text = if empty {
-            text.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child("Buscar"))
+            text.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(t("Buscar")))
         } else {
-            text.child(self.field_text(self.search_query.clone(), focused)).when(focused, |d| d.child(caret()))
+            text.child(self.field_text(self.search_query.clone(), focused, caret()))
         };
         div()
             .id("global-search")
             .key_context("TextField")
             .track_focus(&self.search_focus)
-            .aria_label("Buscar no Spotify")
+            .aria_label(t("Buscar no Spotify"))
             .w_full()
             .h(px(32.))
             .pl_3()
@@ -92,7 +93,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0x17))))
             // No mouse down: o campo fica na faixa de arrastar a janela, que engole o clique.
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|t, e: &gpui::MouseDownEvent, window, cx| {
-                t.text_selected = e.click_count >= 2;
+                t.text_selected = e.click_count >= 2; t.text_back = 0;
                 t.open_search(window, cx);
             }))
             .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.search_key(e, window, cx)))
@@ -107,7 +108,7 @@ impl Cyder {
                     .items_center()
                     .justify_center()
                     .hover(|s| s.bg(rgba(theme::wash(0x1f))))
-                    .tip("Limpar a busca")
+                    .tip(t("Limpar a busca"))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|t, _: &gpui::MouseDownEvent, window, cx| {
                         t.search_query.clear();
                         t.run_search();
@@ -142,7 +143,7 @@ impl Cyder {
                 self.run_search();
                 self.remember_search();
             }
-            _ if super::super::type_into(&mut self.search_query, k, &mut self.text_selected, cx) => {
+            _ if super::super::type_into(&mut self.search_query, k, &mut self.text_selected, &mut self.text_back, cx) => {
                 self.search_due = Some(Instant::now());
                 if !matches!(self.screen, Screen::Search) {
                     self.go(Screen::Search);
@@ -209,7 +210,7 @@ impl Cyder {
 
     pub(super) fn search_view(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let query = self.search_query.trim().to_string();
-        let title = if query.is_empty() { "Buscar".to_string() } else { format!("Resultados para “{query}”") };
+        let title = if query.is_empty() { t("Buscar").to_string() } else { tr!("Resultados para “{query}”", "Results for “{query}”") };
         let header = div()
             .pb_4()
             .flex()
@@ -220,8 +221,8 @@ impl Cyder {
         let body = if query.is_empty() {
             self.search_start(cx)
         } else if let Some(error) = self.search_error.clone() {
-            Self::search_message("Não deu para buscar.", error)
-                .child(Self::text_button("search-retry", "Tentar de novo").on_click(cx.listener(|t, _, _, cx| {
+            Self::search_message(t("Não deu para buscar."), error)
+                .child(Self::text_button("search-retry", t("Tentar de novo")).on_click(cx.listener(|t, _, _, cx| {
                     t.search = None;
                     t.run_search();
                     cx.notify();
@@ -231,7 +232,7 @@ impl Cyder {
             match self.search.clone() {
                 None => loading::home(SHELF_CARD),
                 Some(s) if s.is_empty() && s.query == query => {
-                    Self::search_message(format!("Nada encontrado para “{query}”"), "Confira a grafia ou tente outras palavras.".into()).into_any_element()
+                    Self::search_message(tr!("Nada encontrado para “{query}”", "Nothing found for “{query}”"), t("Confira a grafia ou tente outras palavras.").into()).into_any_element()
                 }
                 // Enquanto a busca nova não chega, o resultado anterior fica, apagado.
                 Some(s) => {
@@ -265,7 +266,7 @@ impl Cyder {
                 .when(on, |d| d.bg(rgba(theme::ink_1())).text_color(rgba(theme::on_ink())))
                 .when(!on, |d| d.bg(rgba(theme::wash(0x14))).hover(|s| s.bg(rgba(theme::wash(0x26)))))
                 .on_click(cx.listener(move |t, _, _, cx| { t.set_search_filter(filter); cx.notify(); }))
-                .child(filter.map_or("Tudo", label))
+                .child(filter.map_or(t("Tudo"), label))
                 .into_any_element()
         }).collect();
         div().flex().flex_wrap().gap_2().children(chips).into_any_element()
@@ -296,7 +297,7 @@ impl Cyder {
 
     fn recent_searches_block(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.recent_searches.is_empty() {
-            return Self::search_message("Encontre o que ouvir", "Busque músicas, artistas, álbuns, playlists e podcasts.".into()).into_any_element();
+            return Self::search_message(t("Encontre o que ouvir"), t("Busque músicas, artistas, álbuns, playlists e podcasts.").into()).into_any_element();
         }
         let chips: Vec<AnyElement> = self.recent_searches.iter().enumerate().map(|(i, q)| {
             let q = q.clone();
@@ -312,7 +313,7 @@ impl Cyder {
                 .border_1()
                 .border_color(rgba(theme::wash(0x12)))
                 .hover(|s| s.bg(rgba(theme::wash(0x1f))))
-                .aria_label(SharedString::from(format!("Buscar {q} de novo")))
+                .aria_label(SharedString::from(tr!("Buscar {q} de novo", "Search {q} again")))
                 .child(icon("clock", 13., theme::ink_3()))
                 .child(q.clone())
                 .on_click(cx.listener(move |t, _, _, cx| {
@@ -328,8 +329,8 @@ impl Cyder {
             .gap_3()
             .child(
                 div().flex().items_center().justify_between()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Buscas recentes"))
-                    .child(Self::text_button("recent-clear", "Limpar").on_click(cx.listener(|t, _, _, cx| {
+                    .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Buscas recentes")))
+                    .child(Self::text_button("recent-clear", t("Limpar")).on_click(cx.listener(|t, _, _, cx| {
                         t.recent_searches.clear();
                         config::save_recent_searches(&[]);
                         cx.notify();
@@ -350,8 +351,8 @@ impl Cyder {
         let songs_el = div().flex_1().min_w_0().flex().flex_col().gap_3()
             .child(
                 div().flex().items_center().justify_between()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Músicas"))
-                    .when(found.tracks.len() > SONGS, |d| d.child(Self::text_button("search-all-songs", "Ver todas")
+                    .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Músicas")))
+                    .when(found.tracks.len() > SONGS, |d| d.child(Self::text_button("search-all-songs", t("Ver todas"))
                         .on_click(cx.listener(|t, _, _, cx| { t.set_search_filter(Some(SearchKind::Tracks)); cx.notify(); })))),
             )
             .child(div().flex().flex_col().children(songs));
@@ -361,7 +362,7 @@ impl Cyder {
             .gap_6()
             .when(!side_by_side, |d| d.flex_col())
             .children(top.map(|el| div().when(side_by_side, |d| d.w(px(340.)).flex_none()).flex().flex_col().gap_3()
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child("Melhor resultado"))
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Melhor resultado")))
                 .child(el)))
             .when(has_songs, |d| d.child(songs_el));
         let shelves = [
@@ -418,7 +419,7 @@ impl Cyder {
             .border_1()
             .border_color(rgba(theme::wash(0x12)))
             .hover(|s| s.bg(rgba(theme::wash(0x14))))
-            .aria_label(SharedString::from(format!("Abrir {} {}", kind.to_lowercase(), card.title)))
+            .aria_label(SharedString::from(tr!("Abrir {} {}", "Open {} {}", kind.to_lowercase(), card.title)))
             .on_click(cx.listener(move |t, _, _, cx| { t.go(Screen::Page(open.clone())); cx.notify(); }))
             .child(art)
             .child(
@@ -444,8 +445,8 @@ impl Cyder {
                     .shadow_lg()
                     // Sempre à vista: tocar o melhor resultado é a ação mais comum da busca.
                     .hover(|s| s.opacity(0.9))
-                    .tip("Tocar")
-                    .aria_label(SharedString::from(format!("Tocar {}", card.title)))
+                    .tip(t("Tocar"))
+                    .aria_label(SharedString::from(tr!("Tocar {}", "Play {}", card.title)))
                     .on_click(cx.listener(move |t, _, _, cx| {
                         t.remember_search();
                         t.play_context(&play);
