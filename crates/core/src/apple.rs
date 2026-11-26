@@ -373,7 +373,7 @@ impl State {
             }
             PlayerCmd::Follow { index, position_ms, .. } if !self.playing => (self.index, self.start_ms, self.loaded) = (index, position_ms, false),
             // A ordem do aleatório é sorteada aqui, e religar não muda nada no MusicKit.
-            PlayerCmd::Follow { .. } | PlayerCmd::MoveNext { .. } | PlayerCmd::Restart => {}
+            PlayerCmd::Follow { .. } | PlayerCmd::Restart => {}
             PlayerCmd::Apple(st) => self.state(st),
         }
     }

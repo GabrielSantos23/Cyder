@@ -166,6 +166,8 @@ async fn session(key: &str, tx: &UnboundedSender<Status>) -> Result<i32, String>
     let _ = std::fs::remove_file(&port_file);
     let mut cmd = Command::new(exe());
     cmd.arg("--device-name").arg(DEVICE_NAME).arg("--api-key").arg(key).arg("--data-dir").arg(&data).arg("--cache-dir").arg(dir().join("cache"))
+        // Sem limite o cache do Soloist cresce sem parar: 1 GB, como era o do player antigo.
+        .arg("--cache-size").arg("1024")
         .arg("--ws").arg("127.0.0.1:0")
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped())
         .kill_on_drop(true);

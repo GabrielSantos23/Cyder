@@ -17,6 +17,20 @@ const KEYRING_SERVICE: &str = "cyder";
 const KEYRING_USER: &str = "web-refresh-token";
 const DONE_PAGE: &str = "<html><body style=\"font-family:sans-serif;background:#0b0b0e;color:#fff;padding:40px\">Pronto. Pode voltar para o Cyder.</body></html>";
 
+/// Apaga uma pasta e o que tem dentro, um arquivo por vez. O `remove_dir_all` do Rust no Windows recusa caminhos
+/// que passam por um ponto de nova análise (uma junção no perfil, por exemplo: erro 4395).
+fn remove_tree(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            remove_tree(&entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    std::fs::remove_dir(dir)
+}
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -26,7 +40,13 @@ fn err(e: impl std::fmt::Display) -> String {
 pub async fn audio_session(cache_dir: &Path) -> Result<(Session, Credentials), String> {
     let settings = crate::config::settings();
     // O áudio toca pelo Soloist: o cache de áudio do player antigo (até 1 GB) não é mais usado.
-    let _ = tokio::fs::remove_dir_all(cache_dir.join("audio")).await;
+    let old_audio = cache_dir.join("audio");
+    if old_audio.exists() {
+        tokio::task::spawn_blocking(move || match remove_tree(&old_audio) {
+            Ok(()) => log::info!("cache de áudio antigo apagado"),
+            Err(e) => log::warn!("cache de áudio antigo: {e}"),
+        });
+    }
     let cache = Cache::new(Some(cache_dir.join("credentials")), None, None, None).map_err(err)?;
     // Como no Spotify: quando o álbum ou a playlist acaba, segue com músicas parecidas.
     let defaults = SessionConfig::default();

@@ -157,6 +157,7 @@ const EN: &[(&str, &str)] = &[
     ("Sair", "Sign out"),
     ("Recentes", "Recent"),
     ("Recortar", "Cut"),
+    ("Suas curtidas", "Your liked songs"),
     ("Formato certo. Veio do que você copiou.", "Looks right. It came from what you copied."),
     ("Falta um passo para tocar", "One step left to play"),
     ("O Spotify toca pelo Soloist, o player oficial dele. Leva um minuto, com a sua conta Premium.", "Spotify plays through Soloist, its official player. It takes a minute, with your Premium account."),

@@ -47,8 +47,6 @@ pub enum Cmd {
     AddToQueue(Track),
     /// Arrasta uma faixa da fila de `from` para `to` (índices da fila, depois da que está tocando).
     MoveQueue { from: usize, to: usize },
-    /// Arrastar na fila do Spotify (aleatório ligado): `from_uri` vai para o lugar de `to_uri` nas próximas.
-    MoveUpNext { from_uri: String, to_uri: String },
     /// Próximo pedaço de uma playlist grande.
     LoadMore { card: Card, from: usize },
     /// Ordem da lista da sidebar arrastada à mão.
@@ -519,7 +517,8 @@ impl Ctx {
             Err(e) => return self.send(AppEvent::LibraryFailed(e)),
         };
         match internal::rootlist(&self.session).await {
-            Ok(uris) => {
+            Ok((uris, folders)) => {
+                lib.folders = folders;
                 let mut by_id: HashMap<String, Card> = lib.playlists.drain(..).map(|c| (c.id.clone(), c)).collect();
                 for (uri, at) in uris {
                     if at > 0 {
@@ -2257,14 +2256,6 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         // Com o autoplay, o Spotify já pode ter escolhido as próximas.
                         up_next(&ctx, 1500);
                         continue;
-                    }
-                    Cmd::MoveUpNext { from_uri, to_uri } => {
-                        if remote.is_some() {
-                            continue;
-                        }
-                        // A tela já mostra a ordem nova; a fila do Spotify confirma (ou desfaz, se não deu).
-                        up_next(&ctx, 800);
-                        PlayerCmd::MoveNext { from_uri, to_uri }
                     }
                     Cmd::MoveQueue { from, to } => {
                         // Só o que vem depois da atual; a lista recarrega como faixas soltas na mesma posição.

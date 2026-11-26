@@ -323,6 +323,8 @@ pub struct Cyder {
     tracks: Vec<Track>,
     current: usize,
     liked: Vec<Track>,
+    /// As curtidas do artista aberto (id, faixas), para tocar da página dele.
+    artist_liked: (String, Vec<Track>),
     library: Option<Library>,
     pages: HashMap<String, Page>,
     page_errors: HashMap<String, String>,
@@ -348,6 +350,8 @@ pub struct Cyder {
     /// URI de contexto → quando tocou por último (segundos Unix).
     recent: HashMap<String, u64>,
     pins: Vec<String>,
+    /// Pastas da sidebar abertas (ids do Spotify).
+    folders_open: HashSet<String>,
     devices_open: bool,
     /// Fotos grandes de artista: URL → arquivo.
     heroes: HashMap<String, PathBuf>,
@@ -934,6 +938,7 @@ impl Cyder {
             tracks: Vec::new(),
             current: 0,
             liked: Vec::new(),
+            artist_liked: (String::new(), Vec::new()),
             library: None,
             pages: HashMap::new(),
             page_errors: HashMap::new(),
@@ -951,6 +956,7 @@ impl Cyder {
             shelf_scrolls: HashMap::new(),
             recent: HashMap::new(),
             pins: Vec::new(),
+            folders_open: HashSet::new(),
             devices_open: false,
             heroes: HashMap::new(),
             release_filter: library::Releases::All,

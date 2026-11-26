@@ -388,6 +388,7 @@ impl WebApi {
             playlists: playlists.iter().filter_map(playlist_card).collect(),
             shows: shows.iter().filter_map(|i| show_card(&i["show"])).collect(),
             added,
+            folders: Vec::new(),
         })
     }
 

@@ -83,6 +83,17 @@ pub struct Library {
     /// Fica sem os que o Spotify não informa; caches antigos não têm nenhum.
     #[serde(default)]
     pub added: std::collections::HashMap<String, u64>,
+    /// Pastas da biblioteca do Spotify, na ordem dela. Subpastas entram na pasta de cima.
+    #[serde(default)]
+    pub folders: Vec<Folder>,
+}
+
+/// Uma pasta de playlists da biblioteca do Spotify e as URIs das playlists dentro dela.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub playlists: Vec<String>,
 }
 
 /// Lançamento de um artista seguido, para a tela Novidades. `card.subtitle` é o artista.

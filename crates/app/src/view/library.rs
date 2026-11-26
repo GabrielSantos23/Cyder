@@ -2,7 +2,7 @@
 use cyder_core::{i18n::t, tr};
 use std::ops::Range;
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{collections::{HashMap, HashSet}, path::PathBuf, time::Duration};
 
 use cyder_core::{Card, Cmd, Device, Kind, Page, SearchKind, Shelf, Track};
 use gpui::{
@@ -156,6 +156,8 @@ impl Screen {
 #[derive(Clone)]
 pub(super) enum TrackSource {
     Liked,
+    /// As curtidas de um artista (id), na página dele.
+    LikedBy(String),
     Page(String),
     /// As músicas encontradas na busca.
     Search,
@@ -182,6 +184,11 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Show => "Podcast",
     }
 }
+
+/// URI das linhas de pasta na sidebar (não são do Spotify; nunca vão para o engine).
+/// Quantas curtidas do artista aparecem na página dele.
+const ARTIST_LIKED_SHOWN: usize = 6;
+const FOLDER: &str = "folder:";
 
 impl Cyder {
     /// Histórico no tempo, como ‹ › de navegador: abrir algo novo apaga o "avançar".
@@ -268,6 +275,8 @@ impl Cyder {
     fn source_tracks(&self, source: &TrackSource) -> &[Track] {
         match source {
             TrackSource::Liked => &self.liked_view,
+            TrackSource::LikedBy(id) if self.artist_liked.0 == *id => &self.artist_liked.1,
+            TrackSource::LikedBy(_) => &[],
             TrackSource::Page(id) => self.pages.get(id).map_or(&[], |p| &p.tracks),
             TrackSource::Search => self.search.as_ref().map_or(&[], |s| &s.tracks),
         }
@@ -366,6 +375,7 @@ impl Cyder {
         }
         let (context, label) = match source {
             TrackSource::Liked => (None, t("Músicas curtidas").to_string()),
+            TrackSource::LikedBy(id) => (None, self.pages.get(id).map_or_else(|| t("Suas curtidas").to_string(), |p| tr!("Suas curtidas de {}", "Your liked songs by {}", p.card.title))),
             TrackSource::Page(id) => self.pages.get(id).map_or((None, String::new()), |p| (Some(p.card.uri.clone()), p.card.title.clone())),
             TrackSource::Search => {
                 self.remember_search();
@@ -391,7 +401,7 @@ impl Cyder {
     /// Tipo de lista com aleatório próprio; as curtidas contam como playlist. Busca e artista não têm.
     fn source_kind(&self, source: &TrackSource) -> Option<ListKind> {
         match source {
-            TrackSource::Liked => Some(ListKind::Playlists),
+            TrackSource::Liked | TrackSource::LikedBy(_) => Some(ListKind::Playlists),
             TrackSource::Page(id) => self.pages.get(id).and_then(|p| ListKind::of(&p.card.uri)),
             TrackSource::Search => None,
         }
@@ -718,7 +728,7 @@ impl Cyder {
         let items = self.sidebar_items();
         let count = items.len();
         let query = self.side_query.trim().to_lowercase();
-        let show_liked = matches!(self.side_filter, SideFilter::All | SideFilter::Playlists) && (query.is_empty() || "músicas curtidas".contains(&query));
+        let show_liked = matches!(self.side_filter, SideFilter::All | SideFilter::Playlists) && (query.is_empty() || t("Músicas curtidas").to_lowercase().contains(&query));
         let side_row = |id: (&'static str, usize), active: bool| {
             Self::focusable(id)
                 .w_full()
@@ -750,6 +760,25 @@ impl Cyder {
                 _ => None,
             };
             this.sidebar_items().into_iter().enumerate().skip(range.start).take(range.len()).map(|(i, card)| {
+                if let Some(id) = card.uri.strip_prefix(FOLDER).map(String::from) {
+                    let open = this.folders_open.contains(&id);
+                    return side_row(("side-item", i), false)
+                        .aria_expanded(open)
+                        .on_click(cx.listener(move |t, _, _, cx| {
+                            if !t.folders_open.remove(&id) {
+                                t.folders_open.insert(id.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .child(div().size(px(34.)).flex_none().rounded(px(5.)).bg(rgba(theme::wash(0x14))).flex().items_center().justify_center()
+                            .child(icon("folder", 16., theme::ink_2())))
+                        .child(div().flex_1().min_w_0().flex().flex_col()
+                            .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(card.title.clone()))
+                            .child(div().text_xs().text_color(rgba(theme::ink_3())).child(card.subtitle.clone())))
+                        .child(icon(if open { "chevron-up" } else { "chevron-down" }, 14., theme::ink_3()))
+                        .into_any_element();
+                }
+                let nested = this.in_open_folder(&card.uri);
                 let active = open_id.as_deref() == Some(card.id.as_str());
                 let pinned = this.pins.contains(&card.uri);
                 let playing_here = this.is_current(Some(&card.uri));
@@ -768,6 +797,7 @@ impl Cyder {
                 // Faixas arrastadas de qualquer lista entram nas playlists que a pessoa pode editar.
                 let takes = this.owns(&card).then(|| card.clone());
                 side_row(("side-item", i), active)
+                    .when(nested, |d| d.pl(px(22.)))
                     .when_some(takes, |d, p| takes_tracks::<PlaylistDrag>(takes_tracks::<QueueDrag>(takes_tracks::<TrackDrag>(d, &p, cx), &p, cx), &p, cx))
                     // Arrastar para reorganizar; a ordem fica salva neste computador.
                     .on_drag(drag, |d, _, _, cx| cx.new(|_| DragGhost(d.title.clone().into())))
@@ -923,7 +953,56 @@ impl Cyder {
     }
 
     /// A lista da sidebar conforme o filtro e a busca.
+    /// A lista da sidebar com as pastas do Spotify: cada pasta entra no lugar da playlist dela que vem primeiro, e
+    /// aberta mostra as playlists logo abaixo. Fixadas ficam fora da pasta. Buscando, a lista vem sem pastas.
     fn sidebar_items(&self) -> Vec<Card> {
+        let items = self.sidebar_items_flat();
+        let Some(lib) = self.library.as_ref().filter(|l| !l.folders.is_empty()) else { return items };
+        if !self.side_query.trim().is_empty() || !matches!(self.side_filter, SideFilter::All | SideFilter::Playlists) {
+            return items;
+        }
+        let of: HashMap<&str, usize> = lib.folders.iter().enumerate().flat_map(|(i, f)| f.playlists.iter().map(move |u| (u.as_str(), i))).collect();
+        let folder_of = |c: &Card| (!self.pins.contains(&c.uri)).then(|| of.get(c.uri.as_str()).copied()).flatten();
+        let mut inside: Vec<Vec<Card>> = vec![Vec::new(); lib.folders.len()];
+        for c in &items {
+            if let Some(f) = folder_of(c) {
+                inside[f].push(c.clone());
+            }
+        }
+        let mut shown = HashSet::new();
+        let mut out = Vec::new();
+        for c in items {
+            let Some(f) = folder_of(&c) else {
+                out.push(c);
+                continue;
+            };
+            if !shown.insert(f) {
+                continue;
+            }
+            let folder = &lib.folders[f];
+            let n = inside[f].len();
+            out.push(Card {
+                kind: Kind::Playlist,
+                id: format!("{FOLDER}{}", folder.id),
+                uri: format!("{FOLDER}{}", folder.id),
+                title: folder.name.clone(),
+                subtitle: if n == 1 { t("1 playlist").to_string() } else { tr!("{n} playlists", "{n} playlists") },
+                image: None,
+            });
+            if self.folders_open.contains(&folder.id) {
+                out.append(&mut inside[f]);
+            }
+        }
+        out
+    }
+
+    /// A playlist está numa pasta aberta da sidebar (a linha vem recuada).
+    fn in_open_folder(&self, uri: &str) -> bool {
+        !self.pins.iter().any(|p| p == uri)
+            && self.library.as_ref().is_some_and(|l| l.folders.iter().any(|f| self.folders_open.contains(&f.id) && f.playlists.iter().any(|p| p == uri)))
+    }
+
+    fn sidebar_items_flat(&self) -> Vec<Card> {
         let lib = self.library.as_ref();
         let mut items = match self.side_filter {
             SideFilter::All => {
@@ -981,7 +1060,7 @@ impl Cyder {
         }
         let (filter, query) = (self.side_filter, std::mem::take(&mut self.side_query));
         self.side_filter = SideFilter::All;
-        let mut order: Vec<String> = self.sidebar_items().into_iter().filter(|c| !self.pins.contains(&c.uri)).map(|c| c.uri).collect();
+        let mut order: Vec<String> = self.sidebar_items_flat().into_iter().filter(|c| !self.pins.contains(&c.uri)).map(|c| c.uri).collect();
         (self.side_filter, self.side_query) = (filter, query);
         let (Some(from), Some(to)) = (order.iter().position(|u| u == src), order.iter().position(|u| u == dst)) else { return };
         let uri = order.remove(from);
@@ -1012,15 +1091,6 @@ impl Cyder {
         self.lyrics.retain(|i, _| *i <= current);
         self.art.retain(|i, _| *i <= current);
         self.send(Cmd::MoveQueue { from, to });
-    }
-
-    /// Arrastar na fila do Spotify (aleatório ligado): reorganiza já na tela e manda as URIs para o player.
-    fn move_up_next(&mut self, from: usize, to: usize) {
-        let Some(list) = self.up_next.as_mut().filter(|l| from != to && from < l.len() && to < l.len()) else { return };
-        let (from_uri, to_uri) = (list[from].uri.clone(), list[to].uri.clone());
-        let t = list.remove(from);
-        list.insert(to, t);
-        self.send(Cmd::MoveUpNext { from_uri, to_uri });
     }
 
     /// Fixadas primeiro (na ordem em que foram fixadas); depois as tocadas por último; o resto na ordem do Spotify.
@@ -1120,7 +1190,7 @@ impl Cyder {
 
     fn play_buttons(&self, source: TrackSource, cx: &mut Context<Self>) -> impl IntoElement {
         let context = match &source {
-            TrackSource::Liked | TrackSource::Search => None,
+            TrackSource::Liked | TrackSource::LikedBy(_) | TrackSource::Search => None,
             TrackSource::Page(id) => self.pages.get(id).map(|p| p.card.uri.clone()),
         };
         let here = self.is_current(context.as_deref());
@@ -1641,11 +1711,12 @@ impl Cyder {
 
     /// Lançamento mais recente à esquerda e as mais tocadas à direita.
     fn artist_highlights(&mut self, id: &str, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let liked = self.artist_liked_section(id, width, cx);
         let Some(page) = self.pages.get(id) else { return div().into_any_element() };
         let latest = page.artist.as_ref().and_then(|a| a.latest.clone());
         let top = page.tracks.clone();
         if latest.is_none() && top.is_empty() {
-            return div().into_any_element();
+            return div().children(liked).into_any_element();
         }
         let heading = |text: &'static str| div().text_lg().font_weight(FontWeight::BOLD).child(text);
         let latest_el = latest.map(|(card, date)| {
@@ -1694,7 +1765,35 @@ impl Cyder {
                     .child(heading(t("Mais tocadas")))
                     .child(div().w_full().flex().gap_4().children(columns)),
             ))
+            .map(|d| match liked {
+                Some(liked) => div().flex().flex_col().child(d).child(liked),
+                None => d,
+            })
             .into_any_element()
+    }
+
+    /// "Suas curtidas" do artista: as músicas curtidas em que ele aparece, como no Spotify. Toca como lista solta.
+    fn artist_liked_section(&mut self, id: &str, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let mine: Vec<Track> = self.liked.iter().filter(|t| t.artists.iter().any(|(a, _)| a == id)).cloned().collect();
+        if mine.is_empty() {
+            return None;
+        }
+        let n = mine.len();
+        self.artist_liked = (id.to_string(), mine);
+        let source = TrackSource::LikedBy(id.to_string());
+        let shown: Vec<Track> = self.artist_liked.1.iter().take(ARTIST_LIKED_SHOWN).cloned().collect();
+        let cols = if width >= 700. { 2 } else { 1 };
+        let per_col = shown.len().div_ceil(cols).max(1);
+        let columns: Vec<AnyElement> = shown.chunks(per_col).enumerate().map(|(col, chunk)| {
+            let rows: Vec<AnyElement> = chunk.iter().enumerate().map(|(j, t)| self.song_row(&source, col * per_col + j, t, t.album.clone(), cx)).collect();
+            div().flex_1().min_w_0().flex().flex_col().children(rows).into_any_element()
+        }).collect();
+        Some(div().w_full().px(px(PAD)).pb_8().flex().flex_col().gap_3()
+            .child(div().flex().items_baseline().gap_2()
+                .child(div().text_lg().font_weight(FontWeight::BOLD).child(t("Suas curtidas")))
+                .child(div().text_sm().text_color(rgba(theme::ink_3())).child(if n == 1 { t("1 música").to_string() } else { tr!("{n} músicas", "{n} songs") })))
+            .child(div().w_full().flex().gap_4().children(columns))
+            .into_any_element())
     }
 
     /// Faixa compacta com capa (mais tocadas do artista, músicas da busca); `detail` é a linha de baixo.
@@ -2631,25 +2730,19 @@ impl Cyder {
         };
         let menu_track = t.clone();
         let accent = self.accent_ink();
-        // Arrasta pela posição na lista que aparece: a nossa ou, com o aleatório, a do Spotify (o player troca
-        // a ordem das próximas dele). Com outro aparelho tocando, a Web API não deixa reorganizar.
-        let drag = if current || self.elsewhere().is_some() {
-            None
-        } else if self.spotify_queue().is_some() {
-            spotify.map(|i| (i, true))
-        } else {
-            index.map(|i| (i, false))
-        };
+        // Arrasta pela posição na nossa lista. A fila do Spotify (com o aleatório, ou de outro aparelho) não tem
+        // como ser reordenada pela Web API: ali a faixa só vai para uma playlist.
+        let drag = if current || self.spotify_queue().is_some() || self.elsewhere().is_some() { None } else { index };
         let (uris, label) = self.dragged(t);
         let tracks = TrackDrag { uris, label };
         let picked = self.picked.contains(&t.uri);
         let row = Self::focusable(("queue-row", spotify.or(index).unwrap_or(usize::MAX)))
             .map(|d| match drag {
-                Some((i, from_spotify)) => d
+                Some(i) => d
                     .on_drag(QueueDrag { from: i, tracks }, |q, _, _, cx| cx.new(|_| DragGhost(q.tracks.label.clone())))
                     .drag_over::<QueueDrag>(|s, _, _, _| s.bg(rgba(theme::wash(0x26))))
                     .on_drop(cx.listener(move |this, q: &QueueDrag, _, cx| {
-                        if from_spotify { this.move_up_next(q.from, i) } else { this.move_queue(q.from, i) }
+                        this.move_queue(q.from, i);
                         cx.notify();
                     })),
                 // A que toca (ou a fila de outro aparelho) não muda de lugar, mas ainda vai para uma playlist.

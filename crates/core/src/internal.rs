@@ -41,24 +41,80 @@ async fn list(session: &Session, endpoint: &str) -> Result<SelectedListContent, 
     SelectedListContent::parse_from_bytes(&bytes).map_err(err)
 }
 
-/// URIs das playlists da conta, na ordem da biblioteca do Spotify (pastas achatadas), com quando entraram
-/// nela (segundos Unix; 0 quando o Spotify não informa).
-pub async fn rootlist(session: &Session) -> Result<Vec<(String, u64)>, String> {
+/// URIs das playlists da conta, na ordem da biblioteca do Spotify, com quando entraram nela (segundos Unix; 0
+/// quando o Spotify não informa), e as pastas.
+pub async fn rootlist(session: &Session) -> Result<(Vec<(String, u64)>, Vec<crate::Folder>), String> {
     let mut uris = Vec::new();
+    let mut folders = Rootlist::default();
     // Marcadores de pasta (start-group/end-group) também contam na paginação.
     let mut from = 0;
     loop {
         let bytes = spclient(session)?.get_rootlist(from, Some(500)).await.map_err(err)?;
         let content = SelectedListContent::parse_from_bytes(&bytes).map_err(err)?;
         let items = &content.contents.items;
-        uris.extend(items.iter().filter(|i| i.uri().starts_with("spotify:playlist:") && i.uri() != DJ_URI)
-            .map(|i| (i.uri().to_string(), (i.attributes.timestamp() / 1000).max(0) as u64)));
+        for i in items {
+            folders.item(i.uri());
+            if i.uri().starts_with("spotify:playlist:") && i.uri() != DJ_URI {
+                uris.push((i.uri().to_string(), (i.attributes.timestamp() / 1000).max(0) as u64));
+            }
+        }
         from += items.len();
         if items.is_empty() || from >= content.length() as usize || uris.len() >= 1000 {
             break;
         }
     }
-    Ok(uris)
+    Ok((uris, folders.done))
+}
+
+/// Lê os marcadores de pasta do rootlist: `spotify:start-group:<id>:<nome>` abre, `spotify:end-group:<id>` fecha.
+/// As playlists entre eles vão para a pasta de fora (as de dentro de subpastas também).
+#[derive(Default)]
+struct Rootlist {
+    open: Vec<crate::Folder>,
+    done: Vec<crate::Folder>,
+}
+
+impl Rootlist {
+    fn item(&mut self, uri: &str) {
+        if let Some(rest) = uri.strip_prefix("spotify:start-group:") {
+            let (id, name) = rest.split_once(':').unwrap_or((rest, ""));
+            self.open.push(crate::Folder { id: id.to_string(), name: decode_name(name), playlists: Vec::new() });
+        } else if uri.starts_with("spotify:end-group:") {
+            if let Some(folder) = self.open.pop() {
+                match self.open.first_mut() {
+                    Some(outer) => outer.playlists.extend(folder.playlists),
+                    None => self.done.push(folder),
+                }
+            }
+        } else if uri.starts_with("spotify:playlist:") && uri != DJ_URI && let Some(folder) = self.open.last_mut() {
+            folder.playlists.push(uri.to_string());
+        }
+    }
+}
+
+/// O nome da pasta vem como em URL: `+` é espaço e `%C3%A3` é um byte UTF-8.
+fn decode_name(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                let hex = |c: u8| (c as char).to_digit(16);
+                match (hex(b[i + 1]), hex(b[i + 2])) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 2;
+                    }
+                    _ => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Artistas seguidos e quando (segundos Unix), pela coleção da conta: a Web API não diz quando se seguiu.
@@ -411,6 +467,29 @@ mod collection_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rootlist_folders() {
+        let mut r = super::Rootlist::default();
+        for uri in [
+            "spotify:playlist:a",
+            "spotify:start-group:f1:Rock+%C3%A0+toa",
+            "spotify:playlist:b",
+            "spotify:start-group:f2:Sub",
+            "spotify:playlist:c",
+            "spotify:end-group:f2",
+            "spotify:playlist:d",
+            "spotify:end-group:f1",
+            "spotify:playlist:e",
+        ] {
+            r.item(uri);
+        }
+        assert_eq!(r.done.len(), 1);
+        assert_eq!(r.done[0].name, "Rock à toa");
+        assert_eq!(r.done[0].playlists, ["spotify:playlist:b", "spotify:playlist:c", "spotify:playlist:d"].map(String::from));
+        assert_eq!(super::decode_name("50%"), "50%");
+        assert_eq!(super::decode_name("%zz"), "%zz");
+    }
+
     fn t(n: &str) -> crate::Track {
         crate::Track { id: n.into(), uri: n.into(), name: n.into(), artist: String::new(), album: String::new(), album_id: String::new(), duration_ms: 1, cover_small: None, cover_large: None, artists: Vec::new() }
     }

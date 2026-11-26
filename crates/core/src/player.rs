@@ -37,8 +37,6 @@ pub enum PlayerCmd {
     Reload { queue: Vec<Track>, index: usize, position_ms: u32 },
     /// Religa o player com as configurações salvas (qualidade, nome, cache…), na mesma fila e posição.
     Restart,
-    /// Reorganiza as próximas do Spirc (a ordem do aleatório) sem recarregar: `from_uri` vai para o lugar de `to_uri`.
-    MoveNext { from_uri: String, to_uri: String },
     /// Outro aparelho está tocando a faixa `index` da fila: o próximo play por aqui continua dela, nesse contexto.
     Follow { index: usize, context: Option<String>, position_ms: u32 },
     /// Estado do MusicKit, só para a saída Apple Music (apple.rs).
