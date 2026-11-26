@@ -856,7 +856,7 @@ impl Cyder {
                     }
                     cx.notify();
                 })))
-            .child(div().flex_1().px_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(filter_label.clone()))
+            .child(div().flex_1().min_w_0().px_1().overflow_hidden().whitespace_nowrap().text_ellipsis().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_3())).child(filter_label.clone()))
             .child(small_button("side-create", t("Criar playlist"), "plus", false)
                 .on_click(cx.listener(|t, _, _, cx| { t.ask_playlist_name(None); cx.notify(); })))
             .child(small_button("side-filter", t("Filtrar a biblioteca"), "list-filter", self.side_filter != SideFilter::All || self.side_folder().is_some())
@@ -884,7 +884,7 @@ impl Cyder {
                 .on_click(cx.listener(|t, e: &ClickEvent, window, cx| { t.click_field(super::Field::Side, e.position(), e.click_count(), e.modifiers().shift); window.focus(&t.side_search_focus, cx); cx.notify(); }))
                 .on_key_down(cx.listener(|t, e: &gpui::KeyDownEvent, window, cx| t.side_search_key(e, window, cx)));
             if self.side_query.is_empty() {
-                field.when(focused, |d| d.child(caret())).child(div().text_color(rgba(theme::ink_3())).child(tr!("Buscar em {}", "Search in {}", filter_label.to_lowercase())))
+                field.when(focused, |d| d.child(caret())).child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgba(theme::ink_3())).child(tr!("Buscar em {}", "Search in {}", filter_label.to_lowercase())))
             } else {
                 field.child(self.field_text(super::Field::Side, self.side_query.clone(), focused, caret()))
             }
