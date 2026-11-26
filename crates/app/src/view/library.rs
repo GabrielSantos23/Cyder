@@ -1215,7 +1215,7 @@ impl Cyder {
             .gap_2()
             .child(Self::primary_button("play-list", if here && self.playing { t("Pausar") } else { t("Tocar") })
                 .on_click(cx.listener(move |t, _, _, cx| {
-                    if here { t.send(Cmd::Toggle) } else { t.play_start(&source) }
+                    if here { t.toggle_play() } else { t.play_start(&source) }
                     cx.notify();
                 })))
             .child(self.shuffle_toggle("shuffle-list", 36., 18., kind, here, cx))
@@ -1690,7 +1690,7 @@ impl Cyder {
             .hover(|s| s.bg(rgba(theme::wash(0xd9))))
             .on_click(cx.listener(move |t, _, _, cx| {
                 if here {
-                    t.send(Cmd::Toggle);
+                    t.toggle_play();
                 } else if has_top {
                     t.play_start(&source);
                 } else {
@@ -2021,7 +2021,7 @@ impl Cyder {
         let pause = here && self.playing;
         let play = pill("page-play", if pause { t("Pausar") } else { t("Tocar") }, if pause { "pause" } else { "play" }).on_click(cx.listener(move |t, _, _, cx| {
             if here {
-                t.send(Cmd::Toggle);
+                t.toggle_play();
             } else if by_uri {
                 // Pela URI, sem faixa escolhida: com o aleatório ligado, o Spotify sorteia a primeira.
                 t.play_context(&play_card);
@@ -2131,6 +2131,8 @@ impl Cyder {
             None => t.album.clone(),
         };
         let hidden = self.hidden.contains(&super::hidden_key(&page.card.uri, &t.uri));
+        // Ainda não saiu: a linha fica apagada (e o clique só avisa, pelo play_list e pelo toggle_play).
+        let unreleased = until_release(&page.release_date).is_some();
         let (uris, label) = self.dragged(&t);
         let tracks = TrackDrag { uris, label };
         let picked = self.picked.contains(&t.uri);
@@ -2153,7 +2155,7 @@ impl Cyder {
             // Zebra bem leve e hover bem mais forte que ela: com os dois parecidos, o hover se perdia.
             .when(i % 2 == 0 && !now, |d| d.bg(rgba(theme::wash(0x05))))
             .when(now, |d| d.bg(rgba(theme::wash(0x1f))))
-            .when(hidden, |d| d.opacity(0.4))
+            .when(hidden || unreleased, |d| d.opacity(0.4))
             .hover(|s| s.bg(rgba(theme::wash(0x1c))))
             .when(picked, |d| d.bg(accent.opacity(0.22)).hover(move |s| s.bg(accent.opacity(0.28))))
             .aria_selected(picked)
@@ -3107,7 +3109,7 @@ fn local_now() -> Option<(i64, i64, i64, i64)> {
 
 /// Segundos até a meia-noite (hora local) do dia de lançamento `iso` ("2026-12-05"): é quando o Spotify libera,
 /// em cada país. None se já saiu ou a data não tem o dia.
-fn until_release(iso: &str) -> Option<u64> {
+pub(super) fn until_release(iso: &str) -> Option<u64> {
     seconds_until(iso, local_now()?)
 }
 
@@ -3119,7 +3121,7 @@ fn seconds_until(iso: &str, (ny, nm, nd, secs): (i64, i64, i64, i64)) -> Option<
 }
 
 /// "5 de dezembro de 2026" / "December 5, 2026".
-fn release_label(iso: &str) -> String {
+pub(super) fn release_label(iso: &str) -> String {
     const PT: [&str; 12] = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     let mut parts = iso.split('-');

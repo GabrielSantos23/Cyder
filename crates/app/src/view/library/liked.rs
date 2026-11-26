@@ -202,7 +202,7 @@ impl Cyder {
             .when(empty && !here, |d| d.opacity(0.4))
             .on_click(cx.listener(move |t, _, _, cx| {
                 if here {
-                    t.send(Cmd::Toggle);
+                    t.toggle_play();
                 } else if !t.liked_view.is_empty() {
                     t.play_start(&TrackSource::Liked);
                 }

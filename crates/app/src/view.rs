@@ -1425,7 +1425,18 @@ impl Cyder {
     }
 
     /// Tocar/pausar, próxima e anterior respondem na hora; o player confirma em seguida.
+    /// Data de lançamento da faixa atual, se o álbum dela (aberto nesta sessão ou no cache) ainda não saiu.
+    pub(super) fn current_unreleased(&self) -> Option<String> {
+        let t = self.tracks.get(self.current)?;
+        let page = self.pages.get(&t.album_id)?;
+        library::until_release(&page.release_date).map(|_| library::release_label(&page.release_date))
+    }
+
     fn toggle_play(&mut self) {
+        // Faixa que ainda não saiu: o Spotify não toca, o play ficava carregando. Só avisa.
+        if !self.playing && let Some(date) = self.current_unreleased() {
+            return self.notify(tr!("Ainda não saiu: lança em {date}.", "Not out yet: it comes out on {date}."));
+        }
         self.anchor_ms = self.position();
         self.anchor_at = Instant::now();
         self.playing = !self.playing;
@@ -2632,6 +2643,7 @@ impl Cyder {
                 .rounded_full()
                 .bg(rgba(theme::ink_1()))
                 .hover(|s| s.opacity(0.88))
+                .when(!self.playing && self.current_unreleased().is_some(), |d| d.opacity(0.4).hover(|s| s.opacity(0.4)))
                 .tip(if self.playing { t("Pausar") } else { t("Tocar") })
                 // Como os outros botões da barra: clicar não leva o foco (o Espaço seguinte não vira clique aqui).
                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.prevent_default())
