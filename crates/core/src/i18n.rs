@@ -157,6 +157,7 @@ const EN: &[(&str, &str)] = &[
     ("Sair", "Sign out"),
     ("Recentes", "Recent"),
     ("Recortar", "Cut"),
+    ("Ainda não lançado", "Not released yet"),
     ("Pastas", "Folders"),
     ("Suas curtidas", "Your liked songs"),
     ("Formato certo. Veio do que você copiou.", "Looks right. It came from what you copied."),

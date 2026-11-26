@@ -115,6 +115,7 @@ fn list_page(card: &Card, image: Option<String>, tracks: Vec<Track>) -> Page {
         owner_image: None,
         more_from: None,
         total: 0,
+        release_date: String::new(),
     }
 }
 
@@ -140,6 +141,7 @@ fn artist_page(card: &Card, data: &Value) -> Page {
         owner_image: None,
         more_from: None,
         total: 0,
+        release_date: String::new(),
     }
 }
 

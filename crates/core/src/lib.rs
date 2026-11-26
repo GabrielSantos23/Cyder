@@ -5,6 +5,24 @@ pub mod apple;
 
 /// Um número aleatório para sortear (faixa inicial do aleatório). Não serve para nada de segurança.
 /// O relógio não serve: no Windows ele anda de 100 em 100 ns, e `nanos % 50` dava sempre 0 (a primeira faixa).
+/// Dias desde 1970-01-01 de uma data do calendário (algoritmo de Howard Hinnant).
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// O lançamento "2026-12-05" já passou (com um dia de folga para os fusos). Sem o dia, não dá para saber: false.
+pub fn released(iso: &str) -> bool {
+    let mut parts = iso.split('-').map(|x| x.parse::<i64>().ok());
+    let (Some(Some(y)), Some(Some(m)), Some(Some(d))) = (parts.next(), parts.next(), parts.next()) else { return false };
+    let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs() / 86_400) as i64;
+    days_from_civil(y, m, d) < today
+}
+
 pub fn random() -> usize {
     use std::hash::{BuildHasher, Hasher};
     std::collections::hash_map::RandomState::new().build_hasher().finish() as usize
@@ -204,6 +222,9 @@ pub struct Page {
     /// Só na página de artista; `tracks` são as mais tocadas.
     #[serde(default)]
     pub artist: Option<ArtistInfo>,
+    /// Data de lançamento do álbum ("2026-12-05"), quando o Spotify informa o dia. Vazia nas outras páginas.
+    #[serde(default)]
+    pub release_date: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -270,6 +291,15 @@ pub fn local_offset_secs() -> i64 {
 
 #[cfg(test)]
 mod search_tests {
+    #[test]
+    fn civil_days_and_release() {
+        assert_eq!(crate::days_from_civil(1970, 1, 1), 0);
+        assert_eq!(crate::days_from_civil(2026, 3, 1) - crate::days_from_civil(2026, 2, 28), 1);
+        assert!(crate::released("2001-05-01"));
+        assert!(!crate::released("2999-01-01"));
+        assert!(!crate::released("2020"));
+    }
+
     use super::*;
 
     #[test]

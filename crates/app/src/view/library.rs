@@ -362,6 +362,9 @@ impl Cyder {
 
     /// `shuffle_start`: veio do botão Aleatório; o Spotify sorteia a primeira (`index` só adianta a tela).
     fn play_list(&mut self, source: &TrackSource, index: usize, shuffle_start: bool) {
+        if let TrackSource::Page(id) = source && self.not_out_yet(id) {
+            return;
+        }
         let tracks = self.source_tracks(source).to_vec();
         // Uma música da busca toca sozinha e depois o rádio dela, como no Spotify; as outras da busca não entram.
         if let (TrackSource::Search, false, Some(t)) = (source, shuffle_start, tracks.get(index).cloned()) {
@@ -1978,8 +1981,17 @@ impl Cyder {
                 .text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2()))
                 .child(icon(icon_name, 12., theme::ink_2())).child(text)
         };
+        let release_left = self.release_left(id);
+        let release_date = page.release_date.clone();
         let chips = div().flex().flex_wrap().gap_2()
-            .children(year.map(|y| chip("calendar", y)))
+            // Pré-lançamento: quando sai e quanto falta, no destaque, no lugar do ano.
+            .children(release_left.map(|left| {
+                let (date, wait) = (release_label(&release_date), countdown(left));
+                div().flex().items_center().gap_1p5().px_2p5().py_1().rounded_full().bg(rgba(theme::accent())).text_xs().font_weight(FontWeight::BOLD)
+                    .text_color(rgba(theme::on_accent())).child(icon("timer", 12., theme::on_accent()))
+                    .child(tr!("Sai em {date} · faltam {wait}", "Out {date} · {wait} left"))
+            }))
+            .when(release_left.is_none(), |d| d.children(year.map(|y| chip("calendar", y))))
             .when(n > 0, |d| d.child(chip("list-music", match (c.kind == Kind::Show, n == 1) {
                 (true, true) => t("1 episódio").into(),
                 (true, false) => tr!("{n} episódios", "{n} episodes"),
@@ -2019,6 +2031,16 @@ impl Cyder {
             cx.notify();
         }));
         let shuffle = self.shuffle_toggle("page-shuffle", 36., 18., ListKind::of(&c.uri), here, cx);
+        if release_left.is_some() {
+            self.tick_release(cx);
+        }
+        // Ainda não saiu: no lugar do Tocar, um aviso apagado que não toca.
+        let play = match release_left {
+            Some(_) => div().id("page-soon").h(px(36.)).px_5().rounded_full().flex().items_center().gap_2().border_1().border_color(rgba(theme::wash(0x33)))
+                .text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgba(theme::ink_2()))
+                .child(icon("timer", 15., theme::ink_2())).child(t("Ainda não lançado")).into_any_element(),
+            None => play.into_any_element(),
+        };
         // Podcast: seguir pela página, como no Spotify.
         let following = self.library.as_ref().is_some_and(|l| l.shows.iter().any(|s| s.id == c.id));
         let follow_card = c.clone();
@@ -2069,7 +2091,7 @@ impl Cyder {
                     .child(div().w_full().text_size(px(40.)).line_height(px(46.)).font_weight(FontWeight::EXTRA_BOLD).line_clamp(2).text_ellipsis().child(c.title.clone()))
                     .child(by_line)
                     .child(chips)
-                    .child(div().mt_3().flex().items_center().gap_3().child(play).child(shuffle).children(follow).child(div().flex_1()).children(more)),
+                    .child(div().mt_3().flex().items_center().gap_3().child(play).when(release_left.is_none(), |d| d.child(shuffle)).children(follow).child(div().flex_1()).children(more)),
             );
         // Playlists têm a coluna do álbum; podcasts, a da data do episódio.
         let middle: &[&'static str] = match c.kind {
@@ -2161,8 +2183,42 @@ impl Cyder {
             .into_any_element()
     }
 
+    /// Segundos até o álbum da página `id` sair, se ele ainda não saiu.
+    pub(super) fn release_left(&self, id: &str) -> Option<u64> {
+        until_release(&self.pages.get(id)?.release_date)
+    }
+
+    /// Álbum que ainda não saiu: o Spotify não toca (o play ficava carregando para sempre). Avisa quando sai.
+    fn not_out_yet(&mut self, id: &str) -> bool {
+        let Some(date) = self.release_left(id).and_then(|_| self.pages.get(id)).map(|p| release_label(&p.release_date)) else { return false };
+        self.notify(tr!("Ainda não saiu: lança em {date}.", "Not out yet: it comes out on {date}."));
+        true
+    }
+
+    /// Enquanto uma página de pré-lançamento está aberta, a contagem regressiva anda a cada segundo.
+    fn tick_release(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.release_ticking, true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let keep = this.update(cx, |t, cx| {
+                let open = matches!(&t.screen, Screen::Page(c) if t.release_left(&c.id).is_some());
+                if open { cx.notify() } else { t.release_ticking = false }
+                open
+            });
+            if !matches!(keep, Ok(true)) {
+                break;
+            }
+        })
+        .detach();
+    }
+
     /// Toca uma playlist pela URI, sem a lista de faixas (o Spotify resolve).
     pub(super) fn play_context(&mut self, card: &Card) {
+        if self.not_out_yet(&card.id) {
+            return;
+        }
         self.use_saved_shuffle(ListKind::of(&card.uri));
         self.queue_label = card.title.clone();
         self.queue_context = Some(card.uri.clone());
@@ -3029,6 +3085,68 @@ fn finish_clock(secs_from_now: u64) -> Option<String> {
 #[cfg(not(windows))]
 fn finish_clock(_secs_from_now: u64) -> Option<String> {
     None
+}
+
+/// Data e hora locais agora: (ano, mês, dia, segundos desde a meia-noite).
+#[cfg(windows)]
+fn local_now() -> Option<(i64, i64, i64, i64)> {
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    // SAFETY: GetLocalTime só escreve na struct passada.
+    let t = unsafe {
+        let mut t = std::mem::zeroed();
+        GetLocalTime(&mut t);
+        t
+    };
+    Some((t.wYear as i64, t.wMonth as i64, t.wDay as i64, t.wHour as i64 * 3600 + t.wMinute as i64 * 60 + t.wSecond as i64))
+}
+
+#[cfg(not(windows))]
+fn local_now() -> Option<(i64, i64, i64, i64)> {
+    None
+}
+
+/// Segundos até a meia-noite (hora local) do dia de lançamento `iso` ("2026-12-05"): é quando o Spotify libera,
+/// em cada país. None se já saiu ou a data não tem o dia.
+fn until_release(iso: &str) -> Option<u64> {
+    seconds_until(iso, local_now()?)
+}
+
+fn seconds_until(iso: &str, (ny, nm, nd, secs): (i64, i64, i64, i64)) -> Option<u64> {
+    let mut parts = iso.split('-').map(|x| x.parse::<i64>().ok());
+    let (y, m, d) = (parts.next()??, parts.next()??, parts.next()??);
+    let left = (cyder_core::days_from_civil(y, m, d) - cyder_core::days_from_civil(ny, nm, nd)) * 86_400 - secs;
+    (left > 0).then_some(left as u64)
+}
+
+/// "5 de dezembro de 2026" / "December 5, 2026".
+fn release_label(iso: &str) -> String {
+    const PT: [&str; 12] = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let mut parts = iso.split('-');
+    let (y, m, d) = (parts.next().unwrap_or_default(), parts.next().and_then(|m| m.parse::<usize>().ok()), parts.next().and_then(|d| d.parse::<u32>().ok()));
+    match (m.filter(|m| (1..=12).contains(m)), d) {
+        (Some(m), Some(d)) => tr!("{d} de {} de {y}", "{} {d}, {y}", if cyder_core::i18n::english() { EN[m - 1] } else { PT[m - 1] }),
+        _ => iso.to_string(),
+    }
+}
+
+/// Quanto falta: "3 d 4 h" com mais de um dia; no último dia, "05:12:33".
+fn countdown(secs: u64) -> String {
+    let (d, h, m, s) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60, secs % 60);
+    if d > 0 { format!("{d} d {h} h") } else { format!("{h:02}:{m:02}:{s:02}") }
+}
+
+#[cfg(test)]
+mod release_tests {
+    #[test]
+    fn countdown_to_local_midnight() {
+        // 26/11 às 23:00 → 5/12 à meia-noite: 8 dias e 1 hora.
+        assert_eq!(super::seconds_until("2026-12-05", (2026, 11, 26, 23 * 3600)), Some(8 * 86_400 + 3600));
+        assert_eq!(super::seconds_until("2026-11-26", (2026, 11, 26, 10)), None);
+        assert_eq!(super::seconds_until("2026", (2026, 11, 26, 0)), None);
+        assert_eq!(super::countdown(8 * 86_400 + 3600), "8 d 1 h");
+        assert_eq!(super::countdown(3725), "01:02:05");
+    }
 }
 
 /// "ABCDEFGH" → "ABCD-EFGH", mais fácil de ditar.

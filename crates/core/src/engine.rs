@@ -1077,7 +1077,9 @@ impl Ctx {
             self.thumbs(page_images(page));
             self.check_saved(&page.tracks);
             self.send(AppEvent::Page(page.clone()));
-            if card.kind == Kind::Album {
+            // Álbum lançado não muda: o cache basta. O de pré-lançamento (ou de cache antigo, sem a data) busca de
+            // novo, para a contagem e para as faixas de verdade quando ele sair.
+            if card.kind == Kind::Album && crate::released(&page.release_date) {
                 return;
             }
         }
@@ -1102,7 +1104,7 @@ impl Ctx {
                         ..card.clone()
                     };
                     let owner_image = profile.and_then(|p| p.1);
-                    Ok(Page { card: page_card, meta: api::join_meta(&owner, total), tracks, albums: Vec::new(), note: None, artist: None, owner_image, more_from: next, total })
+                    Ok(Page { card: page_card, meta: api::join_meta(&owner, total), tracks, albums: Vec::new(), note: None, artist: None, owner_image, more_from: next, total, release_date: String::new() })
                 }
                 Err(e) => Err(e),
             },

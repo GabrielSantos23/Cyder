@@ -352,6 +352,8 @@ pub struct Cyder {
     pins: Vec<String>,
     /// Pastas da sidebar abertas (ids do Spotify).
     folders_open: HashSet<String>,
+    /// A contagem regressiva de pré-lançamento está andando.
+    release_ticking: bool,
     devices_open: bool,
     /// Fotos grandes de artista: URL → arquivo.
     heroes: HashMap<String, PathBuf>,
@@ -959,6 +961,7 @@ impl Cyder {
             recent: HashMap::new(),
             pins: Vec::new(),
             folders_open: HashSet::new(),
+            release_ticking: false,
             devices_open: false,
             heroes: HashMap::new(),
             release_filter: library::Releases::All,

@@ -440,7 +440,8 @@ impl WebApi {
                     }),
                     None => None,
                 };
-                Ok(Page { card: album_card(&a).unwrap_or_else(|| card.clone()), meta: join_meta(year, tracks.len()), tracks, albums: Vec::new(), note: None, artist: None, owner_image, more_from: None, total: 0 })
+                let release_date = if a["release_date_precision"] == "day" { a["release_date"].as_str().unwrap_or_default().to_string() } else { String::new() };
+                Ok(Page { card: album_card(&a).unwrap_or_else(|| card.clone()), meta: join_meta(year, tracks.len()), tracks, albums: Vec::new(), note: None, artist: None, owner_image, more_from: None, total: 0, release_date })
             }
             Kind::Artist => {
                 let a = self.get(&format!("/artists/{}", card.id)).await?;
@@ -457,7 +458,7 @@ impl WebApi {
                     tracks: Vec::new(),
                     albums: albums.iter().chain(&singles).filter_map(release_card).collect(),
                     note: None,
-                    owner_image: None, more_from: None, total: 0,
+                    owner_image: None, more_from: None, total: 0, release_date: String::new(),
                     artist: Some(ArtistInfo {
                         hero: a["images"].as_array().and_then(|i| i.first()).and_then(|i| i["url"].as_str()).map(String::from),
                         album_count: albums.iter().filter(|r| release_card(r).is_some()).count(),
@@ -478,7 +479,7 @@ impl WebApi {
                 let total = s["total_episodes"].as_u64().map_or(tracks.len(), |n| n as usize);
                 let count = if total == 1 { "1 episódio".to_string() } else { tr!("{total} episódios", "{total} episodes") };
                 let meta = if head.subtitle.is_empty() { count } else { format!("{} · {count}", head.subtitle) };
-                Ok(Page { meta, card: head, tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0 })
+                Ok(Page { meta, card: head, tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0, release_date: String::new() })
             }
             Kind::Playlist => {
                 let p = self.get(&format!("/playlists/{}?fields=id,uri,name,owner,images", card.id)).await?;
@@ -488,7 +489,7 @@ impl WebApi {
                     Ok(items) => {
                         // O campo mudou de `track` para `item` na migração de 2026; aceita os dois.
                         let tracks: Vec<Track> = items.iter().filter_map(|i| parse_track(if i["item"].is_object() { &i["item"] } else { &i["track"] })).collect();
-                        Ok(Page { meta: join_meta(&head.subtitle, tracks.len()), card: head, tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0 })
+                        Ok(Page { meta: join_meta(&head.subtitle, tracks.len()), card: head, tracks, albums: Vec::new(), note: None, artist: None, owner_image: None, more_from: None, total: 0, release_date: String::new() })
                     }
                     Err(e) => {
                         log::info!("faixas da playlist {}: {e}", card.id);
@@ -499,7 +500,7 @@ impl WebApi {
                             albums: Vec::new(),
                             note: Some(t("O Spotify só mostra as faixas de playlists suas. Dá para tocar mesmo assim.").into()),
                             artist: None,
-                            owner_image: None, more_from: None, total: 0,
+                            owner_image: None, more_from: None, total: 0, release_date: String::new(),
                         })
                     }
                 }
