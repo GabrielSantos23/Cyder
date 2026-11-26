@@ -340,7 +340,9 @@ impl State {
             PlayerCmd::SetShuffle(on) => {
                 self.shuffle = on;
                 if on {
-                    self.reshuffle();
+                    // Ligado no meio da lista: só as que ainda não tocaram (as de antes da atual já foram).
+                    self.order = shuffled((self.index + 1..self.queue.len()).collect());
+                    self.send_up_next();
                 } else {
                     self.order.clear();
                 }

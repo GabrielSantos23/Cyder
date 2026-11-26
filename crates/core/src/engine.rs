@@ -1772,9 +1772,14 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
             }
             // O Soloist mediu a posição (play, pausa, seek): reancora o relógio na hora, sem esperar a Web API.
             _ = soloist::synced().notified(), if remote.as_deref() == Some(soloist::DEVICE_NAME) => {
-                if let Some((position_ms, on)) = tracks.get(index).and_then(|t| soloist::position(&t.uri)) {
-                    (playing, anchor) = (on, (position_ms, std::time::Instant::now()));
-                    ctx.send(AppEvent::Playback { playing, position_ms });
+                match tracks.get(index).and_then(|t| soloist::position(&t.uri)) {
+                    Some((position_ms, on)) => {
+                        (playing, anchor) = (on, (position_ms, std::time::Instant::now()));
+                        ctx.send(AppEvent::Playback { playing, position_ms });
+                    }
+                    // A medida é de outra faixa: o Soloist passou para a próxima (ou o autoplay). Qual e a fila, a
+                    // Web API diz; sem isto a tela ficava na anterior, parada no fim, até a consulta de 30 s.
+                    None => poll_soloist(&ctx),
                 }
             }
             Some(state) = state_rx.recv() => match state {
@@ -1868,6 +1873,21 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                 if remote.is_some() {
                     use reqwest::Method;
                     let position = anchor.0 + if playing { anchor.1.elapsed().as_millis() as u32 } else { 0 };
+                    // Ligar o aleatório no meio da lista, no Soloist: o Spotify sortearia a lista inteira, com as que
+                    // já tocaram. Vai só desta em diante (no mesmo ponto), e aí o aleatório.
+                    if let Cmd::SetShuffle(true) = cmd {
+                        if remote.as_deref() == Some(soloist::DEVICE_NAME) && index > 0 && index < tracks.len() {
+                            let rest: Vec<&str> = tracks[index..].iter().take(100).map(|t| t.uri.as_str()).collect();
+                            soloist_end = index + rest.len();
+                            let body = serde_json::json!({ "uris": rest, "offset": { "position": 0 }, "position_ms": position });
+                            shuffle = true;
+                            ctx.send(AppEvent::Modes { shuffle, repeat, volume });
+                            tokio::spawn(play_on_soloist(ctx.clone(), body, true, repeat, !playing));
+                            up_next(&ctx, 2000);
+                            poll_soloist(&ctx);
+                            continue;
+                        }
+                    }
                     let call = match &cmd {
                         Cmd::Toggle => Some((Method::PUT, if playing { "/pause".to_string() } else { format!("/play?device_id={remote_id}") })),
                         Cmd::Next => Some((Method::POST, "/next".into())),

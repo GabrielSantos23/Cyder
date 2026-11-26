@@ -84,10 +84,18 @@ pub(crate) async fn connect_session(mut session: Session, mut credentials: Crede
 pub async fn run(session: Session, credentials: Credentials, volume: u16, mut cmds: UnboundedReceiver<PlayerCmd>, out: UnboundedSender<PlayerOut>) {
     let session = connect_session(session, credentials, &out).await;
     let _ = out.send(PlayerOut::Connected(session));
-    let _ = out.send(PlayerOut::Modes { shuffle: false, repeat: Repeat::Off, volume });
+    // O engine só sabe do aleatório, do repetir e do volume pelo `Modes` daqui (como o player antigo fazia): sem
+    // ele, o play no Soloist ia com o aleatório que a pessoa ligou desligado.
+    let (mut shuffle, mut repeat, mut volume) = (false, Repeat::Off, volume);
+    let _ = out.send(PlayerOut::Modes { shuffle, repeat, volume });
     while let Some(cmd) = cmds.recv().await {
-        if matches!(cmd, PlayerCmd::Play { .. } | PlayerCmd::Toggle) {
-            let _ = out.send(PlayerOut::Refused);
+        match cmd {
+            PlayerCmd::Play { .. } | PlayerCmd::Toggle => drop(out.send(PlayerOut::Refused)),
+            PlayerCmd::SetShuffle(on) => shuffle = on,
+            PlayerCmd::SetRepeat(r) => repeat = r,
+            PlayerCmd::SetVolume(v) => volume = v,
+            _ => continue,
         }
+        let _ = out.send(PlayerOut::Modes { shuffle, repeat, volume });
     }
 }
