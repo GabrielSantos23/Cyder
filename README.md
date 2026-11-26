@@ -2,7 +2,7 @@
 
 Um cliente desktop para o Spotify, escrito em Rust, com visual inspirado no [Cider](https://cider.sh/) e uso de memória bem menor que o app oficial.
 
-O Cyder toca a sua biblioteca do Spotify direto no computador: curtidas, álbuns, playlists, podcasts e busca. Tem letra sincronizada, modo imersivo e mini player.
+O Cyder toca a sua biblioteca do Spotify direto no computador: curtidas, álbuns, playlists, podcasts e busca. Tem letra sincronizada, modo imersivo, mini player e, em beta, o Apple Music como segunda saída.
 
 > O Cyder não é afiliado ao Spotify. É um projeto pessoal e de código aberto.
 
@@ -20,14 +20,18 @@ São mais ou menos **6 vezes menos**. Como os números foram medidos, e o orçam
 ## O que ele faz
 
 **Ouvir**
-- Toca a música no próprio computador (via [librespot](https://github.com/librespot-org/librespot)), com qualidade até 320 kbps.
-- Aparece como aparelho no Spotify Connect: dá para controlar pelo celular, e o Cyder também controla outros aparelhos.
+- Toca o Spotify pelo Soloist, o player oficial do Spotify, com uma chave sua (Premium). No Spotify Connect ele aparece como o aparelho "Cyder (Soloist)".
+- Controla os seus aparelhos do Spotify Connect e passa a música de um para outro.
 - Fila que dá para reordenar arrastando, aleatório, repetir e um "aleatório inteligente" que mistura recomendações na fila.
-- Equalizador de 6 faixas e transição suave entre músicas.
 - Abre onde parou: mesma fila, faixa e posição.
 
+**Apple Music (beta)**
+- "Tocar pelo Apple Music" nas configurações: cada faixa da fila é achada na loja da sua conta pelo ISRC e toca pelo MusicKit da Apple, num WebView2 escondido.
+- A primeira música começa em uns 3,5 s e as seguintes em uns 1,3 s.
+- Com o Apple Music ligado, a biblioteca, a tela inicial e a busca podem vir dele em vez do Spotify ("Biblioteca e busca").
+
 **Ver**
-- Letra sincronizada pelo [LRCLIB](https://lrclib.net/), rolando com a música; clique numa linha para pular até ela.
+- Letra sincronizada do Apple Music, do Spotify ou do [LRCLIB](https://lrclib.net/), rolando com a música; clique numa linha para pular até ela.
 - Modo imersivo: capa grande, fundo borrado com a cor da capa e, quando a música tem, o Canvas (o vídeo curto) no fundo.
 - Mini player sempre por cima das outras janelas.
 - Tema escuro, claro ou o do sistema.
@@ -40,7 +44,7 @@ São mais ou menos **6 vezes menos**. Como os números foram medidos, e o orçam
 - Estatísticas do que você ouviu neste computador.
 
 **Integrações (opcionais)**
-- Last.fm: "ouvindo agora" e scrobbles.
+- Last.fm: "ouvindo agora" e scrobbles. Se o seu Spotify já manda para o Last.fm, dá para o Cyder mandar só o que toca pelo Apple Music, sem contar duas vezes.
 - Discord: mostra no seu perfil o que está tocando.
 - Ouvir junto: outra pessoa segue o que você toca, cada uma pela própria conta.
 
@@ -50,8 +54,9 @@ São mais ou menos **6 vezes menos**. Como os números foram medidos, e o orçam
 
 ## Antes de instalar
 
-- **Spotify Premium.** O Spotify só deixa clientes como este tocarem música em contas Premium.
+- **Spotify Premium.** O Spotify só deixa clientes como este tocarem música em contas Premium, e a chave do Soloist é criada com essa conta.
 - **Um app seu no painel do Spotify.** Cada pessoa usa o próprio Client ID, criado de graça em [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard). A primeira abertura do Cyder mostra o passo a passo e leva uns cinco minutos.
+- **Para o Apple Music (opcional):** uma assinatura do Apple Music.
 - **Windows 10 ou 11.** O código é multiplataforma, mas macOS e Linux ainda não foram testados.
 
 ## Instalar
@@ -63,6 +68,12 @@ São mais ou menos **6 vezes menos**. Como os números foram medidos, e o orçam
    3. Marque **Web API** e salve.
    4. Copie o **Client ID** (em Settings › Basic Information) e cole no Cyder.
 3. O navegador abre para você entrar na conta do Spotify. A senha fica no site do Spotify; o Cyder não a vê.
+4. Ligue o Soloist em Configurações › Player oficial do Spotify (Soloist):
+   1. Clique em **Gerar chave** e crie a chave com a sua conta Premium.
+   2. Clique em **Ligar** e cole a chave.
+   3. Na primeira vez, escolha "Cyder (Soloist)" nos aparelhos do app do Spotify.
+
+   Sem o Soloist ligado, as músicas do Spotify não tocam: o play abre essa ajuda.
 
 O login fica guardado no Gerenciador de Credenciais do Windows, e as configurações em `%APPDATA%\cyder`.
 
@@ -91,23 +102,30 @@ RUST_LOG=cyder=debug,cyder_core=debug target/release/cyder.exe
 | Parte | O que usa |
 |-------|-----------|
 | Interface | [GPUI](https://github.com/sonorahq/gpui) (fork da sonorahq, com desfoque de fundo), a mesma base do editor Zed |
-| Áudio e Spotify Connect | librespot 0.8 |
+| Tocar o Spotify | Soloist, o player oficial do Spotify |
+| Sessão do Spotify (playlists, letras, metadados) | librespot 0.8 |
+| Tocar o Apple Music (beta) | MusicKit da Apple num WebView2 escondido, com PlayReady |
 | Biblioteca, busca, playlists | Web API do Spotify, com o seu Client ID |
-| Letras | LRCLIB, com cache local |
+| Letras | Apple Music, Spotify e LRCLIB, com cache local |
 
 O código fica em dois crates:
 - `crates/core`: áudio, API, cache, letras e cores, sem depender da interface.
 - `crates/app`: as telas.
 
+O site do Cyder fica em `website/` (Next.js).
+
 A pasta `spikes/` guarda os protótipos usados para escolher a stack. Um deles é a versão em Tauri, que ficou em 250 a 275 MB.
 
 ## Limitações
 
-- **Não conta para o Wrapped.** O que toca pelo Cyder não entra no histórico do Spotify nem nas recomendações. É uma limitação do librespot, sem contorno conhecido. O Last.fm registra normalmente.
-- **Sem modo offline.** O Spotify não permite baixar músicas fora do app oficial. O Cyder guarda um cache de áudio para não baixar a mesma música de novo, mas ele não serve para ouvir sem internet.
+- **Sem modo offline.** O Spotify não permite baixar músicas fora do app oficial.
 - **Funções exclusivas do Spotify ficam de fora:** DJ, Jam, Blend, AI Playlist e podcasts em vídeo não têm API.
-- **Crossfade de verdade, não.** O player toca uma música por vez; a transição suave é um fade no fim de uma e no começo da outra.
 - **Limite de pedidos.** O Spotify limita quantos pedidos cada Client ID faz. O Cyder guarda quase tudo em cache para pedir pouco, mas se o limite estourar, a biblioteca para de atualizar até o prazo que o Spotify der.
 - **Apps em modo de desenvolvimento** aceitam até 5 usuários. Por isso cada pessoa cria o próprio app.
+- **O Spotify precisa do Soloist.** Sem a chave ligada, as músicas do Spotify não tocam no Cyder.
 - **Só testado no Windows.**
 - **Política do Spotify.** Os termos para desenvolvedores proíbem produtos que substituem a experiência principal do Spotify sem permissão. O Cyder é um projeto pessoal, sem fins comerciais, e não é publicado em lojas.
+
+## Licença
+
+GPL-3.0. Veja o [LICENSE](LICENSE).
