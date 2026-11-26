@@ -214,6 +214,8 @@ pub enum AppEvent {
     Apple(crate::apple::AppleCmd),
     /// O Spotify recusa o áudio desta conta ao player do Cyder e o Soloist não está ligado.
     AudioRefused,
+    /// O Soloist está carregando a música (play, troca de faixa): a tela mostra o spinner no lugar do tocar/pausar.
+    Buffering(bool),
 }
 
 /// Modo de ouvir junto.
@@ -337,6 +339,11 @@ fn page_images(page: &Page) -> Vec<String> {
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Um número qualquer para sortear (os nanossegundos do relógio).
+fn now_nanos() -> usize {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize)
 }
 
 /// Estado do player salvo em disco, para o app abrir onde parou.
@@ -1287,6 +1294,16 @@ async fn play_on_soloist_from(ctx: Ctx, body: serde_json::Value, shuffle: bool, 
         }
     }
     log::info!("tocando pelo Soloist ({id})");
+    // Lista sem faixa escolhida (o play de um cartão) com o aleatório: a Web API começa sempre pela primeira, com
+    // aleatório ou sem. A primeira é sorteada aqui.
+    let mut body = body;
+    if let (true, Some(c), None) = (shuffle, body["context_uri"].as_str(), body.get("offset")) {
+        match internal::context_size(&ctx.session, c).await {
+            Ok(n) if n > 1 => body["offset"] = serde_json::json!({ "position": now_nanos() % n }),
+            Ok(_) => {}
+            Err(e) => log::warn!("tamanho de {c}: {e}"),
+        }
+    }
     // Aleatório antes do play: sem faixa escolhida (o play de um cartão), o Spotify sorteia a primeira em vez de
     // começar pela primeira da playlist. Pode falhar com o Soloist ainda inativo; o de depois do play garante.
     if shuffle {
@@ -1772,15 +1789,23 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
             }
             // O Soloist mediu a posição (play, pausa, seek): reancora o relógio na hora, sem esperar a Web API.
             _ = soloist::synced().notified(), if remote.as_deref() == Some(soloist::DEVICE_NAME) => {
-                match tracks.get(index).and_then(|t| soloist::position(&t.uri)) {
-                    Some((position_ms, on)) => {
-                        (playing, anchor) = (on, (position_ms, std::time::Instant::now()));
-                        ctx.send(AppEvent::Playback { playing, position_ms });
+                let loading = soloist::buffering();
+                // O Soloist passou para outra faixa (a próxima, o autoplay): a tela troca junto com o som. O resto
+                // (histórico, fila, próximas) a consulta à Web API faz, como em qualquer troca.
+                let now = soloist::current_uri();
+                if tracks.get(index).is_none_or(|t| t.uri != now) {
+                    if let Some(i) = tracks.iter().position(|t| t.uri == now) {
+                        (index, dirty) = (i, true);
+                        ctx.send(AppEvent::TrackChanged(i));
                     }
-                    // A medida é de outra faixa: o Soloist passou para a próxima (ou o autoplay). Qual e a fila, a
-                    // Web API diz; sem isto a tela ficava na anterior, parada no fim, até a consulta de 30 s.
-                    None => poll_soloist(&ctx),
+                    poll_soloist(&ctx);
                 }
+                if let Some((position_ms, on)) = tracks.get(index).and_then(|t| soloist::position(&t.uri)) {
+                    // Carregando, a velocidade vem 0 mas não é pausa: segue "tocando", com o spinner.
+                    (playing, anchor) = (on || loading, (position_ms, std::time::Instant::now()));
+                    ctx.send(AppEvent::Playback { playing, position_ms });
+                }
+                ctx.send(AppEvent::Buffering(loading));
             }
             Some(state) = state_rx.recv() => match state {
                 // Só assume o estado de outro aparelho se ele estiver tocando (ou já estava sendo seguido). Com o
@@ -1833,6 +1858,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         }
                     }
                     if st.device == soloist::DEVICE_NAME {
+                        // Um play que não chegou a tocar não deixa o spinner girando para sempre.
+                        if !soloist::buffering() {
+                            ctx.send(AppEvent::Buffering(false));
+                        }
                         if let Some(l) = listen.as_mut() {
                             match (st.playing, l.3) {
                                 (true, None) => l.3 = Some(std::time::Instant::now()),
@@ -1914,6 +1943,10 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                             // Responde já; a consulta seguinte confirma.
                             playing = !playing;
                             ctx.send(AppEvent::Playback { playing, position_ms: anchor.0 + anchor.1.elapsed().as_millis() as u32 });
+                        }
+                        // No Soloist, o play e a troca de faixa mostram o spinner até o som sair (o aviso dele tira).
+                        if remote.as_deref() == Some(soloist::DEVICE_NAME) && (matches!(cmd, Cmd::Next | Cmd::Prev) || (matches!(cmd, Cmd::Toggle) && playing)) {
+                            ctx.send(AppEvent::Buffering(true));
                         }
                         let ctx2 = ctx.clone();
                         tokio::spawn(async move {
@@ -1999,6 +2032,7 @@ async fn run_ready(http: &reqwest::Client, out: &UnboundedSender<AppEvent>, cmds
                         // No Aleatório a faixa `i` é só um palpite da tela: não continua episódio nenhum.
                         let start_ms = queue.get(i).filter(|_| !shuffle_start).and_then(|t| episodes.get(&t.uri)).copied().unwrap_or(0);
                         if soloist_ready {
+                            ctx.send(AppEvent::Buffering(true));
                             let (body, end) = soloist_body(&queue, i, c.as_deref(), start_ms);
                             soloist_end = end;
                             tokio::spawn(play_on_soloist(ctx.clone(), body, shuffle, repeat, false));

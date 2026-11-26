@@ -367,6 +367,8 @@ pub struct Cyder {
     profile: Option<(String, Option<String>)>,
     /// Próximas da fila segundo o Spotify (aleatório, autoplay, outro aparelho).
     up_next: Option<Vec<Track>>,
+    /// O Soloist está carregando a música: spinner no lugar do tocar/pausar.
+    buffering: bool,
     /// Outro aparelho tocando.
     remote: Option<String>,
     /// Posição da letra rolada à mão; None = acompanha a música.
@@ -949,6 +951,7 @@ impl Cyder {
             dialog: None,
             profile: None,
             up_next: None,
+            buffering: false,
             remote: None,
             lyrics_manual: None,
             sleep: None,
@@ -1222,7 +1225,12 @@ impl Cyder {
             AppEvent::Notice(n) => self.notify(n),
             AppEvent::Profile { name, image } => self.profile = Some((name, image)),
             AppEvent::UpNext(list) => self.up_next = Some(list),
-            AppEvent::Remote(device) => self.remote = device,
+            AppEvent::Buffering(on) => self.buffering = on,
+            AppEvent::Remote(device) => {
+                // Parou de seguir o Soloist: o spinner dele não vale mais.
+                self.buffering &= device.is_some();
+                self.remote = device;
+            }
             AppEvent::Inserted { at, track } => {
                 let at = at.min(self.tracks.len());
                 self.tracks.insert(at, track);
@@ -2591,12 +2599,18 @@ impl Cyder {
                 // Como os outros botões da barra: clicar não leva o foco (o Espaço seguinte não vira clique aqui).
                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.prevent_default())
                 .on_click(cx.listener(|t, _, _, cx| { t.toggle_play(); cx.notify(); }))
+                // Carregando (o Soloist ainda não soltou o som): o spinner girando no lugar do ícone.
+                .when(self.buffering, |d| d.child(icon("loader-circle", 18., theme::on_ink()).with_animation(
+                    "play-loading",
+                    Animation::new(Duration::from_millis(800)).repeat(),
+                    |el, t| el.with_transformation(gpui::Transformation::rotate(gpui::percentage(t))),
+                )))
                 // Troca do ícone com escala + blur, como um ícone só mudando de forma.
-                .child(icon(play_icon, 18., theme::on_ink()).with_animation(
+                .when(!self.buffering, |d| d.child(icon(play_icon, 18., theme::on_ink()).with_animation(
                     play_icon,
                     Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint()),
                     |el, t| el.opacity(t).layer_scale(0.25 + 0.75 * t).blur(px(4. * (1. - t))),
-                ))
+                )))
                 .into_any_element(),
             button("next", "Próxima".into(), 36., false).on_click(cx.listener(|t, _, _, cx| { t.skip_with_fade(true, cx); cx.notify(); })).child(icon("fast-forward", 18., theme::ink_1())).into_any_element(),
             button("repeat", repeat_label.into(), 36., false)

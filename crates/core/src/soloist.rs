@@ -241,6 +241,18 @@ struct Synced {
 static SYNCED: std::sync::Mutex<Option<Synced>> = std::sync::Mutex::new(None);
 /// Faixa do último `playback_state` (o `position_sync` não diz de qual faixa é).
 static PLAYING_URI: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+/// O último `playback_state` era "buffering": carregando a faixa (no começo e na troca), com a posição parada.
+static BUFFERING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Carregando: a posição chega com velocidade 0, mas não é pausa (a tela mostra o spinner, não o "tocar").
+pub fn buffering() -> bool {
+    BUFFERING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A faixa que o Soloist diz estar tocando (vazia antes do primeiro aviso).
+pub fn current_uri() -> String {
+    PLAYING_URI.lock().unwrap().clone()
+}
 
 /// Avisa quando o Soloist mede uma posição nova (play, pausa, seek, troca de faixa).
 pub fn synced() -> &'static tokio::sync::Notify {
@@ -257,6 +269,7 @@ fn note_position(text: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
     match v["type"].as_str() {
         Some("playback_state") => {
+            BUFFERING.store(v["status"] == "buffering", std::sync::atomic::Ordering::Relaxed);
             if let Some(uri) = v["item"]["uri"].as_str() {
                 *PLAYING_URI.lock().unwrap() = uri.to_string();
             }

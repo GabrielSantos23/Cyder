@@ -178,6 +178,16 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Quantas faixas tem um álbum ou playlist (`spotify:album:…`, `spotify:playlist:…`).
+pub async fn context_size(session: &Session, uri: &str) -> Result<usize, String> {
+    if let Some(id) = uri.strip_prefix("spotify:playlist:") {
+        return Ok(list(session, &format!("/playlist/v2/playlist/{id}?from=0&length=0")).await?.length() as usize);
+    }
+    let bytes = batch(session, &[uri.to_string()], ExtensionKind::ALBUM_V4).await?.into_values().next().ok_or("álbum não encontrado")?;
+    let msg = librespot::protocol::metadata::Album::parse_from_bytes(&bytes).map_err(err)?;
+    Ok(librespot::metadata::Album::try_from(&msg).map_err(err)?.tracks().count())
+}
+
 /// Só o cabeçalho (nome, dono, capa), sem as faixas.
 pub async fn playlist_header(session: &Session, id: &str) -> Result<Card, String> {
     let content = list(session, &format!("/playlist/v2/playlist/{id}?from=0&length=0")).await?;
